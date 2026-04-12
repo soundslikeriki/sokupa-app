@@ -10,14 +10,14 @@ import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import type { MemoProductItem } from "@/types";
 
-const MFG_ORDER = ["サンゲツ", "リリカラ", "トキワ", "シンコール", "東リ", "不明", "その他"] as const;
+const MFG_ORDER = ["サンゲツ", "リリカラ", "ルノン", "トキワ", "シンコール", "東リ", "エービーシー商会", "不明", "その他"] as const;
 
 function groupLabel(manufacturer: string): (typeof MFG_ORDER)[number] {
   const m = manufacturer.trim();
   const u = m.toUpperCase();
   if (m.includes("東リ") || u.includes("TOLI")) return "東リ";
   if (m.includes("不明")) return "不明";
-  for (const label of ["サンゲツ", "リリカラ", "トキワ", "シンコール"] as const) {
+  for (const label of ["サンゲツ", "リリカラ", "ルノン", "トキワ", "シンコール", "エービーシー商会"] as const) {
     if (m.includes(label)) return label;
   }
   return "その他";

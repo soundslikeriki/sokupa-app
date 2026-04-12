@@ -15,6 +15,7 @@ const OFFICIAL_DOMAIN_TO_MANUFACTURER: readonly { host: string; name: string }[]
   { host: "toli.co.jp", name: "東リ" },
   { host: "runon.co.jp", name: "ルノン" },
   { host: "sincol-group.jp", name: "シンコール" },
+  { host: "abc-t.co.jp", name: "エービーシー商会" },
 ] as const;
 
 function manufacturerFromOfficialUrl(url: string | null | undefined): string | null {
