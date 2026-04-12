@@ -142,8 +142,8 @@ export default function HomePageClient() {
         <h1 className="text-3xl font-bold tracking-tight">{APP_PRODUCT_NAME}</h1>
         <p className="max-w-2xl text-muted-foreground">
           計測メモ画像をアップロードすると、品番・計算式・実測合計を読み取り、メーカー別に整理します。発注数量は実測に
-          {DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています
-          <span className="text-xs text-muted-foreground">（※ロス率変更可能）</span>。
+          {DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。
+          <span className="text-xs text-muted-foreground">（※ロス率変更可能）</span>
         </p>
       </header>
 

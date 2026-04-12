@@ -53,7 +53,7 @@ function buildOrderRequestText(items: any[], siteName: string, lossRatePercent: 
     text += `・品番：${item.product_code} / 数量：${item.order_quantity}m\n`;
   }
 
-  text += `\n【計算根拠】発注数量は実測に${DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています（※ロス率変更可能）。`;
+  text += `\n【計算根拠】発注数量は実測に${DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。（※ロス率変更可能）`;
   text += `この書出し時のロス率：${lossRatePercent}%。`;
 
   return text.trim();
@@ -297,7 +297,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
           {APP_FORMAL_NAME}（{APP_PRODUCT_NAME}）— 発注・見積プレビュー
         </p>
         <p className="text-xs text-neutral-600">
-          発注数量は実測に{DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています（※ロス率変更可能）。印刷時のロス率:{" "}
+          発注数量は実測に{DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。（※ロス率変更可能）印刷時のロス率:{" "}
           {lossRate}%
         </p>
       </div>
@@ -328,8 +328,8 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
         </CardHeader>
         <CardContent className="space-y-4 px-3 pb-4 pt-0 sm:space-y-5 sm:px-6 sm:pb-6">
           <p className="max-w-3xl text-xs leading-relaxed text-indigo-900/85 dark:text-indigo-100/85 sm:text-sm">
-            発注数量は実測に{DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています
-            <span className="text-[11px] text-muted-foreground sm:text-xs">（※ロス率変更可能）</span>。
+            発注数量は実測に{DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。
+            <span className="text-[11px] text-muted-foreground sm:text-xs">（※ロス率変更可能）</span>
           </p>
           {needs_review_any && (
             <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 shadow-inner sm:gap-3 sm:p-4">
@@ -528,78 +528,85 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                              key={eidx}
                              className="group/row flex flex-col gap-2 rounded-lg border border-black/5 bg-white/50 px-2 py-2 text-xs font-medium transition-colors hover:bg-white/80 dark:border-white/5 dark:bg-black/50 dark:hover:bg-black/80 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-3 sm:py-2 sm:text-sm"
                            >
-                             <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
-                                <button 
-                                  type="button"
-                                  onClick={() => handleToggleEntryRepeat(product.product_code, eidx)}
-                                  className="-ml-1 flex shrink-0 items-center justify-center p-1.5 sm:m-0 sm:p-0"
-                                  title="この行にリピート計算を適用する"
-                                  aria-pressed={e.isRepeatActive}
-                                >
-                                  <span className={`flex h-3.5 w-6 items-center rounded-full p-px transition-colors ${e.isRepeatActive ? 'bg-indigo-600' : 'bg-black/20 dark:bg-white/20'}`}>
-                                    <span className={`h-2.5 w-2.5 rounded-full bg-white shadow-sm transition-transform ${e.isRepeatActive ? 'translate-x-[10px]' : ''}`} />
-                                  </span>
-                                </button>
-                                <button 
-                                  type="button"
-                                  onClick={() => handleToggleEntryEdit(product.product_code, eidx)}
-                                  className={`shrink-0 rounded-md p-1.5 transition-all sm:p-1 ${e.isEditing ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : 'opacity-40 hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10 sm:opacity-30'}`}
-                                  title="この行を直接編集する"
-                                >
-                                  <Edit3 className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
-                                </button>
-                                <span className={`min-w-0 max-w-[min(100%,11rem)] flex-1 truncate sm:max-w-[14rem] md:max-w-none ${e.isRepeatActive ? "font-bold text-indigo-700 dark:text-indigo-300" : "opacity-80"}`} title={e.original_formula}>{e.original_formula || "—"}</span>
-                             </div>
+                              <div className="flex w-full items-center justify-between gap-1.5 sm:gap-2">
+                                <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
+                                  <button 
+                                    type="button"
+                                    onClick={() => handleToggleEntryRepeat(product.product_code, eidx)}
+                                    className="-ml-1 flex shrink-0 items-center justify-center p-1.5 sm:m-0 sm:p-0"
+                                    title="この行にリピート計算を適用する"
+                                    aria-pressed={e.isRepeatActive}
+                                  >
+                                    <span className={`flex h-3.5 w-6 items-center rounded-full p-px transition-colors ${e.isRepeatActive ? 'bg-indigo-600' : 'bg-black/20 dark:bg-white/20'}`}>
+                                      <span className={`h-2.5 w-2.5 rounded-full bg-white shadow-sm transition-transform ${e.isRepeatActive ? 'translate-x-[10px]' : ''}`} />
+                                    </span>
+                                  </button>
 
-                             <div className="flex w-full flex-wrap items-center justify-end gap-x-1 gap-y-1 pl-0 opacity-90 sm:w-auto sm:pl-2 sm:opacity-80">
-                                {e.isEditing ? (
-                                  <div className="flex w-full flex-row flex-wrap items-center justify-end gap-2 sm:w-auto sm:gap-1.5">
-                                    <div className="flex flex-wrap items-center justify-end gap-0.5 sm:gap-1.5">
-                                      <Input 
-                                        type="number" 
-                                        step="0.1" 
-                                        className="h-7 w-[3.5rem] border-indigo-300 px-1 text-center text-[11px] font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[60px] sm:text-xs"
-                                        value={lValue}
-                                        onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryLengths", input.target.value)}
-                                      />
-                                      <span className="shrink-0 text-xs">m</span>
-                                      <span className="shrink-0 text-xs mx-0.5">×</span>
-                                      <Input 
-                                        type="number" 
-                                        className="h-7 w-[2.75rem] border-indigo-300 px-1 text-center text-[11px] font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[45px] sm:text-xs"
-                                        value={qValue}
-                                        onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryQtys", input.target.value)}
-                                      />
-                                      <button
+                                  <div 
+                                    className="flex w-full min-w-0"
+                                    onBlur={(ev) => {
+                                      if (!ev.currentTarget.contains(ev.relatedTarget)) {
+                                        setOverrides((prev) => {
+                                          const po = prev[product.product_code];
+                                          if (!po || !po.entryEditMode || !po.entryEditMode[eidx]) return prev;
+                                          return { ...prev, [product.product_code]: { ...po, entryEditMode: { ...po.entryEditMode, [eidx]: false } } };
+                                        });
+                                      }
+                                    }}
+                                  >
+                                    {e.isEditing ? (
+                                      <div className="flex flex-wrap items-center gap-1 sm:gap-1.5">
+                                        <Input 
+                                          autoFocus
+                                          type="number" 
+                                          step="0.1" 
+                                          className="h-8 w-[4.5rem] border-indigo-300 px-1 text-center text-[13px] font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[5.5rem] sm:text-sm"
+                                          value={lValue}
+                                          onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryLengths", input.target.value)}
+                                        />
+                                        <span className="shrink-0 text-xs sm:text-sm">m</span>
+                                        <span className="mx-0.5 shrink-0 text-xs text-muted-foreground sm:text-sm">×</span>
+                                        <Input 
+                                          type="number" 
+                                          className="h-8 w-[3.5rem] border-indigo-300 px-1 text-center text-[13px] font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[4rem] sm:text-sm"
+                                          value={qValue}
+                                          onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryQtys", input.target.value)}
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => handleResetEntry(product.product_code, eidx)}
+                                          className="ml-0.5 shrink-0 rounded-md p-1.5 text-rose-500/80 transition-colors hover:bg-black/10 hover:text-rose-500 dark:hover:bg-white/10"
+                                          title="この行の編集を元に戻す"
+                                        >
+                                          <Undo2 className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button 
                                         type="button"
-                                        onClick={() => handleResetEntry(product.product_code, eidx)}
-                                        className="ml-0.5 shrink-0 rounded-md p-1.5 text-rose-500/80 transition-colors hover:bg-black/10 hover:text-rose-500 dark:hover:bg-white/10 sm:p-1"
-                                        title="この行の編集を元に戻す"
+                                        onClick={() => handleToggleEntryEdit(product.product_code, eidx)}
+                                        className="group/formula flex w-full max-w-[12rem] items-center gap-1 rounded-md px-1 py-1 text-left transition-colors hover:bg-black/5 dark:hover:bg-white/5 sm:gap-1.5"
+                                        title="タップして式を編集"
                                       >
-                                        <Undo2 className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                                        <span className={`shrink-0 tabular-nums ${typeof rawLen === "number" && rawLen !== e.length_m ? "font-bold text-indigo-600 dark:text-indigo-400" : ""}`}>
+                                          {e.derived_length}m
+                                        </span>
+                                        <span className="shrink-0 text-muted-foreground mx-0.5">×</span>
+                                        <span className={`min-w-[1.5rem] text-center font-bold tabular-nums sm:w-[2.5rem] ${typeof rawQty === "number" && rawQty !== e.quantity ? "text-indigo-600 dark:text-indigo-400" : ""}`}>
+                                          {qValue}
+                                        </span>
+                                        <Edit3 className="ml-1 h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover/formula:opacity-40" />
                                       </button>
-                                    </div>
-                                    <span className="w-12 shrink-0 text-right text-sm font-bold tabular-nums text-indigo-600 dark:text-indigo-400 sm:w-16 sm:text-base">
-                                      {e.derived_subtotal}m
-                                    </span>
+                                    )}
                                   </div>
-                                ) : (
-                                  <>
-                                    <div className="flex flex-wrap items-center justify-end gap-x-0.5 gap-y-0.5 tabular-nums sm:gap-x-1">
-                                      <span className={`shrink-0 ${typeof rawLen === "number" && rawLen !== e.length_m ? "font-bold text-indigo-600 dark:text-indigo-400" : ""}`}>
-                                        {e.derived_length}m
-                                      </span>
-                                      <span className="shrink-0 mx-0.5">×</span>
-                                      <span className={`min-w-[1.5rem] text-center font-bold sm:w-[45px] ${typeof rawQty === "number" && rawQty !== e.quantity ? "text-indigo-600 dark:text-indigo-400" : ""}`}>
-                                        {qValue}
-                                      </span>
-                                    </div>
-                                    <span className="w-12 shrink-0 text-right text-sm font-bold tabular-nums text-indigo-600 dark:text-indigo-400 sm:w-16 sm:text-base">
-                                      {e.derived_subtotal}m
-                                    </span>
-                                  </>
-                                )}
-                             </div>
+                                </div>
+                                
+                                <div className="flex shrink-0 items-center justify-end pl-2">
+                                  <span className="w-12 shrink-0 text-right text-sm font-bold tabular-nums text-indigo-600 dark:text-indigo-400 sm:w-16 sm:text-base">
+                                    {e.derived_subtotal}m
+                                  </span>
+                                </div>
+                              </div>
                            </div>
                          );
                        })}
