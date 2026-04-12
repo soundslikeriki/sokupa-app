@@ -382,9 +382,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: `画像は最大${MAX_IMAGES}枚までです` }, { status: 400 });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY?.trim();
+    const apiKey =
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() ||
+      process.env.GEMINI_API_KEY?.trim();
+
     if (!apiKey) {
-      return NextResponse.json({ error: "APIキーが設定されていません" }, { status: 500 });
+      console.error("[ERROR] Missing Env Vars: GOOGLE_GENERATIVE_AI_API_KEY or GEMINI_API_KEY is required but not set in Vercel.");
+      return NextResponse.json({ 
+        error: "サーバーサイドの環境変数が設定されていません。「GOOGLE_GENERATIVE_AI_API_KEY」または「GEMINI_API_KEY」を Vercel に追加してください。" 
+      }, { status: 500 });
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
