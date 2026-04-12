@@ -302,37 +302,37 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
         </p>
       </div>
       <Card className="border-none shadow-xl bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-transparent backdrop-blur-xl ring-1 ring-inset ring-indigo-500/20">
-        <CardHeader className="pb-4">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 shadow-lg text-white">
-                <Layers className="w-5 h-5" />
+        <CardHeader className="p-3 pb-3 sm:p-6 sm:pb-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4">
+            <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
+              <div className="shrink-0 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 p-2 shadow-lg text-white sm:p-2.5">
+                <Layers className="h-4 w-4 sm:h-5 sm:w-5" />
               </div>
-              <div>
-                <CardTitle className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-900 to-purple-900 dark:from-indigo-100 dark:to-purple-100">
+              <div className="min-w-0">
+                <CardTitle className="text-xl font-bold leading-tight tracking-tight bg-gradient-to-r from-indigo-900 to-purple-900 bg-clip-text text-transparent sm:text-2xl dark:from-indigo-100 dark:to-purple-100">
                   発注リスト
                 </CardTitle>
-                <CardDescription className="text-sm mt-1 font-medium text-indigo-900/60 dark:text-indigo-100/60">
+                <CardDescription className="mt-1 text-xs font-medium text-indigo-900/60 dark:text-indigo-100/60 sm:text-sm">
                   {APP_FORMAL_NAME} — AIの計測にロス率を加算、または手動でリピート計算を行います
                 </CardDescription>
               </div>
             </div>
             
-            <div className="flex items-center gap-2 bg-white/60 dark:bg-black/60 p-1.5 rounded-xl border border-indigo-500/10 shadow-sm">
-              <span className="text-sm font-bold opacity-70 ml-2">ロス率</span>
+            <div className="flex w-full shrink-0 items-center justify-end gap-2 rounded-xl border border-indigo-500/10 bg-white/60 p-1.5 shadow-sm dark:bg-black/60 sm:w-auto">
+              <span className="text-xs font-bold opacity-70 sm:text-sm">ロス率</span>
               <Button type="button" variant="outline" size="icon" className="h-8 w-8 rounded-lg" onClick={() => setLossRate(Math.max(0, lossRate - 1))}>-</Button>
               <div className="w-10 text-center font-black tabular-nums">{lossRate}%</div>
               <Button type="button" variant="outline" size="icon" className="h-8 w-8 rounded-lg" onClick={() => setLossRate(lossRate + 1)}>+</Button>
             </div>
           </div>
         </CardHeader>
-        <CardContent className="space-y-5">
-          <p className="text-sm text-indigo-900/85 dark:text-indigo-100/85 max-w-3xl leading-relaxed">
+        <CardContent className="space-y-4 px-3 pb-4 pt-0 sm:space-y-5 sm:px-6 sm:pb-6">
+          <p className="max-w-3xl text-xs leading-relaxed text-indigo-900/85 dark:text-indigo-100/85 sm:text-sm">
             発注数量は実測に{DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています
-            <span className="text-xs text-muted-foreground">（※ロス率変更可能）</span>。
+            <span className="text-[11px] text-muted-foreground sm:text-xs">（※ロス率変更可能）</span>。
           </p>
           {needs_review_any && (
-            <div className="flex items-start gap-3 p-4 rounded-xl border border-amber-500/30 bg-amber-500/10 shadow-inner">
+            <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 shadow-inner sm:gap-3 sm:p-4">
               <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
               <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
                 黄色のバッジがついている推測結果は必ず現場メモ・見本帳と一致しているかご確認ください。
@@ -341,34 +341,34 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
           )}
           <Button 
             onClick={() => void copyOrderText()} 
-            className="w-full text-base font-semibold py-6 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700"
+            className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 py-5 text-sm font-semibold shadow-lg transition-all duration-300 hover:from-indigo-700 hover:to-purple-700 hover:shadow-xl sm:py-6 sm:text-base"
           >
             <CopyIcon className="w-4 h-4 mr-2" />
             発注用テキストをコピー
           </Button>
           {notes && (
-            <div className="p-4 rounded-xl bg-white/50 dark:bg-black/20 text-sm font-medium border border-black/5 dark:border-white/5">
+            <div className="rounded-xl border border-black/5 bg-white/50 p-3 text-xs font-medium dark:border-white/5 dark:bg-black/20 sm:p-4 sm:text-sm">
               <span className="opacity-70">メモ備考:</span> {notes}
             </div>
           )}
         </CardContent>
       </Card>
 
-      <div className="space-y-6">
+      <div className="space-y-4 sm:space-y-6">
         {groups.map((group) => (
           <Card key={group.label} className="border-none shadow-md overflow-hidden bg-white/60 dark:bg-zinc-900/60 backdrop-blur-md">
-            <CardHeader className="bg-black/5 dark:bg-white/5 border-b border-black/5 dark:border-white/5 px-6 py-4 flex flex-row items-center justify-between">
-              <CardTitle className="text-lg font-bold tracking-tight">{group.label}</CardTitle>
+            <CardHeader className="flex flex-row items-center justify-between border-b border-black/5 bg-black/5 px-3 py-3 dark:border-white/5 dark:bg-white/5 sm:px-6 sm:py-4">
+              <CardTitle className="text-base font-bold tracking-tight sm:text-lg">{group.label}</CardTitle>
               <Badge variant="secondary" className="px-3 py-1 font-bold rounded-full bg-white dark:bg-black text-xs shadow-sm">
                 {group.rows.length} 品番
               </Badge>
             </CardHeader>
             <CardContent className="p-0">
               {group.rows.map((product, idx) => (
-                <div key={product.product_code} className={`p-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors`}>
-                  <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-                    <div className="flex items-center gap-2">
-                      <h4 className="text-xl font-extrabold tracking-tight">
+                <div key={product.product_code} className={`px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
+                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-4">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
+                      <h4 className="text-lg font-extrabold tracking-tight sm:text-xl">
                         {product.product_code}
                       </h4>
                       {product.tags && product.tags.length > 0 && (
@@ -397,32 +397,32 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-baseline gap-2 bg-black/5 dark:bg-white/5 px-4 py-2 rounded-xl border border-black/5">
-                      <span className="text-xs font-medium opacity-60">発注数量</span>
-                      <span className="text-2xl font-black text-indigo-600 dark:text-indigo-400 tabular-nums leading-none">
+                    <div className="flex shrink-0 items-baseline gap-2 self-start rounded-xl border border-black/5 bg-black/5 px-3 py-2 dark:bg-white/5 sm:self-auto sm:px-4">
+                      <span className="text-[10px] font-medium opacity-60 sm:text-xs">発注数量</span>
+                      <span className="text-xl font-black tabular-nums leading-none text-indigo-600 dark:text-indigo-400 sm:text-2xl">
                         {product.order_quantity}
                       </span>
-                      <span className="font-semibold opacity-60">m</span>
+                      <span className="text-sm font-semibold opacity-60">m</span>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-6">
-                    <div className="bg-white/60 dark:bg-black/40 rounded-xl p-3 border border-black/5 dark:border-white/5">
-                      <span className="block text-[10px] font-bold uppercase tracking-wider opacity-50 mb-1">規格・寸法</span>
-                      <span className="font-medium text-sm">{product.spec?.trim() || "情報なし"}</span>
+                  <div className="mb-6 grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-3">
+                    <div className="rounded-xl border border-black/5 bg-white/60 p-2.5 dark:border-white/5 dark:bg-black/40 sm:p-3">
+                      <span className="mb-1 block text-[9px] font-bold uppercase tracking-wider opacity-50 sm:text-[10px]">規格・寸法</span>
+                      <span className="text-xs font-medium leading-snug sm:text-sm">{product.spec?.trim() || "情報なし"}</span>
                     </div>
-                    <div className="bg-white/60 dark:bg-black/40 rounded-xl p-3 border border-black/5 dark:border-white/5">
-                      <span className="block text-[10px] font-bold uppercase tracking-wider opacity-50 mb-1">リピート</span>
-                      <span className="font-medium text-sm">{product.repeat_info?.from_product?.trim() || "情報なし"}</span>
+                    <div className="rounded-xl border border-black/5 bg-white/60 p-2.5 dark:border-white/5 dark:bg-black/40 sm:p-3">
+                      <span className="mb-1 block text-[9px] font-bold uppercase tracking-wider opacity-50 sm:text-[10px]">リピート</span>
+                      <span className="text-xs font-medium leading-snug sm:text-sm">{product.repeat_info?.from_product?.trim() || "情報なし"}</span>
                     </div>
                     {product.notes?.trim() && (
-                      <div className="md:col-span-2 bg-white/60 dark:bg-black/40 rounded-xl p-3 border border-black/5 dark:border-white/5 text-sm text-muted-foreground font-medium">
+                      <div className="rounded-xl border border-black/5 bg-white/60 p-2.5 text-xs font-medium text-muted-foreground dark:border-white/5 dark:bg-black/40 sm:p-3 sm:text-sm md:col-span-2">
                         <span className="mr-2 opacity-60">備考:</span>{product.notes.trim()}
                       </div>
                     )}
                   </div>
 
-                  <div className="bg-indigo-50/50 dark:bg-indigo-900/10 rounded-xl p-4 mt-3 mb-6 border border-indigo-100 dark:border-indigo-900/30 shadow-sm transition-colors">
+                  <div className="mb-6 mt-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 shadow-sm transition-colors dark:border-indigo-900/30 dark:bg-indigo-900/10 sm:p-4">
                     <div className="text-xs font-bold uppercase tracking-wider text-indigo-800/60 dark:text-indigo-300/60 mb-3 flex items-center justify-between">
                       <div className="flex items-center gap-1.5 text-indigo-900 dark:text-indigo-100 font-semibold text-[11px]">
                         <Layers className="w-3.5 h-3.5" />
@@ -441,7 +441,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                       </div>
                     </div>
                     
-                    <div className={`flex items-center gap-4 transition-opacity duration-300 ${(product.derivedEntries || []).some((e: any) => e.isRepeatActive) ? 'opacity-100' : 'opacity-40'}`}>
+                    <div className={`flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 transition-opacity duration-300 ${(product.derivedEntries || []).some((e: any) => e.isRepeatActive) ? 'opacity-100' : 'opacity-40'}`}>
                       <div className="flex-1">
                         <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">壁の高さ (m)</label>
                         <Input 
@@ -498,18 +498,21 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                     </div>
                   )}
 
-                  <div className="bg-black/5 dark:bg-white/5 rounded-xl p-4 relative overflow-hidden group/memo">
+                  <div className="group/memo relative overflow-hidden rounded-xl bg-black/5 p-3 dark:bg-white/5 sm:p-4">
                     <Button 
                       variant="outline" 
                       size="sm"
+                      type="button"
+                      aria-label="AI初期値にもどす"
+                      title="AI初期値にもどす"
                       onClick={() => handleResetProduct(product.product_code)}
-                      className="absolute top-2 right-2 h-[26px] px-2.5 text-[10px] items-center gap-1.5 opacity-0 group-hover/memo:opacity-100 transition-opacity bg-white hover:bg-gray-100 dark:bg-black dark:hover:bg-zinc-900 border-black/10 shadow-sm"
+                      className="absolute right-1.5 top-1.5 z-10 flex h-11 w-11 min-h-11 min-w-11 items-center justify-center rounded-full border-black/10 bg-white p-0 opacity-100 shadow-sm transition-opacity hover:bg-gray-100 dark:border-white/10 dark:bg-zinc-900 dark:hover:bg-zinc-800 sm:right-2 sm:top-2 sm:h-[26px] sm:min-h-0 sm:w-auto sm:min-w-0 sm:rounded-md sm:px-2.5 sm:py-0 sm:opacity-0 sm:group-hover/memo:opacity-100"
                     >
-                      <RefreshCw className="w-3 h-3 text-indigo-600" />
-                      AI初期値にもどす
+                      <RefreshCw className="h-4 w-4 text-indigo-600 sm:h-3 sm:w-3" />
+                      <span className="hidden pl-1 text-[10px] sm:inline">AI初期値にもどす</span>
                     </Button>
-                    <div className="flex flex-wrap items-center mb-4 pr-32">
-                      <span className="text-xs font-bold uppercase tracking-wider opacity-60 flex items-center gap-1.5">
+                    <div className="mb-3 flex flex-wrap items-center pr-14 sm:mb-4 sm:pr-32">
+                      <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider opacity-60 sm:text-xs">
                         計測メモ
                       </span>
                     </div>
@@ -521,66 +524,82 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                          const lValue = rawLen !== undefined ? rawLen : e.length_m;
                          
                          return (
-                           <div key={eidx} className="flex justify-between text-sm font-medium items-center py-2 px-3 rounded-lg bg-white/50 dark:bg-black/50 border border-black/5 dark:border-white/5 gap-2 group/row transition-colors hover:bg-white/80 dark:hover:bg-black/80">
-                             <div className="flex items-center gap-2 flex-1 min-w-0">
+                           <div
+                             key={eidx}
+                             className="group/row flex flex-col gap-2 rounded-lg border border-black/5 bg-white/50 px-2 py-2 text-xs font-medium transition-colors hover:bg-white/80 dark:border-white/5 dark:bg-black/50 dark:hover:bg-black/80 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-3 sm:py-2 sm:text-sm"
+                           >
+                             <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
                                 <button 
+                                  type="button"
                                   onClick={() => handleToggleEntryRepeat(product.product_code, eidx)}
-                                  className={`shrink-0 w-6 h-3.5 flex items-center rounded-full p-[2px] transition-colors ${e.isRepeatActive ? 'bg-indigo-600' : 'bg-black/20 dark:bg-white/20'}`}
+                                  className="-ml-1 flex shrink-0 items-center justify-center p-1.5 sm:m-0 sm:p-0"
                                   title="この行にリピート計算を適用する"
+                                  aria-pressed={e.isRepeatActive}
                                 >
-                                  <div className={`bg-white w-2.5 h-2.5 rounded-full shadow-sm transform transition-transform ${e.isRepeatActive ? 'translate-x-[10px]' : ''}`} />
+                                  <span className={`flex h-3.5 w-6 items-center rounded-full p-px transition-colors ${e.isRepeatActive ? 'bg-indigo-600' : 'bg-black/20 dark:bg-white/20'}`}>
+                                    <span className={`h-2.5 w-2.5 rounded-full bg-white shadow-sm transition-transform ${e.isRepeatActive ? 'translate-x-[10px]' : ''}`} />
+                                  </span>
                                 </button>
                                 <button 
+                                  type="button"
                                   onClick={() => handleToggleEntryEdit(product.product_code, eidx)}
-                                  className={`shrink-0 p-1 rounded transition-all ${e.isEditing ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : 'hover:bg-black/10 dark:hover:bg-white/10 opacity-30 hover:opacity-100'}`}
+                                  className={`shrink-0 rounded-md p-1.5 transition-all sm:p-1 ${e.isEditing ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50' : 'opacity-40 hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10 sm:opacity-30'}`}
                                   title="この行を直接編集する"
                                 >
-                                  <Edit3 className="w-3.5 h-3.5" />
+                                  <Edit3 className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
                                 </button>
-                                <span className={`opacity-70 truncate ${e.isRepeatActive ? "text-indigo-700 dark:text-indigo-300 font-bold" : ""}`} title={e.original_formula}>{e.original_formula || "—"}</span>
+                                <span className={`min-w-0 max-w-[min(100%,11rem)] flex-1 truncate sm:max-w-[14rem] md:max-w-none ${e.isRepeatActive ? "font-bold text-indigo-700 dark:text-indigo-300" : "opacity-80"}`} title={e.original_formula}>{e.original_formula || "—"}</span>
                              </div>
 
-                             <div className="flex items-center justify-end gap-1.5 opacity-80 pl-2">
+                             <div className="flex w-full flex-wrap items-center justify-end gap-x-1 gap-y-1 pl-0 opacity-90 sm:w-auto sm:pl-2 sm:opacity-80">
                                 {e.isEditing ? (
-                                  <>
-                                    <Input 
-                                      type="number" 
-                                      step="0.1" 
-                                      className="w-[60px] h-7 text-xs px-1 text-center tabular-nums font-bold border-indigo-300 dark:border-indigo-700 focus-visible:ring-indigo-500 shadow-inner"
-                                      value={lValue}
-                                      onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryLengths", input.target.value)}
-                                    />
-                                    <span>m</span>
-                                    <span className="mx-0.5">×</span>
-                                    <Input 
-                                      type="number" 
-                                      className="w-[45px] h-7 text-xs px-1 text-center tabular-nums font-bold border-indigo-300 dark:border-indigo-700 focus-visible:ring-indigo-500 shadow-inner"
-                                      value={qValue}
-                                      onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryQtys", input.target.value)}
-                                    />
-                                    <button
-                                      onClick={() => handleResetEntry(product.product_code, eidx)}
-                                      className="ml-1 p-1 rounded hover:bg-black/10 dark:hover:bg-white/10 text-rose-500/70 hover:text-rose-500 transition-colors shrink-0"
-                                      title="この行の編集を元に戻す"
-                                    >
-                                      <Undo2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </>
+                                  <div className="flex w-full flex-row flex-wrap items-center justify-end gap-2 sm:w-auto sm:gap-1.5">
+                                    <div className="flex flex-wrap items-center justify-end gap-0.5 sm:gap-1.5">
+                                      <Input 
+                                        type="number" 
+                                        step="0.1" 
+                                        className="h-7 w-[3.5rem] border-indigo-300 px-1 text-center text-[11px] font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[60px] sm:text-xs"
+                                        value={lValue}
+                                        onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryLengths", input.target.value)}
+                                      />
+                                      <span className="shrink-0 text-xs">m</span>
+                                      <span className="shrink-0 text-xs mx-0.5">×</span>
+                                      <Input 
+                                        type="number" 
+                                        className="h-7 w-[2.75rem] border-indigo-300 px-1 text-center text-[11px] font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[45px] sm:text-xs"
+                                        value={qValue}
+                                        onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryQtys", input.target.value)}
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => handleResetEntry(product.product_code, eidx)}
+                                        className="ml-0.5 shrink-0 rounded-md p-1.5 text-rose-500/80 transition-colors hover:bg-black/10 hover:text-rose-500 dark:hover:bg-white/10 sm:p-1"
+                                        title="この行の編集を元に戻す"
+                                      >
+                                        <Undo2 className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                                      </button>
+                                    </div>
+                                    <span className="w-12 shrink-0 text-right text-sm font-bold tabular-nums text-indigo-600 dark:text-indigo-400 sm:w-16 sm:text-base">
+                                      {e.derived_subtotal}m
+                                    </span>
+                                  </div>
                                 ) : (
                                   <>
-                                    <span className={`tabular-nums whitespace-nowrap ${typeof rawLen === "number" && rawLen !== e.length_m ? "text-indigo-600 dark:text-indigo-400 font-bold" : ""}`}>
-                                      {e.derived_length}m
-                                    </span>
-                                    <span className="mx-0.5">×</span>
-                                    <span className={`w-[45px] text-center tabular-nums font-bold ${typeof rawQty === "number" && rawQty !== e.quantity ? "text-indigo-600 dark:text-indigo-400" : ""}`}>
-                                      {qValue}
+                                    <div className="flex flex-wrap items-center justify-end gap-x-0.5 gap-y-0.5 tabular-nums sm:gap-x-1">
+                                      <span className={`shrink-0 ${typeof rawLen === "number" && rawLen !== e.length_m ? "font-bold text-indigo-600 dark:text-indigo-400" : ""}`}>
+                                        {e.derived_length}m
+                                      </span>
+                                      <span className="shrink-0 mx-0.5">×</span>
+                                      <span className={`min-w-[1.5rem] text-center font-bold sm:w-[45px] ${typeof rawQty === "number" && rawQty !== e.quantity ? "text-indigo-600 dark:text-indigo-400" : ""}`}>
+                                        {qValue}
+                                      </span>
+                                    </div>
+                                    <span className="w-12 shrink-0 text-right text-sm font-bold tabular-nums text-indigo-600 dark:text-indigo-400 sm:w-16 sm:text-base">
+                                      {e.derived_subtotal}m
                                     </span>
                                   </>
                                 )}
                              </div>
-                             <span className="w-16 text-right tabular-nums text-indigo-600 dark:text-indigo-400 font-bold shrink-0">
-                               {e.derived_subtotal}m
-                             </span>
                            </div>
                          );
                        })}
