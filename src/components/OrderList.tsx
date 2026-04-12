@@ -53,8 +53,6 @@ function buildOrderRequestText(items: any[], siteName: string, lossRatePercent: 
     text += `・品番：${item.product_code} / 数量：${item.order_quantity}m\n`;
   }
 
-  text += `\n【計算根拠】発注数量は実測に${DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。（※ロス率変更可能）`;
-  text += `この書出し時のロス率：${lossRatePercent}%。`;
 
   return text.trim();
 }
