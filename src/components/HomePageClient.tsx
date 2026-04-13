@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import { Loader2, Upload, X } from "lucide-react";
 
 import { OrderList } from "@/components/OrderList";
@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import { APP_FORMAL_NAME, APP_HEADER_CREDIT, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import { convertAndResizeForPreview } from "@/lib/resizeImage";
-
+import { buildOrderRequestText } from "@/lib/order-text";
 type ProcessedImage = {
   id: string;
   originalName: string;
@@ -27,8 +27,57 @@ export default function HomePageClient() {
   const [siteName, setSiteName] = useState("");
   const [images, setImages] = useState<ProcessedImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [parsed, setParsed] = useState<ParsedMemoPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const readyImages = useMemo(
+    () => images.filter((img) => img.status === "ready" && img.base64Data),
+    [images],
+  );
+
+  function mergeParsed(prev: ParsedMemoPayload | null, next: ParsedMemoPayload): ParsedMemoPayload {
+    const prevItems = prev?.items ?? [];
+    const map = new Map<string, ParsedMemoPayload["items"][number]>();
+    for (const it of prevItems) map.set(it.product_code, it);
+    for (const it of next.items) {
+      const existing = map.get(it.product_code);
+      if (!existing) {
+        map.set(it.product_code, it);
+        continue;
+      }
+      const mergedEntries = [...(existing.entries ?? []), ...(it.entries ?? [])];
+      const totalFromEntries = mergedEntries.reduce((s, e) => s + (Number(e.subtotal_m) || 0), 0);
+      const merged: typeof it = {
+        ...existing,
+        ...it,
+        entries: mergedEntries,
+        total_m: Number.isFinite(it.total_m) && it.total_m > 0 ? it.total_m : totalFromEntries,
+        order_quantity: it.order_quantity ?? existing.order_quantity,
+      };
+      map.set(it.product_code, merged);
+    }
+    const items = Array.from(map.values());
+    const needs_review_any = items.some((i) => i.needs_review);
+    return {
+      items,
+      notes: [prev?.notes, next.notes].filter(Boolean).join("\n").trim() || undefined,
+      needs_review_any,
+    };
+  }
+
+  function deriveContextFromParsed(p: ParsedMemoPayload | null): { majorManufacturers: string[]; knownProductCodes: string[] } {
+    const items = p?.items ?? [];
+    const codes = items.map((i) => i.product_code).filter(Boolean);
+    const mfgs = items.map((i) => i.manufacturer).filter(Boolean);
+    const mfgCounts = new Map<string, number>();
+    for (const m of mfgs) mfgCounts.set(m, (mfgCounts.get(m) ?? 0) + 1);
+    const majorManufacturers = Array.from(mfgCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([m]) => m);
+    return { majorManufacturers, knownProductCodes: codes.slice(0, 25) };
+  }
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -86,48 +135,65 @@ export default function HomePageClient() {
 
   const handleAnalyze = async () => {
     if (isAnalyzing) return;
-    const readyImages = images.filter((img) => img.status === "ready" && img.base64Data);
     if (readyImages.length === 0) return;
     setIsAnalyzing(true);
     setError(null);
     setParsed(null);
+    setProgress({ done: 0, total: readyImages.length });
 
     try {
-      const resizedBase64s = readyImages.map((img) => img.base64Data as string);
+      let acc: ParsedMemoPayload | null = null;
+      for (let i = 0; i < readyImages.length; i++) {
+        const img = readyImages[i]!;
+        const currentContext = deriveContextFromParsed(acc);
+        const res = await fetch("/api/parse-memo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            base64Image: img.base64Data,
+            mimeType: "image/jpeg",
+            context: {
+              site_name: siteName?.trim() || undefined,
+              major_manufacturers: currentContext.majorManufacturers,
+              known_product_codes: currentContext.knownProductCodes,
+            },
+          }),
+        });
 
-      const res = await fetch("/api/parse-memo", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          base64Images: resizedBase64s,
-          mimeType: "image/jpeg",
-        }),
-      });
+        type ApiJson = { success?: boolean; data?: ParsedMemoPayload; error?: string };
+        let data: ApiJson;
+        try {
+          data = (await res.json()) as ApiJson;
+        } catch {
+          throw new Error(`サーバーからの応答がJSONではありません（HTTP ${res.status}）。`);
+        }
 
-      type ApiJson = { success?: boolean; data?: ParsedMemoPayload; error?: string };
-      let data: ApiJson;
-      try {
-        data = (await res.json()) as ApiJson;
-      } catch {
-        throw new Error(`サーバーからの応答がJSONではありません（HTTP ${res.status}）。`);
+        if (!res.ok || data.error) {
+          throw new Error(data.error || "解析に失敗しました");
+        }
+        if (!data.success || !data.data || !Array.isArray(data.data.items)) {
+          throw new Error("応答形式が不正です（success / data.items を確認してください）。");
+        }
+
+        acc = mergeParsed(acc, data.data!);
+        setParsed(acc);
+        setProgress((p) => (p ? { ...p, done: Math.min(p.total, p.done + 1) } : null));
       }
-
-      if (!res.ok || data.error) {
-        throw new Error(data.error || "解析に失敗しました");
+      
+      // すべてのループが完了した後、LINEへ通知を送信する
+      if (acc && acc.items && acc.items.length > 0) {
+        const text = buildOrderRequestText(acc.items, siteName, DEFAULT_LOSS_RATE_PERCENT);
+        fetch("/api/send-line", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        }).catch((err) => console.error("LINE Notify failed", err));
       }
-      if (!data.success || !data.data || !Array.isArray(data.data.items)) {
-        throw new Error("応答形式が不正です（success / data.items を確認してください）。");
-      }
-
-      setParsed({
-        items: data.data.items,
-        notes: data.data.notes,
-        needs_review_any: data.data.needs_review_any,
-      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "解析中にエラーが発生しました");
     } finally {
       setIsAnalyzing(false);
+      setProgress(null);
     }
   };
 
@@ -149,6 +215,20 @@ export default function HomePageClient() {
       </header>
 
       <div className="space-y-8">
+        <div>
+          <label htmlFor={siteNameId} className="mb-1 block text-sm font-medium">
+            現場名（任意）
+          </label>
+          <Input
+            id={siteNameId}
+            type="text"
+            value={siteName}
+            onChange={(e) => setSiteName(e.target.value)}
+            placeholder="例: 渋谷区〇〇マンション リビング"
+            className="rounded-lg px-4 py-2 focus-visible:ring-black"
+          />
+        </div>
+
         <div>
           <span className="mb-2 block text-sm font-medium">メモ画像（複数選択可）</span>
           <div
@@ -220,13 +300,13 @@ export default function HomePageClient() {
         <Button
           type="button"
           onClick={() => void handleAnalyze()}
-          disabled={images.length === 0 || images.some(i => i.status !== "ready") || isAnalyzing}
+          disabled={images.length === 0 || images.some((i) => i.status !== "ready") || isAnalyzing}
           className="w-full py-6 text-lg"
         >
           {isAnalyzing ? (
             <>
               <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              解析中…
+              解析中...{progress ? `（${progress.done}/${progress.total}）` : ""}（完了後にLINEで通知します）
             </>
           ) : (
             `${images.length}枚の画像を解析する`
@@ -243,27 +323,18 @@ export default function HomePageClient() {
         </Card>
       ) : null}
 
-      {(parsed?.items.length ?? 0) > 0 ? (
-        <div className="mb-6">
-          <label htmlFor={siteNameId} className="mb-1 block text-sm font-medium">
-            現場名
-          </label>
-          <Input
-            id={siteNameId}
-            type="text"
-            value={siteName}
-            onChange={(e) => setSiteName(e.target.value)}
-            placeholder="例: 渋谷区〇〇マンション リビング"
-            className="rounded-lg px-4 py-2 focus-visible:ring-black"
-          />
-        </div>
-      ) : null}
-
       <OrderList
         items={parsed?.items ?? []}
         notes={parsed?.notes}
         siteName={siteName}
         needs_review_any={parsed?.needs_review_any}
+        onItemsChange={(nextItems) =>
+          setParsed((prev) => ({
+            items: nextItems,
+            notes: prev?.notes,
+            needs_review_any: nextItems.some((i) => i.needs_review),
+          }))
+        }
       />
     </main>
   );

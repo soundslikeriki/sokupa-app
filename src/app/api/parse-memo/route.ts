@@ -9,7 +9,7 @@ import { augmentProductWithCatalogSearch, type CatalogAugment } from "@/lib/wall
 import type { MemoEntry, MemoProductItem } from "@/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 60;
 
 const MAX_IMAGES = 16;
 /** 画像解析（JSON 安定のため Google 検索ツールは付けない） */
@@ -40,6 +40,28 @@ const SYSTEM_PROMPT = `あなたは内装職人の優秀な事務員です。
 - 計算式は正確に数値化
 - 職人は寸法を小数点でなくハイフンで書くことがあります（例：「1-30」は「1.30m」）。ハイフン付き数値は小数に変換して解釈すること。
 - 品番が汚くても最大限推測`;
+
+type ParseMemoContext = {
+  site_name?: string;
+  /** 直前までに判明した主要メーカー（表記統一のヒント） */
+  major_manufacturers?: string[];
+  /** 直前までに判明した品番（表記統一のヒント） */
+  known_product_codes?: string[];
+};
+
+function buildContextHint(ctx: ParseMemoContext | undefined): string {
+  if (!ctx) return "";
+  const site = typeof ctx.site_name === "string" ? ctx.site_name.trim() : "";
+  const mfgs = Array.isArray(ctx.major_manufacturers)
+    ? ctx.major_manufacturers.map((s) => String(s).trim()).filter(Boolean)
+    : [];
+  const codes = Array.isArray(ctx.known_product_codes)
+    ? ctx.known_product_codes.map((s) => String(s).trim()).filter(Boolean)
+    : [];
+  if (!site && mfgs.length === 0 && codes.length === 0) return "";
+
+  return `\n\n【現場コンテキスト（直前画像の解析結果からのヒント）】\n- 現場名: ${site || "（未指定）"}\n- 主要メーカー候補: ${mfgs.length ? mfgs.join(" / ") : "（不明）"}\n- 既知の品番候補: ${codes.length ? codes.join(" / ") : "（不明）"}\n\n【一貫性ルール】\n- 同じ品番は表記ゆれ（スペース/ハイフン/大文字小文字）を統一して同一として扱う。\n- 直前までに出たメーカー・品番が今回の画像でも見える場合は、その表記に寄せる。\n- ただし、画像から読み取れる事実を優先し、推測で捏造しない。`;
+}
 
 function stripJsonFence(text: string): string {
   const trimmed = text.trim();
@@ -383,6 +405,7 @@ export async function POST(request: NextRequest) {
       base64Image?: string;
       imageBase64?: string;
       mimeType?: string;
+      context?: ParseMemoContext;
     };
 
     let base64Images: string[] = Array.isArray(body.base64Images)
@@ -428,7 +451,8 @@ export async function POST(request: NextRequest) {
     const mimeType =
       rawMime && ["image/jpeg", "image/png", "image/webp"].includes(rawMime) ? rawMime : "image/jpeg";
 
-    const contents: ContentPart[] = [SYSTEM_PROMPT];
+    const ctxHint = buildContextHint(body.context);
+    const contents: ContentPart[] = [SYSTEM_PROMPT + ctxHint];
 
     for (const base64 of base64Images) {
       const normalized = normalizeImageBase64(base64 || "");

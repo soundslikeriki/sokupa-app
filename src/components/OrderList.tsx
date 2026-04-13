@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, RefreshCw, Undo2, Globe } from "lucide-react";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
+import { buildOrderRequestText } from "@/lib/order-text";
 import { dedupeSlashDelimited } from "@/lib/dedupeSlashList";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import type { MemoProductItem } from "@/types";
@@ -39,30 +40,12 @@ function groupByManufacturer(items: any[]) {
   })).filter((g) => g.rows.length > 0);
 }
 
-function buildOrderRequestText(items: any[], siteName: string, lossRatePercent: number): string {
-  const now = new Date();
-  const dateStr = now.toLocaleDateString("ja-JP", {
-    year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
-  });
-
-  let text = `作成型：${APP_FORMAL_NAME}（${APP_PRODUCT_NAME}）\n`;
-  text += `現場名：${siteName.trim() || "未入力"}\n`;
-  text += `日時：${dateStr}\n\n`;
-  text += `【発注リスト】\n`;
-
-  for (const item of items) {
-    text += `・品番：${item.product_code} / 数量：${item.order_quantity}m\n`;
-  }
-
-
-  return text.trim();
-}
-
 type OrderListProps = {
   items: MemoProductItem[];
   notes?: string;
   siteName?: string;
   needs_review_any?: boolean;
+  onItemsChange?: (items: MemoProductItem[]) => void;
 };
 
 type ItemOverride = {
@@ -74,9 +57,47 @@ type ItemOverride = {
   entryRepeatActive?: Record<number, boolean>;
 };
 
-export function OrderList({ items, notes, siteName = "", needs_review_any }: OrderListProps) {
+export function OrderList({ items, notes, siteName = "", needs_review_any, onItemsChange }: OrderListProps) {
   const [lossRate, setLossRate] = useState(DEFAULT_LOSS_RATE_PERCENT);
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
+  const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
+
+  const beginEditCode = (code: string) => {
+    setEditingCode((prev) => ({
+      ...prev,
+      [code]: { open: true, value: code },
+    }));
+  };
+
+  const saveCodeEdit = async (fromCode: string) => {
+    const next = editingCode[fromCode];
+    const toCode = (next?.value ?? "").trim().toUpperCase().replace(/[\s\-]+/g, "");
+    setEditingCode((prev) => ({ ...prev, [fromCode]: { open: false, value: toCode || fromCode } }));
+    if (!toCode || toCode === fromCode) return;
+    if (!onItemsChange) return;
+
+    const before = items.find((i) => i.product_code === fromCode);
+    const updatedItems = items.map((i) =>
+      i.product_code === fromCode ? { ...i, product_code: toCode } : i,
+    );
+    onItemsChange(updatedItems);
+
+    // DBへ補正ログを保存（失敗してもUIは優先）
+    try {
+      await fetch("/api/memo-corrections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          site_name: siteName?.trim() || undefined,
+          kind: "product_code",
+          before: before ? { product_code: before.product_code, total_m: before.total_m, order_quantity: before.order_quantity } : { product_code: fromCode },
+          after: { product_code: toCode },
+        }),
+      });
+    } catch {
+      // ignore
+    }
+  };
 
   const handleOverrideChange = (productCode: string, field: keyof Omit<ItemOverride, "entryQtys" | "entryEditMode" | "entryRepeatActive" | "entryLengths">, value: string) => {
     setOverrides((prev) => {
@@ -367,9 +388,44 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                 <div key={product.product_code} className={`px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-4">
                     <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
-                      <h4 className="text-lg font-extrabold tracking-tight sm:text-xl">
-                        {product.product_code}
-                      </h4>
+                      <div className="min-w-0">
+                        {editingCode[product.product_code]?.open ? (
+                          <Input
+                            value={editingCode[product.product_code]?.value ?? product.product_code}
+                            onChange={(e) =>
+                              setEditingCode((prev) => ({
+                                ...prev,
+                                [product.product_code]: { open: true, value: e.target.value },
+                              }))
+                            }
+                            onBlur={() => void saveCodeEdit(product.product_code)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                void saveCodeEdit(product.product_code);
+                              }
+                              if (e.key === "Escape") {
+                                e.preventDefault();
+                                setEditingCode((prev) => ({
+                                  ...prev,
+                                  [product.product_code]: { open: false, value: product.product_code },
+                                }));
+                              }
+                            }}
+                            className="h-9 w-[10.5rem] px-2 text-base font-extrabold tabular-nums sm:h-10 sm:w-[12rem] sm:text-xl"
+                            aria-label="品番を編集"
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => beginEditCode(product.product_code)}
+                            className="min-w-0 text-left text-lg font-extrabold tracking-tight underline-offset-4 hover:underline sm:text-xl"
+                            title="タップして品番を編集"
+                          >
+                            {product.product_code}
+                          </button>
+                        )}
+                      </div>
                       {product.tags && product.tags.length > 0 && (
                         <div className="flex gap-1 ml-1">
                           {product.tags.map((tag: string) => (
@@ -618,6 +674,8 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                        <span className="text-xs font-bold tabular-nums">
                          <span className="opacity-60 mr-1">計測合計:</span>
                          <span className={product.override_active ? "text-indigo-600 dark:text-indigo-400" : "opacity-80"}>{product.total_m}m</span>
+                         <span className="opacity-50 mx-1">/</span>
+                         <span className={product.override_active ? "text-indigo-600 dark:text-indigo-400" : "opacity-80"}>{(product.total_m * 0.9).toFixed(2)}㎡</span>
                        </span>
                     </div>
                   </div>
