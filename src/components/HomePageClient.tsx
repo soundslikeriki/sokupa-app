@@ -208,13 +208,12 @@ export default function HomePageClient() {
         </div>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <div className="relative mb-3 h-10 w-[220px] sm:h-12 sm:w-[260px] overflow-hidden rounded-sm bg-white">
-              {/* 二重に描写されているサブタイトルをCSSでカットし、メイン部分だけ表示させる */}
+            <div className="mb-3 h-10 sm:h-12">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img 
                 src="/logo.jpg" 
                 alt={APP_PRODUCT_NAME}
-                className="h-full w-full object-cover object-top"
+                className="h-full w-auto object-contain"
               />
             </div>
             <h1 className="sr-only">{APP_PRODUCT_NAME}</h1>
