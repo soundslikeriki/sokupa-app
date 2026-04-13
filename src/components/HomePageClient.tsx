@@ -208,12 +208,13 @@ export default function HomePageClient() {
         </div>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <div className="mb-3 h-10 sm:h-12">
+            <div className="mb-3 h-10 sm:h-12 overflow-hidden bg-[#FFFFFF] max-w-[200px] sm:max-w-[240px] rounded-sm">
+              {/* 余分な文字をカットしつつ綺麗な配置を保つよう、コンテナ側で高さを固定しoverflow-hiddenで処理 */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img 
                 src="/logo.jpg" 
                 alt={APP_PRODUCT_NAME}
-                className="h-full w-auto object-contain"
+                className="w-full h-auto object-cover object-top"
               />
             </div>
             <h1 className="sr-only">{APP_PRODUCT_NAME}</h1>
