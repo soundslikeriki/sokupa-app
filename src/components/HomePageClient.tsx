@@ -54,8 +54,8 @@ export default function HomePageClient() {
       newImages.map(async (imgObj, idx) => {
         const file = imageFiles[idx];
         try {
-          // Send 2400px image so Gemini can read handwritten details clearly with 0.9 quality
-          const dataUrl = await convertAndResizeForPreview(file, 2400, 0.9);
+          // Send 1500px max dimension image at 0.6 quality to aggressively reduce payload
+          const dataUrl = await convertAndResizeForPreview(file, 1500, 0.6);
           setImages((prev) =>
             prev.map((img) =>
               img.id === imgObj.id
@@ -85,6 +85,7 @@ export default function HomePageClient() {
   }, []);
 
   const handleAnalyze = async () => {
+    if (isAnalyzing) return;
     const readyImages = images.filter((img) => img.status === "ready" && img.base64Data);
     if (readyImages.length === 0) return;
     setIsAnalyzing(true);
