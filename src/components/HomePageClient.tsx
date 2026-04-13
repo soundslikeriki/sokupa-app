@@ -2,6 +2,7 @@
 
 import { useCallback, useId, useMemo, useState } from "react";
 import { Loader2, Upload, X } from "lucide-react";
+import Image from "next/image";
 
 import { OrderList } from "@/components/OrderList";
 import { Button } from "@/components/ui/button";
@@ -208,13 +209,13 @@ export default function HomePageClient() {
         </div>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <div className="mb-3 h-10 sm:h-12 overflow-hidden bg-[#FFFFFF] max-w-[200px] sm:max-w-[240px] rounded-sm">
-              {/* 余分な文字をカットしつつ綺麗な配置を保つよう、コンテナ側で高さを固定しoverflow-hiddenで処理 */}
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img 
-                src="/logo.jpg" 
+            <div className="flex items-center gap-2 mb-3">
+              <Image 
+                src="/logo.png" 
                 alt={APP_PRODUCT_NAME}
-                className="w-full h-auto object-cover object-top"
+                width={280} 
+                height={85} 
+                priority 
               />
             </div>
             <h1 className="sr-only">{APP_PRODUCT_NAME}</h1>
