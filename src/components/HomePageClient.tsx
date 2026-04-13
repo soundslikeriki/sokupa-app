@@ -206,12 +206,24 @@ export default function HomePageClient() {
             {APP_HEADER_CREDIT}
           </span>
         </div>
-        <h1 className="text-3xl font-bold tracking-tight">{APP_PRODUCT_NAME}</h1>
-        <p className="max-w-2xl text-muted-foreground">
-          計測メモ画像をアップロードすると、品番・計算式・実測合計を読み取り、メーカー別に整理します。発注数量は実測に
-          {DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。
-          <span className="text-xs text-muted-foreground">（※ロス率変更可能）</span>
-        </p>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">{APP_PRODUCT_NAME}</h1>
+            <p className="mt-2 max-w-2xl text-muted-foreground">
+              計測メモ画像をアップロードすると、品番・計算式・実測合計を読み取り、メーカー別に整理します。発注数量は実測に
+              {DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。
+              <span className="text-xs text-muted-foreground">（※ロス率変更可能）</span>
+            </p>
+          </div>
+          <a
+            href="https://lin.ee/Xr6sd53"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex shrink-0 items-center justify-center rounded-full bg-[#06C755] px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-[#05b34c]"
+          >
+            LINE通知を受け取る（友だち追加）
+          </a>
+        </div>
       </header>
 
       <div className="space-y-8">
@@ -312,6 +324,13 @@ export default function HomePageClient() {
             `${images.length}枚の画像を解析する`
           )}
         </Button>
+        <p className="mt-3 text-center text-sm text-muted-foreground">
+          ※通知が届かない場合は
+          <a href="https://lin.ee/Xr6sd53" target="_blank" rel="noopener noreferrer" className="mx-1 font-bold text-[#06C755] hover:underline">
+            こちらから友だち追加
+          </a>
+          してください。
+        </p>
       </div>
 
       {error ? (
