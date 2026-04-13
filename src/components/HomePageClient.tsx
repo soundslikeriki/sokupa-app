@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import { APP_FORMAL_NAME, APP_HEADER_CREDIT, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import { convertAndResizeForPreview } from "@/lib/resizeImage";
-import { buildOrderRequestText } from "@/lib/order-text";
+import { supabase } from "@/lib/supabase";
 type ProcessedImage = {
   id: string;
   originalName: string;
@@ -30,6 +30,7 @@ export default function HomePageClient() {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [parsed, setParsed] = useState<ParsedMemoPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [jobAccepted, setJobAccepted] = useState<{ jobId: string } | null>(null);
 
   const readyImages = useMemo(
     () => images.filter((img) => img.status === "ready" && img.base64Data),
@@ -140,55 +141,52 @@ export default function HomePageClient() {
     setError(null);
     setParsed(null);
     setProgress({ done: 0, total: readyImages.length });
+    setJobAccepted(null);
 
     try {
-      let acc: ParsedMemoPayload | null = null;
+      // 1) upload prepared JPEGs to Supabase Storage and obtain public URLs
+      const uploadedUrls: string[] = [];
       for (let i = 0; i < readyImages.length; i++) {
         const img = readyImages[i]!;
-        const currentContext = deriveContextFromParsed(acc);
-        const res = await fetch("/api/parse-memo", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            base64Image: img.base64Data,
-            mimeType: "image/jpeg",
-            context: {
-              site_name: siteName?.trim() || undefined,
-              major_manufacturers: currentContext.majorManufacturers,
-              known_product_codes: currentContext.knownProductCodes,
-            },
-          }),
+        const base64 = img.base64Data as string;
+        const bin = atob(base64);
+        const bytes = new Uint8Array(bin.length);
+        for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
+        const blob = new Blob([bytes], { type: "image/jpeg" });
+
+        const path = `uploads/${Date.now()}_${img.id}.jpg`;
+        const { error: upErr } = await supabase.storage.from("memo_uploads").upload(path, blob, {
+          contentType: "image/jpeg",
+          upsert: true,
         });
+        if (upErr) throw new Error(`画像アップロードに失敗しました: ${upErr.message}`);
+        const { data } = supabase.storage.from("memo_uploads").getPublicUrl(path);
+        if (!data?.publicUrl) throw new Error("画像URLの生成に失敗しました");
+        uploadedUrls.push(data.publicUrl);
 
-        type ApiJson = { success?: boolean; data?: ParsedMemoPayload; error?: string };
-        let data: ApiJson;
-        try {
-          data = (await res.json()) as ApiJson;
-        } catch {
-          throw new Error(`サーバーからの応答がJSONではありません（HTTP ${res.status}）。`);
-        }
-
-        if (!res.ok || data.error) {
-          throw new Error(data.error || "解析に失敗しました");
-        }
-        if (!data.success || !data.data || !Array.isArray(data.data.items)) {
-          throw new Error("応答形式が不正です（success / data.items を確認してください）。");
-        }
-
-        acc = mergeParsed(acc, data.data!);
-        setParsed(acc);
         setProgress((p) => (p ? { ...p, done: Math.min(p.total, p.done + 1) } : null));
       }
-      
-      // すべてのループが完了した後、LINEへ通知を送信する
-      if (acc && acc.items && acc.items.length > 0) {
-        const text = buildOrderRequestText(acc.items, siteName, DEFAULT_LOSS_RATE_PERCENT);
-        fetch("/api/send-line", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text }),
-        }).catch((err) => console.error("LINE Notify failed", err));
+
+      // 2) create a background analysis job on the server
+      const createRes = await fetch("/api/analysis-jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image_urls: uploadedUrls,
+          site_name: siteName?.trim() || undefined,
+          context: {
+            site_name: siteName?.trim() || undefined,
+            major_manufacturers: [],
+            known_product_codes: [],
+          },
+        }),
+      });
+      const createJson = (await createRes.json()) as any;
+      if (!createRes.ok || createJson?.error) {
+        throw new Error(createJson?.error || `ジョブ作成に失敗しました（HTTP ${createRes.status}）`);
       }
+
+      setJobAccepted({ jobId: String(createJson.job_id) });
     } catch (err) {
       setError(err instanceof Error ? err.message : "解析中にエラーが発生しました");
     } finally {
@@ -313,13 +311,20 @@ export default function HomePageClient() {
           type="button"
           onClick={() => void handleAnalyze()}
           disabled={images.length === 0 || images.some((i) => i.status !== "ready") || isAnalyzing}
-          className="w-full py-6 text-lg"
+          className="w-full py-6 text-base sm:text-lg"
         >
           {isAnalyzing ? (
-            <>
-              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              解析中...{progress ? `（${progress.done}/${progress.total}）` : ""}（完了後にLINEで通知します）
-            </>
+            <span className="flex min-w-0 items-center justify-center gap-2">
+              <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
+              <span className="min-w-0 whitespace-nowrap overflow-hidden text-ellipsis">
+                <span className="sm:hidden">
+                  解析中... {progress ? `${progress.done}/${progress.total}` : ""}
+                </span>
+                <span className="hidden sm:inline">
+                  解析中... {progress ? `${progress.done}/${progress.total}` : ""}（完了後にLINEで通知します）
+                </span>
+              </span>
+            </span>
           ) : (
             `${images.length}枚の画像を解析する`
           )}
@@ -338,6 +343,17 @@ export default function HomePageClient() {
           <CardHeader>
             <CardTitle className="text-base text-destructive">エラー</CardTitle>
             <CardDescription className="text-destructive/90">{error}</CardDescription>
+          </CardHeader>
+        </Card>
+      ) : null}
+
+      {jobAccepted ? (
+        <Card className="border-emerald-500/30 bg-emerald-500/10">
+          <CardHeader>
+            <CardTitle className="text-base">解析を受け付けました</CardTitle>
+            <CardDescription>
+              スマホを閉じてもサーバー側で解析が進みます。完了したらLINEで通知します。
+            </CardDescription>
           </CardHeader>
         </Card>
       ) : null}
