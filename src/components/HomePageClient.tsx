@@ -2,7 +2,6 @@
 
 import { useCallback, useId, useMemo, useState } from "react";
 import { Loader2, Upload, X } from "lucide-react";
-import Image from "next/image";
 
 import { OrderList } from "@/components/OrderList";
 import { Button } from "@/components/ui/button";
@@ -209,16 +208,7 @@ export default function HomePageClient() {
         </div>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Image 
-                src="/logo.png" 
-                alt={APP_PRODUCT_NAME}
-                width={280} 
-                height={85} 
-                priority 
-              />
-            </div>
-            <h1 className="sr-only">{APP_PRODUCT_NAME}</h1>
+            <h1 className="text-2xl font-bold text-foreground mb-2">ソクパ　- Sokupa -</h1>
             <p className="mt-2 max-w-2xl text-muted-foreground">
               計測メモ画像をアップロードすると、品番・計算式・実測合計を読み取り、メーカー別に整理します。発注数量は実測に
               {DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。
