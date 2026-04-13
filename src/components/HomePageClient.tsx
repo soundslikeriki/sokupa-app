@@ -208,7 +208,16 @@ export default function HomePageClient() {
         </div>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">{APP_PRODUCT_NAME}</h1>
+            <div className="relative mb-3 h-10 w-[200px] bg-white sm:h-12 sm:w-[240px] overflow-hidden rounded-sm">
+              {/* 二重に描写されているサブタイトルをCSSでカットし、メイン部分だけ表示させる */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img 
+                src="/logo.jpg" 
+                alt={APP_PRODUCT_NAME}
+                className="absolute top-0 left-0 w-full h-auto"
+              />
+            </div>
+            <h1 className="sr-only">{APP_PRODUCT_NAME}</h1>
             <p className="mt-2 max-w-2xl text-muted-foreground">
               計測メモ画像をアップロードすると、品番・計算式・実測合計を読み取り、メーカー別に整理します。発注数量は実測に
               {DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。
