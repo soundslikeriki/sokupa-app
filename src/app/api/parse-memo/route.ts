@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { calculateFinalQuantity, parseRepeatInfoRaw } from "@/lib/calc-logic";
 import { supabase } from "@/lib/supabase";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { dedupeSlashDelimited } from "@/lib/dedupeSlashList";
+import { manufacturerFromOfficialUrl } from "@/lib/officialDomainManufacturer";
 import { augmentProductWithCatalogSearch, type CatalogAugment } from "@/lib/wallpaperCatalogSearch";
 import type { MemoEntry, MemoProductItem } from "@/types";
 
@@ -105,17 +107,22 @@ function parseEntry(raw: unknown): MemoEntry {
 function mergeVisionWithCatalog(item: Record<string, unknown>, cat: CatalogAugment): Record<string, unknown> {
   const visionNotes = typeof item.notes === "string" ? item.notes.trim() : "";
   const extra = cat.catalog_notes_extra?.trim() ?? "";
-  const notesJoined = [visionNotes, extra].filter(Boolean).join(" / ");
+  const notesJoined = dedupeSlashDelimited([visionNotes, extra].filter(Boolean).join(" / "));
 
-  const manufacturer =
-    (cat.manufacturer?.trim() || "") ||
-    (typeof item.manufacturer === "string" ? item.manufacturer.trim() : "") ||
+  const catMfg = cat.manufacturer?.trim() || "";
+  const visionMfg = typeof item.manufacturer === "string" ? item.manufacturer.trim() : "";
+  const sourceForDns =
+    (typeof cat.source_url === "string" && cat.source_url.trim()) ||
+    (typeof item.source_url === "string" && item.source_url.trim()) ||
     "";
+  const dnsMfg = manufacturerFromOfficialUrl(sourceForDns) || "";
+  const manufacturer = (dnsMfg || catMfg || visionMfg).trim();
 
-  const spec =
+  const specRaw =
     (cat.spec?.trim() || "") ||
     (typeof item.spec === "string" ? String(item.spec).trim() : "") ||
     "";
+  const spec = specRaw ? dedupeSlashDelimited(specRaw) : "";
 
   const catRi = parseRepeatInfoRaw(cat.repeat_info);
   const rawRi = parseRepeatInfoRaw(item.repeat_info);
@@ -125,7 +132,7 @@ function mergeVisionWithCatalog(item: Record<string, unknown>, cat: CatalogAugme
   return {
     ...item,
     ...(manufacturer ? { manufacturer } : {}),
-    ...(spec ? { spec } : {}),
+    ...(spec.trim() ? { spec: spec.trim() } : {}),
     repeat_info,
     ...(notesJoined ? { notes: notesJoined } : {}),
     confidence: cat.confidence,
@@ -189,7 +196,14 @@ async function enrichWithProductMaster(items: any[]) {
 
         const mfgRaw = master.manufacturers as any;
         const mfgName = mfgRaw ? (Array.isArray(mfgRaw) ? mfgRaw[0]?.name : mfgRaw.name) : undefined;
-        const resolvedMfg = mfgName || item.manufacturer || "不明";
+        const masterUrl = typeof master.source_url === "string" ? master.source_url.trim() : "";
+        const itemUrl = typeof item.source_url === "string" ? item.source_url.trim() : "";
+        const dnsMfg = manufacturerFromOfficialUrl(itemUrl || masterUrl) || "";
+        const visionMfg =
+          typeof item.manufacturer === "string" && item.manufacturer.trim()
+            ? item.manufacturer.trim()
+            : "";
+        const resolvedMfg = (dnsMfg || mfgName || visionMfg || "不明").trim();
         const masterSpec = String(master.spec ?? "").trim();
         const masterIsGarbage =
           !masterSpec || masterSpec === "規格情報なし" || masterSpec === "情報なし";
@@ -215,13 +229,12 @@ async function enrichWithProductMaster(items: any[]) {
 
           const visionNotes = typeof item.notes === "string" ? item.notes.trim() : "";
           const masterNotes = master.notes ? String(master.notes).trim() : "";
-          const notesMerged = [visionNotes, masterNotes].filter(Boolean).join(" / ");
+          const notesMerged = dedupeSlashDelimited([visionNotes, masterNotes].filter(Boolean).join(" / "));
 
           return {
             ...item,
             product_code: master.code,
-            manufacturer:
-              (typeof item.manufacturer === "string" && item.manufacturer.trim()) || resolvedMfg,
+            manufacturer: resolvedMfg,
             spec: itemHasRealSpec ? itemSpec : masterSpec || "規格情報なし",
             repeat_info,
             notes: notesMerged || "",
@@ -247,7 +260,11 @@ async function enrichWithProductMaster(items: any[]) {
           repeat_info: master.repeat_v && master.repeat_h 
             ? { from_product: `タテ${master.repeat_v} / ヨコ${master.repeat_h}` }
             : { from_product: (master.pattern_match || "不明") },
-          notes: master.notes ? `${item.notes ? item.notes + ' / ' : ''}${master.notes}` : item.notes || "",
+          notes: dedupeSlashDelimited(
+            master.notes
+              ? `${item.notes ? String(item.notes).trim() + " / " : ""}${String(master.notes).trim()}`
+              : String(item.notes || "").trim(),
+          ),
           needs_review: false,
           source_url: master.source_url,
           is_live_searched: master.is_live_searched,
@@ -290,11 +307,16 @@ function finalizeClientItem(raw: unknown): MemoProductItem | null {
   const total_m = Number.isFinite(Number(r.total_m)) && Number(r.total_m) > 0 ? Number(r.total_m) : totalFromEntries;
   const order_quantity = calculateFinalQuantity(total_m);
 
-  const manufacturer = String(r.manufacturer ?? "").trim() || "不明";
-  const spec = String(r.spec ?? "").trim() || "規格情報なし";
+  const sourceUrl = typeof r.source_url === "string" ? r.source_url.trim() : "";
+  const dnsMfg = manufacturerFromOfficialUrl(sourceUrl) || "";
+  const manufacturer = (dnsMfg || String(r.manufacturer ?? "").trim()) || "不明";
+  const specRaw = String(r.spec ?? "").trim();
+  const spec =
+    (specRaw ? dedupeSlashDelimited(specRaw) || specRaw : "") || "規格情報なし";
   const repeat_info = parseRepeatInfoRaw(r.repeat_info) ?? { from_product: "不明" };
   const notesRaw = typeof r.notes === "string" ? r.notes.trim() : "";
-  const notes = notesRaw || undefined;
+  const notesJoined = notesRaw ? dedupeSlashDelimited(notesRaw) : "";
+  const notes = notesJoined || undefined;
 
   const conf = r.confidence;
   const confidence =

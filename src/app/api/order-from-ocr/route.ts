@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { DEFAULT_LOSS_RATE } from "@/lib/calc-logic";
+import { dedupeSlashDelimited } from "@/lib/dedupeSlashList";
+import { manufacturerFromOfficialUrl } from "@/lib/officialDomainManufacturer";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
 
 export const runtime = "nodejs";
@@ -130,15 +132,19 @@ export async function POST(req: NextRequest) {
                else mfgName = (dbWall.manufacturers as any).name || mfgName;
              }
 
+             const srcUrl = dbWall.source_url || null;
+             const dnsMfg = manufacturerFromOfficialUrl(typeof srcUrl === "string" ? srcUrl : null);
              spec = {
-               manufacturer: mfgName,
+               manufacturer: (dnsMfg || mfgName).trim() || "不明",
                repeat_v: v > 0 ? v : null,
                repeat_h: h > 0 ? h : null,
                is_plain: v === 0 && h === 0,
                is_verified: true,
                confidence: dbWall.confidence ?? 1.0,
-               source_url: dbWall.source_url || null,
-               note: [dbWall.spec, dbWall.pattern_match, dbWall.notes].filter(Boolean).join(" / ")
+               source_url: srcUrl,
+               note: dedupeSlashDelimited(
+                 [dbWall.spec, dbWall.pattern_match, dbWall.notes].filter(Boolean).join(" / "),
+               ),
              };
              from_cache = true;
           }

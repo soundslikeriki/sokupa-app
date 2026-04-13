@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, RefreshCw, Undo2, Globe } from "lucide-react";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
+import { dedupeSlashDelimited } from "@/lib/dedupeSlashList";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import type { MemoProductItem } from "@/types";
 
@@ -407,7 +408,9 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                   <div className="mb-6 grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-3">
                     <div className="rounded-xl border border-black/5 bg-white/60 p-2.5 dark:border-white/5 dark:bg-black/40 sm:p-3">
                       <span className="mb-1 block text-[9px] font-bold uppercase tracking-wider opacity-50 sm:text-[10px]">規格・寸法</span>
-                      <span className="text-xs font-medium leading-snug sm:text-sm">{product.spec?.trim() || "情報なし"}</span>
+                      <span className="text-xs font-medium leading-snug sm:text-sm">
+                        {dedupeSlashDelimited(product.spec?.trim() || "") || "情報なし"}
+                      </span>
                     </div>
                     <div className="rounded-xl border border-black/5 bg-white/60 p-2.5 dark:border-white/5 dark:bg-black/40 sm:p-3">
                       <span className="mb-1 block text-[9px] font-bold uppercase tracking-wider opacity-50 sm:text-[10px]">リピート</span>
@@ -415,7 +418,8 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                     </div>
                     {product.notes?.trim() && (
                       <div className="rounded-xl border border-black/5 bg-white/60 p-2.5 text-xs font-medium text-muted-foreground dark:border-white/5 dark:bg-black/40 sm:p-3 sm:text-sm md:col-span-2">
-                        <span className="mr-2 opacity-60">備考:</span>{product.notes.trim()}
+                        <span className="mr-2 opacity-60">備考:</span>
+                        {dedupeSlashDelimited(product.notes.trim())}
                       </div>
                     )}
                   </div>
@@ -496,7 +500,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                     </div>
                   )}
 
-                  <div className="group/memo relative overflow-hidden rounded-xl bg-black/5 p-3 dark:bg-white/5 sm:p-4">
+                  <div className="group/memo relative overflow-hidden rounded-xl bg-black/5 p-2.5 dark:bg-white/5 sm:p-4">
                     <Button 
                       variant="outline" 
                       size="sm"
@@ -524,10 +528,10 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                          return (
                            <div
                              key={eidx}
-                             className="group/row flex flex-col gap-2 rounded-lg border border-black/5 bg-white/50 px-2 py-2 text-xs font-medium transition-colors hover:bg-white/80 dark:border-white/5 dark:bg-black/50 dark:hover:bg-black/80 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-3 sm:py-2 sm:text-sm"
+                             className="group/row flex flex-col gap-1.5 rounded-lg border border-black/5 bg-white/50 px-1.5 py-1.5 text-[11px] font-medium transition-colors hover:bg-white/80 dark:border-white/5 dark:bg-black/50 dark:hover:bg-black/80 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-3 sm:py-2 sm:text-sm"
                            >
-                              <div className="flex w-full items-center justify-between gap-1.5 sm:gap-2">
-                                <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
+                              <div className="flex w-full min-w-0 items-center justify-between gap-1 sm:gap-2">
+                                <div className="flex min-w-0 flex-1 items-center gap-1 sm:gap-2">
                                   <button 
                                     type="button"
                                     onClick={() => handleToggleEntryRepeat(product.product_code, eidx)}
@@ -558,15 +562,15 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                                           autoFocus
                                           type="number" 
                                           step="0.1" 
-                                          className="h-8 w-[4.5rem] border-indigo-300 px-1 text-center text-[13px] font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[5.5rem] sm:text-sm"
+                                          className="h-8 w-[4.25rem] border-indigo-300 px-1 text-center text-xs font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[5.5rem] sm:text-sm"
                                           value={lValue}
                                           onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryLengths", input.target.value)}
                                         />
-                                        <span className="shrink-0 text-xs sm:text-sm">m</span>
-                                        <span className="mx-0.5 shrink-0 text-xs text-muted-foreground sm:text-sm">×</span>
+                                        <span className="shrink-0 text-[11px] sm:text-sm">m</span>
+                                        <span className="mx-0.5 shrink-0 text-[11px] text-muted-foreground sm:text-sm">×</span>
                                         <Input 
                                           type="number" 
-                                          className="h-8 w-[3.5rem] border-indigo-300 px-1 text-center text-[13px] font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[4rem] sm:text-sm"
+                                          className="h-8 w-[3.25rem] border-indigo-300 px-1 text-center text-xs font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[4rem] sm:text-sm"
                                           value={qValue}
                                           onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryQtys", input.target.value)}
                                         />
@@ -583,14 +587,14 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                                       <button 
                                         type="button"
                                         onClick={() => handleToggleEntryEdit(product.product_code, eidx)}
-                                        className="group/formula flex w-full max-w-[12rem] items-center gap-1 rounded-md px-1 py-1 text-left transition-colors hover:bg-black/5 dark:hover:bg-white/5 sm:gap-1.5"
+                                        className="group/formula flex min-w-0 flex-1 items-center gap-0.5 rounded-md px-0.5 py-0.5 text-left transition-colors hover:bg-black/5 dark:hover:bg-white/5 sm:max-w-[12rem] sm:gap-1.5 sm:px-1 sm:py-1"
                                         title="タップして式を編集"
                                       >
-                                        <span className={`shrink-0 tabular-nums ${typeof rawLen === "number" && rawLen !== e.length_m ? "font-bold text-indigo-600 dark:text-indigo-400" : ""}`}>
+                                        <span className={`min-w-0 shrink-0 truncate tabular-nums ${typeof rawLen === "number" && rawLen !== e.length_m ? "font-bold text-indigo-600 dark:text-indigo-400" : ""}`}>
                                           {e.derived_length}m
                                         </span>
-                                        <span className="shrink-0 text-muted-foreground mx-0.5">×</span>
-                                        <span className={`min-w-[1.5rem] text-center font-bold tabular-nums sm:w-[2.5rem] ${typeof rawQty === "number" && rawQty !== e.quantity ? "text-indigo-600 dark:text-indigo-400" : ""}`}>
+                                        <span className="shrink-0 text-muted-foreground mx-px">×</span>
+                                        <span className={`min-w-[1.25rem] shrink-0 text-center font-bold tabular-nums sm:w-[2.5rem] ${typeof rawQty === "number" && rawQty !== e.quantity ? "text-indigo-600 dark:text-indigo-400" : ""}`}>
                                           {qValue}
                                         </span>
                                         <Edit3 className="ml-1 h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover/formula:opacity-40" />
@@ -599,8 +603,8 @@ export function OrderList({ items, notes, siteName = "", needs_review_any }: Ord
                                   </div>
                                 </div>
                                 
-                                <div className="flex shrink-0 items-center justify-end pl-2">
-                                  <span className="w-12 shrink-0 text-right text-sm font-bold tabular-nums text-indigo-600 dark:text-indigo-400 sm:w-16 sm:text-base">
+                                <div className="flex shrink-0 items-center justify-end pl-1 sm:pl-2">
+                                  <span className="w-[3.25rem] shrink-0 text-right text-xs font-bold tabular-nums leading-none text-indigo-600 dark:text-indigo-400 sm:w-16 sm:text-base">
                                     {e.derived_subtotal}m
                                   </span>
                                 </div>

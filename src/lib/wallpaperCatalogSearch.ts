@@ -3,33 +3,11 @@ import type { GoogleGenerativeAI } from "@google/generative-ai";
 import { generateText, Output, stepCountIs } from "ai";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
+import { dedupeSlashDelimited } from "./dedupeSlashList";
+import { manufacturerFromOfficialUrl } from "./officialDomainManufacturer";
 
 const CATALOG_MODEL = "gemini-3-flash-preview";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-/** 公式ドメイン → メーカー名（hostname 一致またはサブドメイン） */
-const OFFICIAL_DOMAIN_TO_MANUFACTURER: readonly { host: string; name: string }[] = [
-  { host: "sangetsu.co.jp", name: "サンゲツ" },
-  { host: "lilycolor.co.jp", name: "リリカラ" },
-  { host: "tokiwa.net", name: "トキワ" },
-  { host: "toli.co.jp", name: "東リ" },
-  { host: "runon.co.jp", name: "ルノン" },
-  { host: "sincol-group.jp", name: "シンコール" },
-  { host: "abc-t.co.jp", name: "エービーシー商会" },
-] as const;
-
-function manufacturerFromOfficialUrl(url: string | null | undefined): string | null {
-  if (!url || typeof url !== "string") return null;
-  try {
-    const host = new URL(url.trim()).hostname.toLowerCase();
-    for (const { host: h, name } of OFFICIAL_DOMAIN_TO_MANUFACTURER) {
-      if (host === h || host.endsWith(`.${h}`)) return name;
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
 
 /** generateText 結果から参照 URL を可能な限り集める */
 function collectReferenceUrls(
@@ -261,7 +239,8 @@ function applyRepeatNormalizationToAugment(augment: CatalogAugment): CatalogAugm
     spec = `${spec} / リピート: ${bit}`;
   }
 
-  return { ...augment, spec: spec.trim(), repeat_info };
+  const specOut = dedupeSlashDelimited(spec.trim());
+  return { ...augment, spec: specOut.trim() || spec.trim(), repeat_info };
 }
 
 /**
@@ -321,7 +300,7 @@ export async function augmentProductWithCatalogSearch(
           manufacturer: manufacturerResolved,
           spec: typeof r.spec === "string" ? r.spec : "",
           repeat_info: repeatParsed,
-          catalog_notes_extra: typeof r.notes === "string" ? r.notes : "",
+          catalog_notes_extra: dedupeSlashDelimited(typeof r.notes === "string" ? r.notes : ""),
           confidence: clamp01(Number(r.confidence) || 0.7),
           needs_review: r.confidence !== null ? Number(r.confidence) < 0.7 : false,
           source_url: typeof r.source_url === "string" ? r.source_url : undefined,
@@ -358,6 +337,7 @@ export async function augmentProductWithCatalogSearch(
   - リザーブ / reserve → サンゲツ
   - ライト / LIGHT（リリカラのシリーズ名としての場合）→ リリカラ
   - シリーズ略号だけでは断定せず、公式ドメインとこの対応表を最優先すること。
+  - runon.co.jp（および *.runon.co.jp）→ ルノン
 
 【公式ページの結合（最優先）】
 - 検索結果にメーカー公式ドメインのページ（仕様・PDF・品番検索）が含まれる場合、そのページの表記を最優先で拾う。
@@ -417,7 +397,7 @@ export async function augmentProductWithCatalogSearch(
     manufacturer: parsed.manufacturer.trim(),
     spec: parsed.spec.trim(),
     repeat_info: parsed.repeat_info,
-    catalog_notes_extra: parsed.notes.trim(),
+    catalog_notes_extra: dedupeSlashDelimited(parsed.notes.trim()),
     confidence,
     needs_review,
     source_url: parsed.source_url.trim() || undefined,
@@ -452,7 +432,7 @@ export async function augmentProductWithCatalogSearch(
         spec: augment.spec || null,
         repeat_v: dims.v,
         repeat_h: dims.h,
-        notes: augment.catalog_notes_extra || null,
+        notes: dedupeSlashDelimited(augment.catalog_notes_extra || "") || null,
         confidence,
         source_url: augment.source_url || null,
         is_live_searched: true,
