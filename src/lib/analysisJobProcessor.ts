@@ -53,10 +53,11 @@ function buildOrderText(result: ParsedMemoPayload, siteName: string | null): str
     `日時：${new Date().toLocaleString("ja-JP", {
       timeZone: "Asia/Tokyo",
       year: "numeric",
-      month: "numeric",
+      month: "long",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
+      hour12: false,
     })}`,
   );
   lines.push("");
@@ -68,8 +69,14 @@ function buildOrderText(result: ParsedMemoPayload, siteName: string | null): str
   } else {
     for (const item of items) {
       const code = String(item?.product_code ?? "").trim() || "不明";
-      const qty = Number(item?.total_m);
-      const qtyStr = Number.isFinite(qty) && qty > 0 ? `${qty}m` : "数量不明";
+      const orderQty = Number(item?.order_quantity);
+      const totalM = Number(item?.total_m);
+      const qtyStr =
+        Number.isFinite(orderQty) && orderQty > 0
+          ? `${orderQty}m`
+          : Number.isFinite(totalM) && totalM > 0
+            ? `${totalM}m`
+            : "数量不明";
       lines.push(`・品番：${code} / 数量：${qtyStr}`);
     }
   }
