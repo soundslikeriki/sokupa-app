@@ -9,7 +9,7 @@ import { augmentProductWithCatalogSearch, type CatalogAugment } from "@/lib/wall
 import type { MemoEntry, MemoProductItem } from "@/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const MAX_IMAGES = 16;
 /** 画像解析（JSON 安定のため Google 検索ツールは付けない） */
@@ -64,11 +64,11 @@ function buildContextHint(ctx: ParseMemoContext | undefined): string {
 }
 
 function stripJsonFence(text: string): string {
-  const trimmed = text.trim();
-  if (trimmed.startsWith("```")) {
-    return trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
-  }
-  return trimmed;
+  return text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/g, "") // 末尾の```も複数あっても除去
+    .trim();
 }
 
 function normalizeImageBase64(imageBase64: string): { data: string; error?: string } {
@@ -108,6 +108,21 @@ function normalizeImageBase64(imageBase64: string): { data: string; error?: stri
   }
 
   return { data: raw };
+}
+
+async function fetchImageUrlAsBase64(url: string): Promise<{ data: string; mimeType?: string; error?: string }> {
+  const u = url.trim();
+  if (!u.startsWith("http")) return { data: "", error: "image_url が不正です" };
+  try {
+    const res = await fetch(u);
+    if (!res.ok) return { data: "", error: `画像URLの取得に失敗しました（HTTP ${res.status}）` };
+    const ct = (res.headers.get("content-type") || "").split(";")[0]?.trim().toLowerCase();
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length === 0) return { data: "", error: "画像データが空です" };
+    return { data: buf.toString("base64"), mimeType: ct || undefined };
+  } catch {
+    return { data: "", error: "画像URLの取得に失敗しました" };
+  }
 }
 
 function parseEntry(raw: unknown): MemoEntry {
@@ -404,6 +419,7 @@ export async function POST(request: NextRequest) {
       base64Images?: string[];
       base64Image?: string;
       imageBase64?: string;
+      image_url?: string;
       mimeType?: string;
       context?: ParseMemoContext;
     };
@@ -417,6 +433,16 @@ export async function POST(request: NextRequest) {
       if (typeof single === "string" && single.trim().length > 0) {
         base64Images = [single];
       }
+    }
+
+    let fetchedMime: string | undefined;
+    if (base64Images.length === 0 && typeof body.image_url === "string" && body.image_url.trim()) {
+      const fetched = await fetchImageUrlAsBase64(body.image_url);
+      if (fetched.error || !fetched.data) {
+        return NextResponse.json({ error: fetched.error || "画像が必要です" }, { status: 400 });
+      }
+      base64Images = [fetched.data];
+      fetchedMime = fetched.mimeType;
     }
 
     if (!base64Images || base64Images.length === 0) {
@@ -447,7 +473,11 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const rawMime = body.mimeType === "image/jpg" ? "image/jpeg" : body.mimeType ?? "image/jpeg";
+    const rawMime =
+      body.mimeType === "image/jpg"
+        ? "image/jpeg"
+        : body.mimeType ??
+          (fetchedMime && ["image/jpeg", "image/png", "image/webp"].includes(fetchedMime) ? fetchedMime : "image/jpeg");
     const mimeType =
       rawMime && ["image/jpeg", "image/png", "image/webp"].includes(rawMime) ? rawMime : "image/jpeg";
 
@@ -469,10 +499,19 @@ export async function POST(request: NextRequest) {
 
     let parsedData: { items?: unknown[]; notes?: string };
     try {
-      parsedData = JSON.parse(stripJsonFence(responseText.trim())) as typeof parsedData;
-    } catch {
-      const match = responseText.match(/\{[\s\S]*\}/);
-      parsedData = match ? (JSON.parse(stripJsonFence(match[0].trim())) as typeof parsedData) : { items: [] };
+      // 最初の { から最後の } までを厳密に切り出す
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("No JSON object found in response");
+      const cleaned = jsonMatch[0]
+        .replace(/[\u0000-\u001F\u007F-\u009F]/g, (c) =>
+          ["\t", "\n", "\r"].includes(c) ? c : ""
+        ) // 制御文字を除去（タブ・改行は残す）
+        .replace(/\uFEFF/g, "") // BOM除去
+        .replace(/[\u200B-\u200D\uFEFF]/g, ""); // ゼロ幅文字除去
+      parsedData = JSON.parse(cleaned) as typeof parsedData;
+    } catch (e) {
+      console.error("[parse-memo] JSONパース失敗:", e, "responseText:", responseText.slice(0, 500));
+      parsedData = { items: [] };
     }
 
     const rawItems = Array.isArray(parsedData.items) ? parsedData.items : [];

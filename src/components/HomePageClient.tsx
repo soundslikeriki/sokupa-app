@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { Loader2, Upload, X } from "lucide-react";
 
 import { OrderList } from "@/components/OrderList";
@@ -31,6 +31,12 @@ export default function HomePageClient() {
   const [parsed, setParsed] = useState<ParsedMemoPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobAccepted, setJobAccepted] = useState<{ jobId: string } | null>(null);
+  const [jobUi, setJobUi] = useState<{
+    status: "queued" | "running" | "done" | "failed";
+    done: number;
+    total: number;
+    percent: number;
+  } | null>(null);
 
   const readyImages = useMemo(
     () => images.filter((img) => img.status === "ready" && img.base64Data),
@@ -105,7 +111,8 @@ export default function HomePageClient() {
         const file = imageFiles[idx];
         try {
           // Send 1500px max dimension image at 0.6 quality to aggressively reduce payload
-          const dataUrl = await convertAndResizeForPreview(file, 1500, 0.6);
+          // Mobile HEIC/JPEG を AI が読み取りやすいサイズへ（長辺 2000px 目安）
+          const dataUrl = await convertAndResizeForPreview(file, 2000, 0.72);
           setImages((prev) =>
             prev.map((img) =>
               img.id === imgObj.id
@@ -142,6 +149,7 @@ export default function HomePageClient() {
     setParsed(null);
     setProgress({ done: 0, total: readyImages.length });
     setJobAccepted(null);
+    setJobUi(null);
 
     try {
       // 1) upload prepared JPEGs to Supabase Storage and obtain public URLs
@@ -183,10 +191,21 @@ export default function HomePageClient() {
       });
       const createJson = (await createRes.json()) as any;
       if (!createRes.ok || createJson?.error) {
-        throw new Error(createJson?.error || `ジョブ作成に失敗しました（HTTP ${createRes.status}）`);
+        const msg = createJson?.error || `ジョブ作成に失敗しました（HTTP ${createRes.status}）`;
+        try {
+          alert(`解析ジョブの受付に失敗しました\n${msg}`);
+        } catch {
+          // ignore
+        }
+        throw new Error(msg);
       }
 
       setJobAccepted({ jobId: String(createJson.job_id) });
+      try {
+        localStorage.setItem("sokupa:lastJobId", String(createJson.job_id));
+      } catch {
+        // ignore
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "解析中にエラーが発生しました");
     } finally {
@@ -194,6 +213,114 @@ export default function HomePageClient() {
       setProgress(null);
     }
   };
+
+  // Restore last job on reload (so closing browser continues UX)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const last = localStorage.getItem("sokupa:lastJobId");
+        if (!last) return;
+        const { data, error } = await supabase
+          .from("analysis_jobs")
+          .select("status,result,error")
+          .eq("id", last)
+          .maybeSingle();
+        if (cancelled) return;
+        if (error || !data) {
+          localStorage.removeItem("sokupa:lastJobId");
+          return;
+        }
+        if (data.status === "done" && data.result) {
+          setParsed(data.result as ParsedMemoPayload);
+          localStorage.removeItem("sokupa:lastJobId");
+          return;
+        }
+        if (data.status === "failed") {
+          try {
+            alert(`前回の解析が失敗しています\n${String(data.error || "unknown")}`);
+          } catch {
+            // ignore
+          }
+          localStorage.removeItem("sokupa:lastJobId");
+          return;
+        }
+        // queued/running: resume polling
+        setJobAccepted({ jobId: last });
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Poll job status every ~3s and auto-show results when done
+  useEffect(() => {
+    if (!jobAccepted?.jobId) return;
+    let cancelled = false;
+
+    const pollOnce = async () => {
+      const { data, error: qErr } = await supabase
+        .from("analysis_jobs")
+        .select("status,done_images,total_images,result,error")
+        .eq("id", jobAccepted.jobId)
+        .maybeSingle();
+      if (cancelled) return;
+      if (qErr || !data) return;
+
+      const status = (data.status as any) || "queued";
+      const done = Number(data.done_images) || 0;
+      const total = Math.max(1, Number(data.total_images) || 1);
+      const percent = Math.min(100, Math.max(0, Math.round((done / total) * 100)));
+      setJobUi({ status, done, total, percent });
+
+      if (status === "failed") {
+        const msg = String(data.error || "解析に失敗しました");
+        try {
+          alert(`解析に失敗しました\n${msg}`);
+        } catch {
+          // ignore
+        }
+        setError(msg);
+        setJobAccepted(null);
+        setJobUi(null);
+        try {
+          localStorage.removeItem("sokupa:lastJobId");
+        } catch {
+          // ignore
+        }
+      }
+
+      if (status === "done") {
+        if (data.result) {
+          setParsed(data.result as ParsedMemoPayload);
+          setJobAccepted(null);
+          setJobUi(null);
+          try {
+            localStorage.removeItem("sokupa:lastJobId");
+          } catch {
+            // ignore
+          }
+        } else {
+          // DB上は done だが result が無い（不整合）
+          try {
+            alert("解析は完了扱いですが、結果データが見つかりません（DBの result が空）");
+          } catch {
+            // ignore
+          }
+        }
+      }
+    };
+
+    void pollOnce();
+    const t = window.setInterval(() => void pollOnce(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [jobAccepted?.jobId]);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-2 py-8 sm:gap-8 sm:px-4 sm:py-10 md:px-6 lg:px-8">
@@ -353,6 +480,11 @@ export default function HomePageClient() {
             <CardTitle className="text-base">解析を受け付けました</CardTitle>
             <CardDescription>
               スマホを閉じてもサーバー側で解析が進みます。完了したらLINEで通知します。
+              {jobUi ? (
+                <span className="mt-2 block font-semibold text-emerald-800/90 dark:text-emerald-200">
+                  {jobUi.percent}% 完了（{jobUi.done}/{jobUi.total}）
+                </span>
+              ) : null}
             </CardDescription>
           </CardHeader>
         </Card>

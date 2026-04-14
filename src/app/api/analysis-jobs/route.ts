@@ -1,20 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { processAnalysisJobStep } from "@/lib/analysisJobProcessor";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 type CreateJobBody = {
   image_urls?: string[];
   site_name?: string;
   context?: Record<string, unknown>;
 };
-
-function getBaseUrl(req: NextRequest): string {
-  const host = req.headers.get("host") || "localhost:3000";
-  const proto = req.headers.get("x-forwarded-proto") || "http";
-  return `${proto}://${host}`;
-}
 
 export async function POST(req: NextRequest) {
   try {
@@ -64,15 +59,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: imgErr.message }, { status: 500 });
     }
 
-    const secret = process.env.ANALYSIS_JOB_SECRET?.trim();
-    if (secret) {
-      const base = getBaseUrl(req);
-      // fire-and-forget kickoff
-      fetch(`${base}/api/analysis-jobs/process`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-job-secret": secret },
-        body: JSON.stringify({ job_id: job.id }),
-      }).catch(() => {});
+    console.log("[analysis-job] created", { job_id: job.id, images: urls.length });
+
+    // Kick off processing synchronously in this request (works even if ANALYSIS_JOB_SECRET is unset).
+    // Vercel maxDuration caps total runtime; each step is bounded by parse-memo + DB updates.
+    const maxSteps = urls.length + 3;
+    for (let i = 0; i < maxSteps; i++) {
+      const step = await processAnalysisJobStep({ admin, jobId: job.id, headers: req.headers });
+      console.log("[analysis-job] step", { job_id: job.id, i, status: step.status });
+      if (step.status === "done" || step.status === "failed") break;
     }
 
     return NextResponse.json({ success: true, job_id: job.id });
