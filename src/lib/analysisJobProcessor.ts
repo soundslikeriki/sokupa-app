@@ -82,30 +82,50 @@ function buildOrderText(result: ParsedMemoPayload, siteName: string | null): str
   return lines.join("\n");
 }
 
-async function sendLineCompletion(baseUrl: string, siteName: string | null, result?: ParsedMemoPayload) {
+async function sendLineCompletion(siteName: string | null, result?: ParsedMemoPayload) {
+  const lineToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  const lineUserId = process.env.LINE_USER_ID;
+  if (!lineToken || !lineUserId) {
+    console.error("[sendLine] LINE_CHANNEL_ACCESS_TOKEN or LINE_USER_ID is not set");
+    return;
+  }
+
   const site = siteName?.trim() || "";
 
   // 1通目：完了通知
-  await fetch(`${baseUrl}/api/send-line`, {
+  await fetch("https://api.line.me/v2/bot/message/push", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${lineToken}`,
+    },
     body: JSON.stringify({
-      text: `✅ ソクパ解析が完了しました！${site ? `\n現場：${site}` : ""}\nアプリを開いて結果を確認してください。`,
+      to: lineUserId,
+      messages: [
+        {
+          type: "text",
+          text: `✅ ソクパ解析が完了しました！${site ? `\n現場：${site}` : ""}\nアプリを開いて結果を確認してください。`,
+        },
+      ],
     }),
-  }).catch(() => {});
+  }).catch((e) => console.error("[sendLine] 1通目失敗:", e));
 
-  // 少し待ってから2通目（順番を保証するため）
   await new Promise((r) => setTimeout(r, 500));
 
   // 2通目：発注テキスト
   if (result && Array.isArray(result.items) && result.items.length > 0) {
-    await fetch(`${baseUrl}/api/send-line`, {
+    const text = buildOrderText(result, siteName);
+    await fetch("https://api.line.me/v2/bot/message/push", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${lineToken}`,
+      },
       body: JSON.stringify({
-        text: buildOrderText(result, siteName),
+        to: lineUserId,
+        messages: [{ type: "text", text }],
       }),
-    }).catch(() => {});
+    }).catch((e) => console.error("[sendLine] 2通目失敗:", e));
   }
 }
 
@@ -179,7 +199,7 @@ export async function processAnalysisJobStep(opts: {
       return { status: "failed", error: finErr.message };
     }
 
-    await sendLineCompletion(baseUrl, typeof job.site_name === "string" ? job.site_name : null, resultPayload);
+    await sendLineCompletion(typeof job.site_name === "string" ? job.site_name : null, resultPayload);
     return { status: "done" };
   }
 
