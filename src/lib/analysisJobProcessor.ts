@@ -81,11 +81,6 @@ function buildOrderText(result: ParsedMemoPayload, siteName: string | null): str
     }
   }
 
-  if (result?.notes?.trim()) {
-    lines.push("");
-    lines.push(`【備考】\n${result.notes.trim()}`);
-  }
-
   return lines.join("\n");
 }
 
