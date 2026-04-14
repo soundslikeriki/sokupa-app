@@ -44,15 +44,69 @@ function getBaseUrlFromHeaders(headers: Headers): string {
   return `${proto}://${host}`;
 }
 
-async function sendLineCompletion(baseUrl: string, siteName: string | null) {
+function buildOrderText(result: ParsedMemoPayload, siteName: string | null): string {
   const site = siteName?.trim() || "";
+  const lines: string[] = [];
+  lines.push("作成型：計測メモ解析アプリ（ソクパ）");
+  lines.push(`現場名：${site || "未入力"}`);
+  lines.push(
+    `日時：${new Date().toLocaleString("ja-JP", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })}`,
+  );
+  lines.push("");
+  lines.push("【発注リスト】");
+
+  const items = Array.isArray(result?.items) ? result.items : [];
+  if (items.length === 0) {
+    lines.push("（品番なし）");
+  } else {
+    for (const item of items) {
+      const code = String(item?.product_code ?? "").trim() || "不明";
+      const qty = Number(item?.total_m);
+      const qtyStr = Number.isFinite(qty) && qty > 0 ? `${qty}m` : "数量不明";
+      lines.push(`・品番：${code} / 数量：${qtyStr}`);
+    }
+  }
+
+  if (result?.notes?.trim()) {
+    lines.push("");
+    lines.push(`【備考】\n${result.notes.trim()}`);
+  }
+
+  return lines.join("\n");
+}
+
+async function sendLineCompletion(baseUrl: string, siteName: string | null, result?: ParsedMemoPayload) {
+  const site = siteName?.trim() || "";
+
+  // 1通目：完了通知
   await fetch(`${baseUrl}/api/send-line`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      text: `ソクパ解析が完了しました。${site ? `\n現場: ${site}` : ""}\n（アプリに戻って結果を確認してください）`,
+      text: `✅ ソクパ解析が完了しました！${site ? `\n現場：${site}` : ""}\nアプリを開いて結果を確認してください。`,
     }),
   }).catch(() => {});
+
+  // 少し待ってから2通目（順番を保証するため）
+  await new Promise((r) => setTimeout(r, 500));
+
+  // 2通目：発注テキスト
+  if (result && Array.isArray(result.items) && result.items.length > 0) {
+    await fetch(`${baseUrl}/api/send-line`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: buildOrderText(result, siteName),
+      }),
+    }).catch(() => {});
+  }
 }
 
 /**
@@ -125,7 +179,7 @@ export async function processAnalysisJobStep(opts: {
       return { status: "failed", error: finErr.message };
     }
 
-    await sendLineCompletion(baseUrl, typeof job.site_name === "string" ? job.site_name : null);
+    await sendLineCompletion(baseUrl, typeof job.site_name === "string" ? job.site_name : null, resultPayload);
     return { status: "done" };
   }
 

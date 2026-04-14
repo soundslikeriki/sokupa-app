@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { processAnalysisJobStep } from "@/lib/analysisJobProcessor";
+import { waitUntil } from "@vercel/functions";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -61,14 +62,49 @@ export async function POST(req: NextRequest) {
 
     console.log("[analysis-job] created", { job_id: job.id, images: urls.length });
 
-    // Kick off processing synchronously in this request (works even if ANALYSIS_JOB_SECRET is unset).
-    // Vercel maxDuration caps total runtime; each step is bounded by parse-memo + DB updates.
-    const maxSteps = urls.length + 3;
-    for (let i = 0; i < maxSteps; i++) {
-      const step = await processAnalysisJobStep({ admin, jobId: job.id, headers: req.headers });
-      console.log("[analysis-job] step", { job_id: job.id, i, status: step.status });
-      if (step.status === "done" || step.status === "failed") break;
-    }
+    // バックグラウンドで処理（アプリを離れても継続）
+    waitUntil((async () => {
+      const maxSteps = urls.length + 3;
+      for (let i = 0; i < maxSteps; i++) {
+        const step = await processAnalysisJobStep({
+          admin,
+          jobId: job.id,
+          headers: req.headers,
+        });
+        console.log("[analysis-job] bg step", { job_id: job.id, i, status: step.status });
+        if (step.status === "done" || step.status === "failed") break;
+      }
+
+      // 完了後にLINE通知
+      const lineToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+      if (lineToken) {
+        try {
+          const lineRes = await fetch("https://api.line.me/v2/bot/message/push", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${lineToken}`,
+            },
+            body: JSON.stringify({
+              to: "U24ce93805aa15b7601a5da448fc2d354",
+              messages: [
+                {
+                  type: "text",
+                  text: "✅ ソクパ解析が完了しました！\nアプリを開いて結果を確認してください。",
+                },
+              ],
+            }),
+          });
+          if (!lineRes.ok) {
+            console.error("[analysis-job] LINE通知失敗:", lineRes.status, await lineRes.text());
+          } else {
+            console.log("[analysis-job] LINE通知成功");
+          }
+        } catch (e) {
+          console.error("[analysis-job] LINE通知エラー:", e);
+        }
+      }
+    })());
 
     return NextResponse.json({ success: true, job_id: job.id });
   } catch (e: unknown) {
