@@ -152,7 +152,7 @@ export function InviteGate({ children }: Props) {
               </p>
             ) : null}
             <Button type="button" className="w-full h-12 text-base bg-[#06C755] hover:bg-[#05b34c]" asChild>
-              <a href="/api/auth/line">LINEでログインして通知を受け取る</a>
+              <a href="/api/auth/line">LINEでログイン</a>
             </Button>
           </CardContent>
         </Card>
