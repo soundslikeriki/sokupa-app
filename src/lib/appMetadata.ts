@@ -9,7 +9,7 @@ export const APP_PRODUCT_NAME = "ソクパ";
 export const APP_FORMAL_NAME = "計測メモ解析アプリ";
 
 /** ヘッダー正式名の右に表示するクレジット */
-export const APP_HEADER_CREDIT = "Sokupa powered by Claire Co., Ltd.";
+export const APP_HEADER_CREDIT = "";
 
 /** ブラウザタイトル用 */
 export const APP_BROWSER_TITLE = `${APP_PRODUCT_NAME} | ${APP_FORMAL_NAME}`;

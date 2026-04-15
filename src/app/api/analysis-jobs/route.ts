@@ -9,6 +9,7 @@ export const maxDuration = 300;
 type CreateJobBody = {
   image_urls?: string[];
   site_name?: string;
+  line_user_id?: string;
   context?: Record<string, unknown>;
 };
 
@@ -21,8 +22,8 @@ export async function POST(req: NextRequest) {
     if (urls.length === 0) {
       return NextResponse.json({ error: "image_urls is required" }, { status: 400 });
     }
-    if (urls.length > 16) {
-      return NextResponse.json({ error: "images must be <= 16" }, { status: 400 });
+    if (urls.length > 5) {
+      return NextResponse.json({ error: "images must be <= 5" }, { status: 400 });
     }
 
     const admin = createSupabaseAdmin();
@@ -31,6 +32,7 @@ export async function POST(req: NextRequest) {
     }
 
     const site_name = typeof body.site_name === "string" ? body.site_name.trim() : null;
+    const line_user_id = typeof body.line_user_id === "string" ? body.line_user_id.trim() : null;
     const context = body.context && typeof body.context === "object" ? body.context : {};
 
     const { data: job, error: jobErr } = await admin
@@ -38,6 +40,7 @@ export async function POST(req: NextRequest) {
       .insert({
         status: "queued",
         site_name,
+        line_user_id,
         context,
         total_images: urls.length,
         done_images: 0,

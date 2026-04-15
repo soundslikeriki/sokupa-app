@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
-import { APP_FORMAL_NAME, APP_HEADER_CREDIT, APP_PRODUCT_NAME } from "@/lib/appMetadata";
+import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import { convertAndResizeForPreview } from "@/lib/resizeImage";
 import { supabase } from "@/lib/supabase";
 type ProcessedImage = {
@@ -25,6 +25,7 @@ export default function HomePageClient() {
   const uploadInputId = useId();
   const siteNameId = useId();
   const [siteName, setSiteName] = useState("");
+  const [lineUserId, setLineUserId] = useState<string | null>(null);
   const [images, setImages] = useState<ProcessedImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -42,6 +43,16 @@ export default function HomePageClient() {
     () => images.filter((img) => img.status === "ready" && img.base64Data),
     [images],
   );
+
+  // LINEログイン情報（通知先）
+  useEffect(() => {
+    try {
+      const lid = localStorage.getItem("sokupa:line_user_id");
+      setLineUserId(lid && lid.trim() ? lid : null);
+    } catch {
+      setLineUserId(null);
+    }
+  }, []);
 
   function mergeParsed(prev: ParsedMemoPayload | null, next: ParsedMemoPayload): ParsedMemoPayload {
     const prevItems = prev?.items ?? [];
@@ -86,6 +97,7 @@ export default function HomePageClient() {
     return { majorManufacturers, knownProductCodes: codes.slice(0, 25) };
   }
 
+  const imageCount = images.length;
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     e.target.value = "";
@@ -95,6 +107,12 @@ export default function HomePageClient() {
       (f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name),
     );
     if (imageFiles.length === 0) return;
+
+    // 画像は最大5枚まで
+    if (imageCount + imageFiles.length > 5) {
+      setError("画像は最大5枚までです。枚数を減らして再度お試しください。");
+      return;
+    }
 
     const newImages: ProcessedImage[] = imageFiles.map((file) => ({
       id: Math.random().toString(36).slice(2) + Date.now().toString(36),
@@ -135,7 +153,7 @@ export default function HomePageClient() {
         }
       })
     );
-  }, []);
+  }, [imageCount]);
 
   const removeFile = useCallback((id: string) => {
     setImages((prev) => prev.filter((img) => img.id !== id));
@@ -182,6 +200,7 @@ export default function HomePageClient() {
         body: JSON.stringify({
           image_urls: uploadedUrls,
           site_name: siteName?.trim() || undefined,
+          line_user_id: lineUserId || undefined,
           context: {
             site_name: siteName?.trim() || undefined,
             major_manufacturers: [],
@@ -327,9 +346,6 @@ export default function HomePageClient() {
       <header className="space-y-2">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 sm:gap-x-3">
           <p className="text-sm font-medium text-muted-foreground shrink-0">{APP_FORMAL_NAME}</p>
-          <span className="text-xs text-muted-foreground/90 opacity-70 min-w-0 max-w-full leading-snug">
-            {APP_HEADER_CREDIT}
-          </span>
         </div>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -377,7 +393,7 @@ export default function HomePageClient() {
             <Upload className="mx-auto mb-4 h-12 w-12 text-muted-foreground" aria-hidden />
             <p className="text-lg">クリックで画像を追加</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              PNG / JPEG / WebP / HEIC ・ 複数枚OK（最大16枚）
+              PNG / JPEG / WebP / HEIC ・ 複数枚OK（最大5枚）
             </p>
             <input
               id={uploadInputId}

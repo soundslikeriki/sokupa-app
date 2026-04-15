@@ -84,11 +84,10 @@ function buildOrderText(result: ParsedMemoPayload, siteName: string | null): str
   return lines.join("\n");
 }
 
-async function sendLineCompletion(siteName: string | null, result?: ParsedMemoPayload) {
+async function sendLineCompletion(lineUserId: string | null, siteName: string | null, result?: ParsedMemoPayload) {
   const lineToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-  const lineUserId = process.env.LINE_USER_ID;
   if (!lineToken || !lineUserId) {
-    console.error("[sendLine] LINE_CHANNEL_ACCESS_TOKEN or LINE_USER_ID is not set");
+    console.error("[sendLine] LINE_CHANNEL_ACCESS_TOKEN or lineUserId is not set");
     return;
   }
 
@@ -145,7 +144,7 @@ export async function processAnalysisJobStep(opts: {
 
   const { data: job, error: jobErr } = await admin
     .from("analysis_jobs")
-    .select("id,status,site_name,context,total_images,done_images")
+    .select("id,status,site_name,line_user_id,context,total_images,done_images")
     .eq("id", jobId)
     .maybeSingle();
   if (jobErr || !job) {
@@ -201,7 +200,11 @@ export async function processAnalysisJobStep(opts: {
       return { status: "failed", error: finErr.message };
     }
 
-    await sendLineCompletion(typeof job.site_name === "string" ? job.site_name : null, resultPayload);
+    await sendLineCompletion(
+      typeof (job as any).line_user_id === "string" ? String((job as any).line_user_id) : null,
+      typeof job.site_name === "string" ? job.site_name : null,
+      resultPayload,
+    );
     return { status: "done" };
   }
 

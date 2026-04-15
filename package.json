@@ -11,7 +11,8 @@
     "lint": "next lint",
     "favicons": "node scripts/generate-favicons.mjs --output public",
     "upload:catalogs": "tsx scripts/upload-catalogs.ts",
-    "sync:catalogs": "tsx scripts/sync-catalogs.ts"
+    "sync:catalogs": "tsx scripts/sync-catalogs.ts",
+    "invite": "tsx src/scripts/generate-invite.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.62",

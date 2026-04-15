@@ -1,4 +1,9 @@
 import HomePageClient from "@/components/HomePageClient";
+import { InviteGate } from "@/components/InviteGate";
 export default function Home() {
-  return <HomePageClient />;
+  return (
+    <InviteGate>
+      <HomePageClient />
+    </InviteGate>
+  );
 }
