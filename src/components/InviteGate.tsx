@@ -182,6 +182,9 @@ export function InviteGate({ children }: Props) {
           <Button type="button" className="w-full h-12 text-base" onClick={() => void submit()} disabled={!canSubmit}>
             {submitting ? "確認中..." : "認証する"}
           </Button>
+          <p className="text-xs text-muted-foreground text-center">
+            認証することで<a href="/terms" className="underline">利用規約</a>に同意したものとみなします
+          </p>
           {error ? <p className="text-sm font-semibold text-destructive">{error}</p> : null}
         </CardContent>
       </Card>

@@ -35,12 +35,59 @@ export async function POST(req: NextRequest) {
     const line_user_id = typeof body.line_user_id === "string" ? body.line_user_id.trim() : null;
     const context = body.context && typeof body.context === "object" ? body.context : {};
 
+    // LINEログイン必須
+    const lineUserId = line_user_id || "";
+    if (!lineUserId) {
+      return NextResponse.json({ error: "LINEログインが必要です" }, { status: 401 });
+    }
+
+    // 無制限ユーザーチェック
+    const { data: unlimitedUser } = await admin
+      .from("unlimited_users")
+      .select("id")
+      .eq("line_user_id", lineUserId)
+      .maybeSingle();
+
+    if (!unlimitedUser) {
+      // 今月の使用回数チェック
+      const yearMonth = new Date().toISOString().slice(0, 7); // "2026-04"
+      const { data: usage } = await admin
+        .from("usage_limits")
+        .select("image_count")
+        .eq("line_user_id", lineUserId)
+        .eq("year_month", yearMonth)
+        .maybeSingle();
+
+      const currentCount = (usage as any)?.image_count ?? 0;
+      const imageCount = urls.length;
+
+      if (currentCount + imageCount > 20) {
+        return NextResponse.json(
+          {
+            error: `今月の利用上限（20枚）に達しました。来月またご利用ください。（現在: ${currentCount}枚使用済み）`,
+          },
+          { status: 429 },
+        );
+      }
+
+      // 使用回数を更新
+      await admin.from("usage_limits").upsert(
+        {
+          line_user_id: lineUserId,
+          year_month: yearMonth,
+          image_count: currentCount + imageCount,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "line_user_id,year_month" },
+      );
+    }
+
     const { data: job, error: jobErr } = await admin
       .from("analysis_jobs")
       .insert({
         status: "queued",
         site_name,
-        line_user_id,
+        line_user_id: lineUserId,
         context,
         total_images: urls.length,
         done_images: 0,
