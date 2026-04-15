@@ -19,7 +19,33 @@ export function InviteGate({ children }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    try {
+    let cancelled = false;
+    const run = async () => {
+      try {
+        // --- 無制限ユーザー判定（招待コード/LINEログインをスキップ） ---
+        // localStorage に line_user_id が既にある場合も常にチェックする
+        let existingLineUserId: string | null = null;
+        try {
+          const lid = localStorage.getItem("sokupa:line_user_id");
+          existingLineUserId = lid && lid.trim() ? lid : null;
+        } catch {
+          existingLineUserId = null;
+        }
+
+        if (existingLineUserId) {
+          const res = await fetch(
+            `/api/auth/check-unlimited?line_user_id=${encodeURIComponent(existingLineUserId)}`,
+            { method: "GET" },
+          );
+          const json = (await res.json().catch(() => ({}))) as { unlimited?: boolean };
+          if (!cancelled && json?.unlimited === true) {
+            setInvited(true);
+            setLineUserId(existingLineUserId);
+            setReady(true);
+            return;
+          }
+        }
+
       // LINEログイン完了後、クエリで戻ってくる（/api/auth/line/callback -> /?line_user_id=...）
       if (typeof window !== "undefined") {
         const sp = new URLSearchParams(window.location.search);
@@ -27,31 +53,54 @@ export function InviteGate({ children }: Props) {
         const qDisplayName = sp.get("display_name");
         if (qLineUserId) {
           localStorage.setItem("sokupa:line_user_id", qLineUserId);
-          setLineUserId(qLineUserId);
+          if (!cancelled) setLineUserId(qLineUserId);
         }
         if (qDisplayName) {
           localStorage.setItem("sokupa:display_name", qDisplayName);
-          setDisplayName(qDisplayName);
+          if (!cancelled) setDisplayName(qDisplayName);
         }
         if (qLineUserId || qDisplayName) {
           // クエリを消す
           window.history.replaceState({}, "", window.location.pathname);
         }
+
+        // クエリで line_user_id が来た場合も無制限チェック
+        if (qLineUserId) {
+          const res = await fetch(
+            `/api/auth/check-unlimited?line_user_id=${encodeURIComponent(qLineUserId)}`,
+            { method: "GET" },
+          );
+          const json = (await res.json().catch(() => ({}))) as { unlimited?: boolean };
+          if (!cancelled && json?.unlimited === true) {
+            setInvited(true);
+            setLineUserId(qLineUserId);
+            setReady(true);
+            return;
+          }
+        }
       }
 
       const v = localStorage.getItem("sokupa:invited");
-      setInvited(v === "true");
+      if (!cancelled) setInvited(v === "true");
       const lid = localStorage.getItem("sokupa:line_user_id");
-      setLineUserId(lid && lid.trim() ? lid : null);
+      if (!cancelled) setLineUserId(lid && lid.trim() ? lid : null);
       const dn = localStorage.getItem("sokupa:display_name");
-      setDisplayName(dn && dn.trim() ? dn : null);
-    } catch {
-      setInvited(false);
-      setLineUserId(null);
-      setDisplayName(null);
-    } finally {
-      setReady(true);
-    }
+      if (!cancelled) setDisplayName(dn && dn.trim() ? dn : null);
+      } catch {
+        if (!cancelled) {
+          setInvited(false);
+          setLineUserId(null);
+          setDisplayName(null);
+        }
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const normalized = useMemo(() => code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8), [code]);
