@@ -15,6 +15,7 @@ export function InviteGate({ children }: Props) {
   const [lineUserId, setLineUserId] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState<string | null>(null);
   const [code, setCode] = useState("");
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -164,10 +165,25 @@ export function InviteGate({ children }: Props) {
     <main className="mx-auto flex min-h-screen max-w-lg items-center px-4 py-10">
       <Card className="w-full">
         <CardHeader>
-          <CardTitle className="text-xl">ソクパへようこそ</CardTitle>
+          <CardTitle className="text-xl text-center">ようこそ！ソクパへ</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">招待コードを入力してください</p>
+          <p className="text-sm text-muted-foreground text-center">招待コードを入力してください</p>
+          <div className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              id="terms"
+              checked={agreedToTerms}
+              onChange={(e) => setAgreedToTerms(e.target.checked)}
+              className="mt-1 h-4 w-4 cursor-pointer"
+            />
+            <label htmlFor="terms" className="text-xs text-muted-foreground leading-relaxed cursor-pointer">
+              <a href="/terms" target="_blank" rel="noopener noreferrer" className="underline font-medium">
+                利用規約
+              </a>
+              を読み、内容に同意します
+            </label>
+          </div>
           <Input
             value={normalized}
             onChange={(e) => setCode(e.target.value)}
@@ -179,12 +195,14 @@ export function InviteGate({ children }: Props) {
             className="h-12 text-center text-lg font-bold tracking-widest"
             maxLength={8}
           />
-          <Button type="button" className="w-full h-12 text-base" onClick={() => void submit()} disabled={!canSubmit}>
+          <Button
+            type="button"
+            className="w-full h-12 text-base"
+            onClick={() => void submit()}
+            disabled={!canSubmit || !agreedToTerms}
+          >
             {submitting ? "確認中..." : "認証する"}
           </Button>
-          <p className="text-xs text-muted-foreground text-center">
-            認証することで<a href="/terms" className="underline">利用規約</a>に同意したものとみなします
-          </p>
           {error ? <p className="text-sm font-semibold text-destructive">{error}</p> : null}
         </CardContent>
       </Card>
