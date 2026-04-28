@@ -4,8 +4,40 @@ import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+// Vercel Edge Runtime対応のシンプルな実装
+// IPアドレスは req.headers.get('x-forwarded-for') で取得
+const rateLimit = new Map<string, { count: number; resetAt: number }>();
+
+function getClientIp(req: NextRequest): string {
+  const forwarded = req.headers.get("x-forwarded-for");
+  const ip = forwarded?.split(",")[0]?.trim();
+  return ip && ip.length > 0 ? ip : "unknown";
+}
+
+function isRateLimited(ip: string, nowMs: number): boolean {
+  const windowMs = 60_000;
+  const limit = 5;
+
+  const entry = rateLimit.get(ip);
+  if (!entry || nowMs >= entry.resetAt) {
+    rateLimit.set(ip, { count: 1, resetAt: nowMs + windowMs });
+    return false;
+  }
+
+  entry.count += 1;
+  if (entry.count > limit) return true;
+
+  rateLimit.set(ip, entry);
+  return false;
+}
+
 export async function POST(req: NextRequest) {
   try {
+    const ip = getClientIp(req);
+    if (isRateLimited(ip, Date.now())) {
+      return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+    }
+
     const body = (await req.json()) as { code?: string };
     const code = typeof body.code === "string" ? body.code.trim().toUpperCase() : "";
     if (!/^[A-Z0-9]{8}$/.test(code)) {
