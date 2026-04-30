@@ -5,6 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
+function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
+  return match ? decodeURIComponent(match[2]) : null;
+}
+
 type Props = {
   children: React.ReactNode;
 };
@@ -27,7 +32,7 @@ export function InviteGate({ children }: Props) {
         // localStorage に line_user_id が既にある場合も常にチェックする
         let existingLineUserId: string | null = null;
         try {
-          const lid = localStorage.getItem("sokupa:line_user_id");
+          const lid = localStorage.getItem("sokupa:line_user_id") || getCookie("sokupa_line_user_id");
           existingLineUserId = lid && lid.trim() ? lid : null;
         } catch {
           existingLineUserId = null;
@@ -81,11 +86,12 @@ export function InviteGate({ children }: Props) {
         }
       }
 
-      const v = localStorage.getItem("sokupa:invited");
-      if (!cancelled) setInvited(v === "true");
-      const lid = localStorage.getItem("sokupa:line_user_id");
+      const invited =
+        localStorage.getItem("sokupa:invited") === "true" || getCookie("sokupa_invited") === "true";
+      if (!cancelled) setInvited(invited);
+      const lid = localStorage.getItem("sokupa:line_user_id") || getCookie("sokupa_line_user_id");
       if (!cancelled) setLineUserId(lid && lid.trim() ? lid : null);
-      const dn = localStorage.getItem("sokupa:display_name");
+      const dn = localStorage.getItem("sokupa:display_name") || getCookie("sokupa_display_name");
       if (!cancelled) setDisplayName(dn && dn.trim() ? dn : null);
       } catch {
         if (!cancelled) {

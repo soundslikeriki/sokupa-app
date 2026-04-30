@@ -68,6 +68,13 @@ export async function POST(req: NextRequest) {
     }
 
     const res = NextResponse.json({ success: true });
+    res.cookies.set("sokupa_invited", "true", {
+      httpOnly: false,
+      sameSite: "lax",
+      secure: true,
+      maxAge: 60 * 60 * 24 * 365, // 1年
+      path: "/",
+    });
     // LINEログインのコールバックで users.invite_code に保存するため短期cookieに保持
     res.cookies.set("sokupa_invite_code", code, {
       httpOnly: true,

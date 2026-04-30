@@ -102,6 +102,20 @@ export async function GET(req: NextRequest) {
     if (profile.displayName) home.searchParams.set("display_name", profile.displayName);
 
     const res = NextResponse.redirect(home.toString(), { status: 302 });
+    res.cookies.set("sokupa_line_user_id", profile.userId, {
+      httpOnly: false,
+      sameSite: "lax",
+      secure: true,
+      maxAge: 60 * 60 * 24 * 365, // 1年
+      path: "/",
+    });
+    res.cookies.set("sokupa_display_name", profile.displayName ?? "", {
+      httpOnly: false,
+      sameSite: "lax",
+      secure: true,
+      maxAge: 60 * 60 * 24 * 365, // 1年
+      path: "/",
+    });
     res.cookies.delete("sokupa_line_state");
     res.cookies.delete("sokupa_invite_code");
     return res;
