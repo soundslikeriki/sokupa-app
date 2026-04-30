@@ -39,6 +39,25 @@ export function InviteGate({ children }: Props) {
     let cancelled = false;
     const run = async () => {
       try {
+        // ログアウト処理
+        if (typeof window !== "undefined") {
+          const sp = new URLSearchParams(window.location.search);
+          if (sp.get("logout") === "1") {
+            // localStorageをクリア
+            localStorage.removeItem("sokupa:invited");
+            localStorage.removeItem("sokupa:line_user_id");
+            localStorage.removeItem("sokupa:display_name");
+            // クエリを消す
+            window.history.replaceState({}, "", "/");
+            // stateをリセット
+            setInvited(false);
+            setLineUserId(null);
+            setDisplayName(null);
+            setReady(true);
+            return;
+          }
+        }
+
         // --- 無制限ユーザー判定（招待コード/LINEログインをスキップ） ---
         // localStorage に line_user_id が既にある場合も常にチェックする
         let existingLineUserId: string | null = null;
