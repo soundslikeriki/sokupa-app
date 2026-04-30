@@ -49,6 +49,32 @@ export function InviteGate({ children }: Props) {
           existingLineUserId = null;
         }
 
+        // 既存の localStorage 値があるのに cookie に無い場合、cookie へ書き戻す
+        // （iOS Safari 等でサーバ Set-Cookie が落ちた以前のセッション分を復元）
+        if (existingLineUserId && !getCookie("sokupa_line_user_id")) {
+          setClientCookie("sokupa_line_user_id", existingLineUserId);
+        }
+        const existingDisplayName = (() => {
+          try {
+            return localStorage.getItem("sokupa:display_name") || getCookie("sokupa_display_name") || "";
+          } catch {
+            return "";
+          }
+        })();
+        if (existingDisplayName && !getCookie("sokupa_display_name")) {
+          setClientCookie("sokupa_display_name", existingDisplayName);
+        }
+        const existingInvited = (() => {
+          try {
+            return localStorage.getItem("sokupa:invited") === "true" || getCookie("sokupa_invited") === "true";
+          } catch {
+            return false;
+          }
+        })();
+        if (existingInvited && getCookie("sokupa_invited") !== "true") {
+          setClientCookie("sokupa_invited", "true");
+        }
+
         if (existingLineUserId) {
           const res = await fetch(
             `/api/auth/check-unlimited?line_user_id=${encodeURIComponent(existingLineUserId)}`,
@@ -103,10 +129,19 @@ export function InviteGate({ children }: Props) {
       const invited =
         localStorage.getItem("sokupa:invited") === "true" || getCookie("sokupa_invited") === "true";
       if (!cancelled) setInvited(invited);
+      if (invited && getCookie("sokupa_invited") !== "true") {
+        setClientCookie("sokupa_invited", "true");
+      }
       const lid = localStorage.getItem("sokupa:line_user_id") || getCookie("sokupa_line_user_id");
       if (!cancelled) setLineUserId(lid && lid.trim() ? lid : null);
+      if (lid && lid.trim() && !getCookie("sokupa_line_user_id")) {
+        setClientCookie("sokupa_line_user_id", lid);
+      }
       const dn = localStorage.getItem("sokupa:display_name") || getCookie("sokupa_display_name");
       if (!cancelled) setDisplayName(dn && dn.trim() ? dn : null);
+      if (dn && dn.trim() && !getCookie("sokupa_display_name")) {
+        setClientCookie("sokupa_display_name", dn);
+      }
       } catch {
         if (!cancelled) {
           setInvited(false);
