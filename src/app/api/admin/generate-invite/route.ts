@@ -4,6 +4,8 @@ import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+export const dynamic = "force-dynamic";
+
 const DEFAULT_ADMIN_LINE_USER_ID = "U24ce93805aa15b7601a5da448fc2d354";
 
 function generateCode(): string {
@@ -50,6 +52,13 @@ export async function POST(req: NextRequest) {
   try {
     const adminLineUserId = (process.env.ADMIN_LINE_USER_ID || DEFAULT_ADMIN_LINE_USER_ID).trim();
     const lineUserId = req.cookies.get("sokupa_line_user_id")?.value || "";
+    console.log("[admin generate-invite] auth-check", {
+      hasAdminEnv: Boolean(process.env.ADMIN_LINE_USER_ID),
+      adminLineUserIdLen: adminLineUserId.length,
+      hasLineUserIdCookie: Boolean(lineUserId),
+      lineUserIdLen: lineUserId.length,
+      authorized: Boolean(lineUserId && lineUserId === adminLineUserId),
+    });
     if (!lineUserId || lineUserId !== adminLineUserId) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }

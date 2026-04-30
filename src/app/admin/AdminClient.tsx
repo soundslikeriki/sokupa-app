@@ -18,6 +18,14 @@ export function AdminClient() {
   const canCopy = useMemo(() => Boolean(result?.inviteMessage), [result]);
 
   useEffect(() => {
+    try {
+      console.log("[admin] client mounted", { cookieLen: document.cookie.length });
+    } catch {
+      console.log("[admin] client mounted (cookie read failed)");
+    }
+  }, []);
+
+  useEffect(() => {
     if (!copied) return;
     const t = window.setTimeout(() => setCopied(false), 2000);
     return () => window.clearTimeout(t);
@@ -29,6 +37,7 @@ export function AdminClient() {
     setCopied(false);
     try {
       const res = await fetch("/api/admin/generate-invite", { method: "POST" });
+      console.log("[admin] generate-invite response", { ok: res.ok, status: res.status });
       const json = (await res.json().catch(() => ({}))) as Partial<Result> & { error?: string };
       if (!res.ok) {
         setError(json?.error || "生成に失敗しました");
