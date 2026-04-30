@@ -67,11 +67,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const isProd = process.env.NODE_ENV === "production";
     const res = NextResponse.json({ success: true });
     res.cookies.set("sokupa_invited", "true", {
       httpOnly: false,
       sameSite: "lax",
-      secure: true,
+      secure: isProd,
       maxAge: 60 * 60 * 24 * 365, // 1年
       path: "/",
     });

@@ -10,6 +10,17 @@ function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[2]) : null;
 }
 
+function setClientCookie(name: string, value: string, maxAgeSec = 60 * 60 * 24 * 365): void {
+  try {
+    const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+    const secure = isHttps ? ";Secure" : "";
+    document.cookie =
+      `${name}=${encodeURIComponent(value)};path=/;max-age=${maxAgeSec};SameSite=Lax${secure}`;
+  } catch {
+    // ignore
+  }
+}
+
 type Props = {
   children: React.ReactNode;
 };
@@ -59,10 +70,13 @@ export function InviteGate({ children }: Props) {
         const qDisplayName = sp.get("display_name");
         if (qLineUserId) {
           localStorage.setItem("sokupa:line_user_id", qLineUserId);
+          // サーバ Set-Cookie が落ちた環境向けにクライアント側でも cookie を書き戻す
+          setClientCookie("sokupa_line_user_id", qLineUserId);
           if (!cancelled) setLineUserId(qLineUserId);
         }
         if (qDisplayName) {
           localStorage.setItem("sokupa:display_name", qDisplayName);
+          setClientCookie("sokupa_display_name", qDisplayName);
           if (!cancelled) setDisplayName(qDisplayName);
         }
         if (qLineUserId || qDisplayName) {
@@ -133,6 +147,8 @@ export function InviteGate({ children }: Props) {
       } catch {
         // ignore
       }
+      // サーバ Set-Cookie が落ちた環境向けにクライアント側でも cookie を書く
+      setClientCookie("sokupa_invited", "true");
       setInvited(true);
     } finally {
       setSubmitting(false);

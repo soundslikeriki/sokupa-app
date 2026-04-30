@@ -51,11 +51,18 @@ ${code}
 export async function POST(req: NextRequest) {
   try {
     const adminLineUserId = (process.env.ADMIN_LINE_USER_ID || DEFAULT_ADMIN_LINE_USER_ID).trim();
-    const lineUserId = req.cookies.get("sokupa_line_user_id")?.value || "";
+    const cookieLineUserId = req.cookies.get("sokupa_line_user_id")?.value || "";
+    // cookie が消えた環境向けに Authorization: Bearer <line_user_id> も受理
+    const authHeader = req.headers.get("authorization") || "";
+    const headerLineUserId = authHeader.toLowerCase().startsWith("bearer ")
+      ? authHeader.slice(7).trim()
+      : "";
+    const lineUserId = cookieLineUserId || headerLineUserId;
     console.log("[admin generate-invite] auth-check", {
       hasAdminEnv: Boolean(process.env.ADMIN_LINE_USER_ID),
       adminLineUserIdLen: adminLineUserId.length,
-      hasLineUserIdCookie: Boolean(lineUserId),
+      hasLineUserIdCookie: Boolean(cookieLineUserId),
+      hasLineUserIdHeader: Boolean(headerLineUserId),
       lineUserIdLen: lineUserId.length,
       authorized: Boolean(lineUserId && lineUserId === adminLineUserId),
     });
