@@ -47,7 +47,6 @@ function getBaseUrlFromHeaders(headers: Headers): string {
 function buildOrderText(result: ParsedMemoPayload, siteName: string | null): string {
   const site = siteName?.trim() || "";
   const lines: string[] = [];
-  lines.push("作成型：計測メモ解析アプリ（ソクパ）");
   lines.push(`現場名：${site || "未入力"}`);
   lines.push(
     `日時：${new Date().toLocaleString("ja-JP", {
