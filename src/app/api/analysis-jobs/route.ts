@@ -16,6 +16,8 @@ type CreateJobBody = {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as CreateJobBody;
+    const line_user_id =
+      (body as any)?.line_user_id || req.cookies.get("sokupa_line_user_id")?.value || "";
     const urls = Array.isArray(body.image_urls)
       ? body.image_urls.map((u) => String(u).trim()).filter(Boolean)
       : [];
@@ -32,11 +34,10 @@ export async function POST(req: NextRequest) {
     }
 
     const site_name = typeof body.site_name === "string" ? body.site_name.trim() : null;
-    const line_user_id = typeof body.line_user_id === "string" ? body.line_user_id.trim() : null;
     const context = body.context && typeof body.context === "object" ? body.context : {};
 
     // LINEログイン必須
-    const lineUserId = line_user_id || "";
+    const lineUserId = typeof line_user_id === "string" ? line_user_id.trim() : "";
     if (!lineUserId) {
       return NextResponse.json({ error: "LINEログインが必要です" }, { status: 401 });
     }

@@ -21,6 +21,12 @@ type ProcessedImage = {
 import { cn } from "@/lib/utils";
 import type { ParsedMemoPayload } from "@/types";
 
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
+  return match ? decodeURIComponent(match[2]) : null;
+}
+
 export default function HomePageClient() {
   const uploadInputId = useId();
   const siteNameId = useId();
@@ -49,7 +55,7 @@ export default function HomePageClient() {
   // LINEログイン情報（通知先）
   useEffect(() => {
     try {
-      const lid = localStorage.getItem("sokupa:line_user_id");
+      const lid = localStorage.getItem("sokupa:line_user_id") || getCookie("sokupa_line_user_id") || "";
       setLineUserId(lid && lid.trim() ? lid : null);
     } catch {
       setLineUserId(null);
