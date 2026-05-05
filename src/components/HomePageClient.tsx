@@ -71,7 +71,6 @@ export default function HomePageClient() {
   const buildOrderTextForCopy = useCallback((): string => {
     const lines: string[] = [];
     const site = siteName?.trim() || "";
-    lines.push("作成型：計測メモ解析アプリ（ソクパ）");
     lines.push(`現場名：${site || "未入力"}`);
     lines.push(
       `日時：${new Date().toLocaleString("ja-JP", {

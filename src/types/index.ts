@@ -25,6 +25,8 @@ export type MemoProductItem = {
   entries: MemoEntry[];
   total_m: number;
   order_quantity: number;
+  /** 品番ごとのロス率（%）。未指定時は既定値を使う */
+  loss_rate_percent?: number;
   /** product_master 等で補完した規格（未登録時は API で「規格情報なし」） */
   spec?: string;
   repeat_info?: RepeatInfo;

@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, RefreshCw, Undo2, Globe } from "lucide-react";
+import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, RefreshCw, Undo2, Globe, Plus, Trash2 } from "lucide-react";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import { buildOrderRequestText } from "@/lib/order-text";
 import { dedupeSlashDelimited } from "@/lib/dedupeSlashList";
@@ -57,10 +57,53 @@ type ItemOverride = {
   entryRepeatActive?: Record<number, boolean>;
 };
 
+type NewEntryInput = {
+  length: string;
+  quantity: string;
+};
+
+function toFiniteNumber(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export function OrderList({ items, notes, siteName = "", needs_review_any, onItemsChange }: OrderListProps) {
-  const [lossRate, setLossRate] = useState(DEFAULT_LOSS_RATE_PERCENT);
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
+  const [lossRates, setLossRates] = useState<Record<string, number | "">>({});
+  const [newEntryInputs, setNewEntryInputs] = useState<Record<string, NewEntryInput>>({});
+  const lastSyncedItemsRef = useRef("");
+
+  const getLossRateForItem = (item: MemoProductItem): number => {
+    const local = lossRates[item.product_code];
+    if (typeof local === "number" && Number.isFinite(local) && local >= 0) return local;
+    if (typeof item.loss_rate_percent === "number" && Number.isFinite(item.loss_rate_percent) && item.loss_rate_percent >= 0) {
+      return item.loss_rate_percent;
+    }
+    return DEFAULT_LOSS_RATE_PERCENT;
+  };
+
+  const recalcItem = (item: MemoProductItem, lossRatePercent = getLossRateForItem(item)): MemoProductItem => {
+    const entries = (item.entries ?? []).map((entry) => {
+      const length_m = toFiniteNumber(entry.length_m);
+      const quantity = toFiniteNumber(entry.quantity);
+      return {
+        ...entry,
+        length_m,
+        quantity,
+        subtotal_m: Number((length_m * quantity).toFixed(2)),
+      };
+    });
+    const total_m = Number(entries.reduce((sum, entry) => sum + entry.subtotal_m, 0).toFixed(2));
+
+    return {
+      ...item,
+      entries,
+      total_m,
+      order_quantity: Math.ceil(total_m * (1 + lossRatePercent / 100)),
+      loss_rate_percent: lossRatePercent,
+    };
+  };
 
   const beginEditCode = (code: string) => {
     setEditingCode((prev) => ({
@@ -128,6 +171,97 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
         }
       };
     });
+  };
+
+  const handleLossRateChange = (productCode: string, value: string) => {
+    const nextLoss = value === "" ? "" : Math.max(0, Number(value));
+    setLossRates((prev) => ({
+      ...prev,
+      [productCode]: nextLoss,
+    }));
+  };
+
+  const handleNewEntryChange = (productCode: string, field: keyof NewEntryInput, value: string) => {
+    setNewEntryInputs((prev) => ({
+      ...prev,
+      [productCode]: {
+        length: prev[productCode]?.length ?? "",
+        quantity: prev[productCode]?.quantity ?? "",
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleAddEntry = (productCode: string) => {
+    if (!onItemsChange) return;
+
+    const draft = newEntryInputs[productCode] ?? { length: "", quantity: "" };
+    const length = Number(draft.length);
+    const quantity = Number(draft.quantity);
+    if (!Number.isFinite(length) || length <= 0 || !Number.isFinite(quantity) || quantity <= 0) return;
+
+    const updatedItems = items.map((item) => {
+      if (item.product_code !== productCode) return item;
+
+      const nextEntry = {
+        original_formula: `${length} x ${quantity}`,
+        length_m: length,
+        quantity,
+        subtotal_m: Number((length * quantity).toFixed(2)),
+      };
+
+      return recalcItem({
+        ...item,
+        entries: [...(item.entries ?? []), nextEntry],
+      });
+    });
+
+    setNewEntryInputs((prev) => ({
+      ...prev,
+      [productCode]: { length: "", quantity: "" },
+    }));
+    onItemsChange(updatedItems);
+  };
+
+  const handleDeleteEntry = (productCode: string, entryIndex: number) => {
+    if (!onItemsChange) return;
+
+    const updatedItems = items.map((item) => {
+      if (item.product_code !== productCode) return item;
+      return recalcItem({
+        ...item,
+        entries: (item.entries ?? []).filter((_, idx) => idx !== entryIndex),
+      });
+    });
+
+    setOverrides((prev) => {
+      const current = prev[productCode];
+      if (!current) return prev;
+
+      const shiftRecord = <T,>(record: Record<number, T> | undefined): Record<number, T> | undefined => {
+        if (!record) return undefined;
+        const next: Record<number, T> = {};
+        Object.entries(record).forEach(([rawIndex, value]) => {
+          const idx = Number(rawIndex);
+          if (!Number.isInteger(idx) || idx === entryIndex) return;
+          next[idx > entryIndex ? idx - 1 : idx] = value;
+        });
+        return next;
+      };
+
+      return {
+        ...prev,
+        [productCode]: {
+          ...current,
+          entryQtys: shiftRecord(current.entryQtys),
+          entryLengths: shiftRecord(current.entryLengths),
+          entryEditMode: shiftRecord(current.entryEditMode),
+          entryRepeatActive: shiftRecord(current.entryRepeatActive),
+        },
+      };
+    });
+
+    onItemsChange(updatedItems);
   };
 
   const handleToggleEntryRepeat = (productCode: string, entryIndex: number) => {
@@ -213,6 +347,14 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
       const eqtys = ovr.entryQtys || {};
       const elengths = ovr.entryLengths || {};
       const eRepeats = ovr.entryRepeatActive || {};
+      const lossRate = (() => {
+        const local = lossRates[item.product_code];
+        if (typeof local === "number" && Number.isFinite(local) && local >= 0) return local;
+        if (typeof item.loss_rate_percent === "number" && Number.isFinite(item.loss_rate_percent) && item.loss_rate_percent >= 0) {
+          return item.loss_rate_percent;
+        }
+        return DEFAULT_LOSS_RATE_PERCENT;
+      })();
       
       const r = typeof ovr.repeatCm === "number" ? ovr.repeatCm : null;
       const h = typeof ovr.heightM === "number" ? ovr.heightM : null;
@@ -287,19 +429,52 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
         ...item,
         total_m: Number(calcTotalM.toFixed(2)),
         order_quantity,
+        loss_rate_percent: lossRate,
         override_active,
         rActive: masterRepeatStatus,
         total_quantity: calcTotalQty,
         derivedEntries
       };
     });
-  }, [items, overrides, lossRate]);
+  }, [items, overrides, lossRates]);
 
   const groups = useMemo(() => groupByManufacturer(derivedItems), [derivedItems]);
 
+  useEffect(() => {
+    if (!onItemsChange || derivedItems.length === 0) return;
+
+    const canonicalItems: MemoProductItem[] = derivedItems.map((item: any) => ({
+      ...item,
+      entries: (item.derivedEntries ?? []).map((entry: any) => ({
+        original_formula: `${entry.derived_length} x ${entry.derived_quantity}`,
+        length_m: toFiniteNumber(entry.derived_length),
+        quantity: toFiniteNumber(entry.derived_quantity),
+        subtotal_m: toFiniteNumber(entry.derived_subtotal),
+      })),
+    }));
+
+    const signature = JSON.stringify(
+      canonicalItems.map((item) => ({
+        product_code: item.product_code,
+        total_m: item.total_m,
+        order_quantity: item.order_quantity,
+        loss_rate_percent: item.loss_rate_percent,
+        entries: item.entries?.map((entry) => ({
+          length_m: entry.length_m,
+          quantity: entry.quantity,
+          subtotal_m: entry.subtotal_m,
+        })),
+      })),
+    );
+
+    if (signature === lastSyncedItemsRef.current) return;
+    lastSyncedItemsRef.current = signature;
+    onItemsChange(canonicalItems);
+  }, [derivedItems, onItemsChange]);
+
   const copyOrderText = async () => {
     if (!derivedItems.length) return;
-    const text = buildOrderRequestText(derivedItems, siteName, lossRate);
+    const text = buildOrderRequestText(derivedItems, siteName, DEFAULT_LOSS_RATE_PERCENT);
     try {
       await navigator.clipboard.writeText(text);
       alert("発注用テキストをコピーしました！");
@@ -317,8 +492,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
           {APP_FORMAL_NAME}（{APP_PRODUCT_NAME}）— 発注・見積プレビュー
         </p>
         <p className="text-xs text-neutral-600">
-          発注数量は実測に{DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。（※ロス率変更可能）印刷時のロス率:{" "}
-          {lossRate}%
+          発注数量は品番ごとのロス率を加えて切り上げています。
         </p>
       </div>
       <Card className="border-none shadow-xl bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-transparent backdrop-blur-xl ring-1 ring-inset ring-indigo-500/20">
@@ -337,19 +511,15 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                 </CardDescription>
               </div>
             </div>
-            
-            <div className="flex w-full shrink-0 items-center justify-end gap-2 rounded-xl border border-indigo-500/10 bg-white/60 p-1.5 shadow-sm dark:bg-black/60 sm:w-auto">
-              <span className="text-xs font-bold opacity-70 sm:text-sm">ロス率</span>
-              <Button type="button" variant="outline" size="icon" className="h-8 w-8 rounded-lg" onClick={() => setLossRate(Math.max(0, lossRate - 1))}>-</Button>
-              <div className="w-10 text-center font-black tabular-nums">{lossRate}%</div>
-              <Button type="button" variant="outline" size="icon" className="h-8 w-8 rounded-lg" onClick={() => setLossRate(lossRate + 1)}>+</Button>
-            </div>
+            <Badge variant="secondary" className="rounded-lg bg-white/70 px-3 py-2 text-xs font-bold shadow-sm dark:bg-black/60 sm:text-sm">
+              初期ロス {DEFAULT_LOSS_RATE_PERCENT}%
+            </Badge>
           </div>
         </CardHeader>
         <CardContent className="space-y-4 px-3 pb-4 pt-0 sm:space-y-5 sm:px-6 sm:pb-6">
           <p className="max-w-3xl text-xs leading-relaxed text-indigo-900/85 dark:text-indigo-100/85 sm:text-sm">
-            発注数量は実測に{DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。
-            <span className="text-[11px] text-muted-foreground sm:text-xs">（※ロス率変更可能）</span>
+            発注数量は品番ごとのロス率を加えて切り上げています。
+            <span className="text-[11px] text-muted-foreground sm:text-xs">（初期値 {DEFAULT_LOSS_RATE_PERCENT}%）</span>
           </p>
           {needs_review_any && (
             <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 shadow-inner sm:gap-3 sm:p-4">
@@ -452,12 +622,26 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                         </Badge>
                       )}
                     </div>
-                    <div className="flex shrink-0 items-baseline gap-2 self-start rounded-xl border border-black/5 bg-black/5 px-3 py-2 dark:bg-white/5 sm:self-auto sm:px-4">
-                      <span className="text-[10px] font-medium opacity-60 sm:text-xs">発注数量</span>
-                      <span className="text-xl font-black tabular-nums leading-none text-indigo-600 dark:text-indigo-400 sm:text-2xl">
-                        {product.order_quantity}
-                      </span>
-                      <span className="text-sm font-semibold opacity-60">m</span>
+                    <div className="flex shrink-0 flex-wrap items-center gap-2 self-start sm:self-auto">
+                      <label className="flex items-center gap-2 rounded-xl border border-black/5 bg-black/5 px-3 py-2 dark:bg-white/5">
+                        <span className="text-[10px] font-medium opacity-60 sm:text-xs">ロス率</span>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          className="h-8 w-16 bg-white px-2 text-right text-sm font-bold tabular-nums dark:bg-black"
+                          value={lossRates[product.product_code] ?? product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}
+                          onChange={(e) => handleLossRateChange(product.product_code, e.target.value)}
+                        />
+                        <span className="text-xs font-semibold opacity-60">%</span>
+                      </label>
+                      <div className="flex items-baseline gap-2 rounded-xl border border-black/5 bg-black/5 px-3 py-2 dark:bg-white/5 sm:px-4">
+                        <span className="text-[10px] font-medium opacity-60 sm:text-xs">発注数量</span>
+                        <span className="text-xl font-black tabular-nums leading-none text-indigo-600 dark:text-indigo-400 sm:text-2xl">
+                          {product.order_quantity}
+                        </span>
+                        <span className="text-sm font-semibold opacity-60">m</span>
+                      </div>
                     </div>
                   </div>
 
@@ -663,14 +847,61 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                                   <span className="w-[3.25rem] shrink-0 text-right text-xs font-bold tabular-nums leading-none text-indigo-600 dark:text-indigo-400 sm:w-16 sm:text-base">
                                     {e.derived_subtotal}m
                                   </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteEntry(product.product_code, eidx)}
+                                    className="ml-1 shrink-0 rounded-md p-1.5 text-rose-500/80 transition-colors hover:bg-rose-500/10 hover:text-rose-600"
+                                    title="この数式を削除"
+                                    aria-label="この数式を削除"
+                                  >
+                                    <Trash2 className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                                  </button>
                                 </div>
                               </div>
                            </div>
                          );
                        })}
                     </div>
+                    <div className="mt-3 rounded-lg border border-dashed border-indigo-300/70 bg-white/50 p-2 dark:border-indigo-700/70 dark:bg-black/30 sm:p-3">
+                      <div className="flex flex-wrap items-end gap-2">
+                        <div className="min-w-[5.5rem] flex-1">
+                          <label className="mb-1 block text-[10px] font-bold opacity-60">長さ (m)</label>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="2.7"
+                            className="h-9 bg-white text-sm font-bold tabular-nums dark:bg-black"
+                            value={newEntryInputs[product.product_code]?.length ?? ""}
+                            onChange={(e) => handleNewEntryChange(product.product_code, "length", e.target.value)}
+                          />
+                        </div>
+                        <span className="pb-2 text-sm font-bold text-muted-foreground">×</span>
+                        <div className="min-w-[4.5rem] flex-1">
+                          <label className="mb-1 block text-[10px] font-bold opacity-60">枚数</label>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="1"
+                            placeholder="1"
+                            className="h-9 bg-white text-sm font-bold tabular-nums dark:bg-black"
+                            value={newEntryInputs[product.product_code]?.quantity ?? ""}
+                            onChange={(e) => handleNewEntryChange(product.product_code, "quantity", e.target.value)}
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-9 shrink-0 gap-1.5 rounded-lg border-indigo-300 bg-white px-3 text-xs font-bold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:bg-black dark:text-indigo-200 dark:hover:bg-indigo-950"
+                          onClick={() => handleAddEntry(product.product_code)}
+                        >
+                          <Plus className="h-4 w-4" />
+                          + 数式を追加
+                        </Button>
+                      </div>
+                    </div>
                     <div className="flex justify-between items-center mt-3 pt-3 border-t border-black/10 dark:border-white/10 px-2">
-                       <span className="text-xs font-bold opacity-60">全体ロス {lossRate}%</span>
+                       <span className="text-xs font-bold opacity-60">ロス {product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}%</span>
                        <span className="text-xs font-bold tabular-nums">
                          <span className="opacity-60 mr-1">計測合計:</span>
                          <span className={product.override_active ? "text-indigo-600 dark:text-indigo-400" : "opacity-80"}>{product.total_m}m</span>
