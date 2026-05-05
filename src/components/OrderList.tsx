@@ -72,6 +72,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
   const [lossRates, setLossRates] = useState<Record<string, number | "">>({});
   const [newEntryInputs, setNewEntryInputs] = useState<Record<string, NewEntryInput>>({});
+  const newEntryInputsRef = useRef<Record<string, NewEntryInput>>({});
   const lastSyncedItemsRef = useRef("");
 
   const getLossRateForItem = (item: MemoProductItem): number => {
@@ -104,6 +105,20 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
       loss_rate_percent: lossRatePercent,
     };
   };
+
+  const canonicalizeDerivedItem = (item: any): MemoProductItem => ({
+    ...item,
+    entries: (item.derivedEntries ?? item.entries ?? []).map((entry: any) => {
+      const length_m = toFiniteNumber(entry.derived_length ?? entry.length_m);
+      const quantity = toFiniteNumber(entry.derived_quantity ?? entry.quantity);
+      return {
+        original_formula: `${length_m} x ${quantity}`,
+        length_m,
+        quantity,
+        subtotal_m: toFiniteNumber(entry.derived_subtotal ?? entry.subtotal_m, Number((length_m * quantity).toFixed(2))),
+      };
+    }),
+  });
 
   const beginEditCode = (code: string) => {
     setEditingCode((prev) => ({
@@ -182,25 +197,28 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   };
 
   const handleNewEntryChange = (productCode: string, field: keyof NewEntryInput, value: string) => {
+    const prevDraft = newEntryInputsRef.current[productCode] ?? { length: "", quantity: "" };
+    const nextDraft = { ...prevDraft, [field]: value };
+    newEntryInputsRef.current = {
+      ...newEntryInputsRef.current,
+      [productCode]: nextDraft,
+    };
     setNewEntryInputs((prev) => ({
       ...prev,
-      [productCode]: {
-        length: prev[productCode]?.length ?? "",
-        quantity: prev[productCode]?.quantity ?? "",
-        [field]: value,
-      },
+      [productCode]: nextDraft,
     }));
   };
 
   const handleAddEntry = (productCode: string) => {
     if (!onItemsChange) return;
 
-    const draft = newEntryInputs[productCode] ?? { length: "", quantity: "" };
-    const length = Number(draft.length);
-    const quantity = Number(draft.quantity);
+    const draft = newEntryInputsRef.current[productCode] ?? newEntryInputs[productCode] ?? { length: "", quantity: "" };
+    const length = Number(String(draft.length).trim());
+    const quantity = Number(String(draft.quantity).trim());
     if (!Number.isFinite(length) || length <= 0 || !Number.isFinite(quantity) || quantity <= 0) return;
 
-    const updatedItems = items.map((item) => {
+    const sourceItems = derivedItems.length > 0 ? derivedItems.map(canonicalizeDerivedItem) : items;
+    const updatedItems = sourceItems.map((item) => {
       if (item.product_code !== productCode) return item;
 
       const nextEntry = {
@@ -216,6 +234,10 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
       });
     });
 
+    newEntryInputsRef.current = {
+      ...newEntryInputsRef.current,
+      [productCode]: { length: "", quantity: "" },
+    };
     setNewEntryInputs((prev) => ({
       ...prev,
       [productCode]: { length: "", quantity: "" },
@@ -226,7 +248,8 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   const handleDeleteEntry = (productCode: string, entryIndex: number) => {
     if (!onItemsChange) return;
 
-    const updatedItems = items.map((item) => {
+    const sourceItems = derivedItems.length > 0 ? derivedItems.map(canonicalizeDerivedItem) : items;
+    const updatedItems = sourceItems.map((item) => {
       if (item.product_code !== productCode) return item;
       return recalcItem({
         ...item,
@@ -443,15 +466,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   useEffect(() => {
     if (!onItemsChange || derivedItems.length === 0) return;
 
-    const canonicalItems: MemoProductItem[] = derivedItems.map((item: any) => ({
-      ...item,
-      entries: (item.derivedEntries ?? []).map((entry: any) => ({
-        original_formula: `${entry.derived_length} x ${entry.derived_quantity}`,
-        length_m: toFiniteNumber(entry.derived_length),
-        quantity: toFiniteNumber(entry.derived_quantity),
-        subtotal_m: toFiniteNumber(entry.derived_subtotal),
-      })),
-    }));
+    const canonicalItems: MemoProductItem[] = derivedItems.map(canonicalizeDerivedItem);
 
     const signature = JSON.stringify(
       canonicalItems.map((item) => ({
@@ -896,7 +911,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                           onClick={() => handleAddEntry(product.product_code)}
                         >
                           <Plus className="h-4 w-4" />
-                          + 数式を追加
+                          幅数を追加
                         </Button>
                       </div>
                     </div>
