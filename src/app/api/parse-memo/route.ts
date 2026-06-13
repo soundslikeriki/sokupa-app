@@ -21,7 +21,7 @@ const SYSTEM_PROMPT = `あなたは内装職人の優秀な事務員です。
 {
   "items": [
     {
-      "product_code": "品番（例: VS2067）",
+      "product_code": "品番（例: VS2067）または項目名（例: 収納）",
       "entries": [
         {
           "original_formula": "3.20 x 6",
@@ -37,6 +37,12 @@ const SYSTEM_PROMPT = `あなたは内装職人の優秀な事務員です。
 }
 
 - 同じ品番は1つにまとめる
+- メモに品番（例: TWS8266、VS2067 などの英数字コード）がない場合でも、数式（例: 2.70×60、2.70×3）があれば必ず解析対象にする
+- 品番の代わりに項目名（例: 収納、アクセント、天井、腰壁、壁、玄関、LDK、洋室）が書かれている場合は、その項目名を product_code に記載する
+- 項目名も品番もない数式だけの行は product_code を「未指定」にして数量を計算する
+- 例: 「収納 2.70×3」 は product_code: "収納", total_m: 8.1
+- 例: 「アクセント 2.70×5」 は product_code: "アクセント", total_m: 13.5
+- 例: 「2.70×3」 は product_code: "未指定", total_m: 8.1
 - 計算式は正確に数値化
 - 掛け算と足し算が混在する式を省略して解釈しないこと。特に「2.70×60+5+5+84」のように、長さ×数量のあとに足し算が続く場合は、足し算部分も同じ長さに掛ける数量として扱う。例: 2.70×60+5+5+84 は 2.70×(60+5+5+84) = 2.70×154 = 415.8m。
 - 「A×B+C+D」「A x B + C + D」「A*B+C」の形は、CやDが別の長さ表記ではなく数量の追記に見える場合、必ず A×(B+C+D) として quantity に合算値、subtotal_m に合計メートルを出すこと。
@@ -191,13 +197,17 @@ type ProductMasterRow = {
   notes: string | null;
 };
 
+function isLikelyWallpaperProductCode(value: string): boolean {
+  return /^[A-Z]{2,4}\s*[\-]?\s*\d{3,5}$/i.test(value.trim());
+}
+
 async function enrichWithProductMaster(items: any[]) {
   return await Promise.all(
     items.map(async (item) => {
       const rawCode = String(item.product_code || "").trim().toUpperCase();
       const productCode = rawCode.replace(/[\s\-]+/g, "");
 
-      if (!productCode) {
+      if (!productCode || !isLikelyWallpaperProductCode(productCode)) {
         return item;
       }
 
@@ -315,7 +325,7 @@ async function enrichWithProductMaster(items: any[]) {
         const resolvedMfg = item.manufacturer || "不明";
         const resolvedSpec = item.spec || "規格情報なし";
         const hasSomeInfo = resolvedMfg !== "不明" || resolvedSpec !== "規格情報なし";
-        const isWallpaperCode = /^[A-Z]{2,3}\s*[\-]?\s*\d{3,5}$/i.test(productCode);
+        const isWallpaperCode = isLikelyWallpaperProductCode(productCode);
         
         if (hasSomeInfo || isWallpaperCode) {
           console.log(`[🔍 ネット引用 (補正/未達)] 品番: ${productCode}`);
@@ -339,10 +349,10 @@ async function enrichWithProductMaster(items: any[]) {
 
 function finalizeClientItem(raw: unknown): MemoProductItem | null {
   const r = raw as Record<string, unknown>;
-  const product_code = String(r.product_code ?? "").trim();
-  if (!product_code) return null;
+  const product_code = String(r.product_code ?? "").trim() || "未指定";
 
   const entries = (Array.isArray(r.entries) ? r.entries : []).map(parseEntry);
+  if (entries.length === 0) return null;
   const totalFromEntries = entries.reduce((sum, e) => sum + e.subtotal_m, 0);
   const total_m = Number.isFinite(Number(r.total_m)) && Number(r.total_m) > 0 ? Number(r.total_m) : totalFromEntries;
   const order_quantity = calculateFinalQuantity(total_m);
@@ -524,7 +534,7 @@ export async function POST(request: NextRequest) {
       rawItems.map(async (raw) => {
         const item = raw as Record<string, unknown>;
         const code = String(item.product_code ?? "").trim();
-        if (!code) {
+        if (!code || !isLikelyWallpaperProductCode(code)) {
           return item;
         }
         const aug = await augmentProductWithCatalogSearch(genAI, admin, code);

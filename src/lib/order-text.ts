@@ -1,12 +1,10 @@
-import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "./appMetadata";
-
 export function buildOrderRequestText(items: any[], siteName: string, lossRatePercent: number): string {
   const now = new Date();
   const dateStr = now.toLocaleDateString("ja-JP", {
     year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
   });
 
-  let text = `作成型：${APP_FORMAL_NAME}（${APP_PRODUCT_NAME}）\n`;
+  let text = "";
   text += `現場名：${siteName.trim() || "未入力"}\n`;
   text += `日時：${dateStr}\n\n`;
   text += `【発注リスト】\n`;

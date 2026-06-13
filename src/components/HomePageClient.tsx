@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { Loader2, Upload, X } from "lucide-react";
 
 import { OrderList } from "@/components/OrderList";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
@@ -32,8 +32,6 @@ export default function HomePageClient() {
   const siteNameId = useId();
   const [siteName, setSiteName] = useState("");
   const [lineUserId, setLineUserId] = useState<string | null>(null);
-  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
-  const copyTimerRef = useRef<number | null>(null);
   const [images, setImages] = useState<ProcessedImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
@@ -61,68 +59,6 @@ export default function HomePageClient() {
       setLineUserId(null);
     }
   }, []);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
-    };
-  }, []);
-
-  const buildOrderTextForCopy = useCallback((): string => {
-    const lines: string[] = [];
-    const site = siteName?.trim() || "";
-    lines.push(`現場名：${site || "未入力"}`);
-    lines.push(
-      `日時：${new Date().toLocaleString("ja-JP", {
-        timeZone: "Asia/Tokyo",
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      })}`,
-    );
-    lines.push("");
-    lines.push("【発注リスト】");
-
-    const items = Array.isArray(parsed?.items) ? parsed.items : [];
-    if (items.length === 0) {
-      lines.push("（品番なし）");
-    } else {
-      for (const item of items) {
-        const code = String((item as any)?.product_code ?? "").trim() || "不明";
-        const orderQty = Number((item as any)?.order_quantity);
-        const totalM = Number((item as any)?.total_m);
-        const qty =
-          Number.isFinite(orderQty) && orderQty > 0
-            ? `${orderQty}m`
-            : Number.isFinite(totalM) && totalM > 0
-              ? `${totalM}m`
-              : "数量不明";
-        lines.push(`・品番：${code} / 数量：${qty}`);
-      }
-    }
-
-    return lines.join("\n");
-  }, [parsed?.items, siteName]);
-
-  const handleCopyOrderText = useCallback(async () => {
-    const text = buildOrderTextForCopy();
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopyState("copied");
-      if (copyTimerRef.current) window.clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = window.setTimeout(() => setCopyState("idle"), 2000);
-    } catch (e) {
-      console.error("クリップボードコピー失敗", e);
-      try {
-        alert("コピーに失敗しました（クリップボードの権限をご確認ください）");
-      } catch {
-        // ignore
-      }
-    }
-  }, [buildOrderTextForCopy]);
 
   function mergeParsed(prev: ParsedMemoPayload | null, next: ParsedMemoPayload): ParsedMemoPayload {
     const prevItems = prev?.items ?? [];
@@ -577,20 +513,6 @@ export default function HomePageClient() {
               ) : null}
             </CardDescription>
           </CardHeader>
-        </Card>
-      ) : null}
-
-      {parsed?.items?.length ? (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">発注テキスト</CardTitle>
-            <CardDescription>LINE通知と同じ形式でコピーできます。</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button type="button" className="w-full" onClick={() => void handleCopyOrderText()}>
-              {copyState === "copied" ? "✅ コピーしました！" : "📋 発注テキストをコピー"}
-            </Button>
-          </CardContent>
         </Card>
       ) : null}
 
