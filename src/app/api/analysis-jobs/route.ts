@@ -111,8 +111,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: imgErr.message }, { status: 500 });
     }
 
-    console.log("[analysis-job] created", { job_id: job.id, images: urls.length });
-
     // バックグラウンドで処理（アプリを離れても継続）
     waitUntil((async () => {
       const maxSteps = urls.length + 3;
@@ -122,7 +120,6 @@ export async function POST(req: NextRequest) {
           jobId: job.id,
           headers: req.headers,
         });
-        console.log("[analysis-job] bg step", { job_id: job.id, i, status: step.status });
         if (step.status === "done" || step.status === "failed") break;
       }
     })());
@@ -133,4 +130,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
-

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { buildOrderRequestText } from "@/lib/order-text";
 
 type ParsedMemoPayload = {
   items: any[];
@@ -44,45 +45,6 @@ function getBaseUrlFromHeaders(headers: Headers): string {
   return `${proto}://${host}`;
 }
 
-function buildOrderText(result: ParsedMemoPayload, siteName: string | null): string {
-  const site = siteName?.trim() || "";
-  const lines: string[] = [];
-  lines.push(`現場名：${site || "未入力"}`);
-  lines.push(
-    `日時：${new Date().toLocaleString("ja-JP", {
-      timeZone: "Asia/Tokyo",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    })}`,
-  );
-  lines.push("");
-  lines.push("【発注リスト】");
-
-  const items = Array.isArray(result?.items) ? result.items : [];
-  if (items.length === 0) {
-    lines.push("（品番なし）");
-  } else {
-    for (const item of items) {
-      const code = String(item?.product_code ?? "").trim() || "不明";
-      const orderQty = Number(item?.order_quantity);
-      const totalM = Number(item?.total_m);
-      const qtyStr =
-        Number.isFinite(orderQty) && orderQty > 0
-          ? `${orderQty}m`
-          : Number.isFinite(totalM) && totalM > 0
-            ? `${totalM}m`
-            : "数量不明";
-      lines.push(`・品番：${code} / 数量：${qtyStr}`);
-    }
-  }
-
-  return lines.join("\n");
-}
-
 async function sendLineCompletion(lineUserId: string | null, siteName: string | null, result?: ParsedMemoPayload) {
   const lineToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!lineToken || !lineUserId) {
@@ -114,7 +76,7 @@ async function sendLineCompletion(lineUserId: string | null, siteName: string | 
 
   // 2通目：発注テキスト
   if (result && Array.isArray(result.items) && result.items.length > 0) {
-    const text = buildOrderText(result, siteName);
+    const text = buildOrderRequestText(result.items, siteName);
     await fetch("https://api.line.me/v2/bot/message/push", {
       method: "POST",
       headers: {
@@ -169,7 +131,6 @@ export async function processAnalysisJobStep(opts: {
   }
 
   if (!img) {
-    console.log("[analysis-job] finalize", { jobId });
     const { data: rows, error: rowsErr } = await admin
       .from("analysis_job_images")
       .select("idx,parsed,status")
@@ -207,7 +168,6 @@ export async function processAnalysisJobStep(opts: {
     return { status: "done" };
   }
 
-  console.log("[analysis-job] start image", { jobId, imageId: img.id, idx: img.idx });
   await admin.from("analysis_jobs").update({ status: "running", updated_at: new Date().toISOString() }).eq("id", jobId);
   await admin
     .from("analysis_job_images")

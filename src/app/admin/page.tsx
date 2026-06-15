@@ -9,14 +9,6 @@ export default function AdminPage() {
   const adminLineUserId = (process.env.ADMIN_LINE_USER_ID || DEFAULT_ADMIN_LINE_USER_ID).trim();
   const lineUserId = cookies().get("sokupa_line_user_id")?.value || "";
 
-  console.log("[admin] auth-check", {
-    hasAdminEnv: Boolean(process.env.ADMIN_LINE_USER_ID),
-    adminLineUserIdLen: adminLineUserId.length,
-    hasLineUserIdCookie: Boolean(lineUserId),
-    lineUserIdLen: lineUserId.length,
-    authorized: Boolean(lineUserId && lineUserId === adminLineUserId),
-  });
-
   // Cookie が残っていて、かつ admin でない場合のみ 403 を出す。
   // Cookie が空のケースは LINE 認証直後やモバイル環境で Set-Cookie が落ちている
   // 可能性があるため、AdminClient 側で localStorage の line_user_id を
@@ -34,4 +26,3 @@ export default function AdminPage() {
 
   return <AdminClient />;
 }
-

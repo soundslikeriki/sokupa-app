@@ -13,6 +13,7 @@ import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import type { MemoProductItem } from "@/types";
 
 const MFG_ORDER = ["サンゲツ", "リリカラ", "ルノン", "トキワ", "シンコール", "東リ", "エービーシー商会", "不明", "その他"] as const;
+const DEFAULT_WALLPAPER_WIDTH_M = 0.92;
 
 function groupLabel(manufacturer: string): (typeof MFG_ORDER)[number] {
   const m = manufacturer.trim();
@@ -65,6 +66,22 @@ type NewEntryInput = {
 function toFiniteNumber(value: unknown, fallback = 0): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function parseWallpaperWidthM(spec: unknown): number {
+  const text = String(spec ?? "").replace(/,/g, ".").trim();
+  const match =
+    /(?:巾|幅)\s*[:：]?\s*(\d+(?:\.\d+)?)\s*cm/i.exec(text) ||
+    /(\d+(?:\.\d+)?)\s*cm\s*(?:巾|幅)/i.exec(text);
+  const widthCm = match ? Number(match[1]) : NaN;
+  if (Number.isFinite(widthCm) && widthCm > 0) return widthCm / 100;
+  return DEFAULT_WALLPAPER_WIDTH_M;
+}
+
+function formatSummaryNumber(value: number, maximumFractionDigits = 2): string {
+  return value.toLocaleString("ja-JP", {
+    maximumFractionDigits,
+  });
 }
 
 export function OrderList({ items, notes, siteName = "", needs_review_any, onItemsChange }: OrderListProps) {
@@ -462,6 +479,18 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   }, [items, overrides, lossRates]);
 
   const groups = useMemo(() => groupByManufacturer(derivedItems), [derivedItems]);
+  const orderSummary = useMemo(() => {
+    const totalOrderQuantity = derivedItems.reduce((sum, item) => sum + toFiniteNumber(item.order_quantity), 0);
+    const totalSquareMeters = derivedItems.reduce((sum, item) => {
+      const orderQuantity = toFiniteNumber(item.order_quantity);
+      return sum + orderQuantity * parseWallpaperWidthM(item.spec);
+    }, 0);
+
+    return {
+      totalOrderQuantity,
+      totalSquareMeters: Number(totalSquareMeters.toFixed(2)),
+    };
+  }, [derivedItems]);
 
   useEffect(() => {
     if (!onItemsChange || derivedItems.length === 0) return;
@@ -489,7 +518,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
 
   const copyOrderText = async () => {
     if (!derivedItems.length) return;
-    const text = buildOrderRequestText(derivedItems, siteName, DEFAULT_LOSS_RATE_PERCENT);
+    const text = buildOrderRequestText(derivedItems, siteName);
     try {
       await navigator.clipboard.writeText(text);
       alert("発注用テキストをコピーしました！");
@@ -556,6 +585,29 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
               <span className="opacity-70">メモ備考:</span> {notes}
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-none bg-gradient-to-r from-indigo-600/10 via-purple-600/10 to-indigo-600/5 shadow-lg ring-1 ring-inset ring-indigo-500/20 backdrop-blur-xl">
+        <CardContent className="grid gap-3 px-3 py-4 sm:grid-cols-2 sm:px-6 sm:py-5">
+          <div className="rounded-xl border border-indigo-500/10 bg-white/70 p-4 shadow-sm dark:bg-black/30">
+            <p className="text-xs font-bold text-indigo-900/60 dark:text-indigo-100/60">合計発注数量</p>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-3xl font-black tabular-nums tracking-tight text-indigo-700 dark:text-indigo-300 sm:text-4xl">
+                {formatSummaryNumber(orderSummary.totalOrderQuantity, 0)}
+              </span>
+              <span className="text-base font-bold text-indigo-900/60 dark:text-indigo-100/60">m</span>
+            </div>
+          </div>
+          <div className="rounded-xl border border-purple-500/10 bg-white/70 p-4 shadow-sm dark:bg-black/30">
+            <p className="text-xs font-bold text-purple-900/60 dark:text-purple-100/60">合計平米数</p>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-3xl font-black tabular-nums tracking-tight text-purple-700 dark:text-purple-300 sm:text-4xl">
+                {formatSummaryNumber(orderSummary.totalSquareMeters)}
+              </span>
+              <span className="text-base font-bold text-purple-900/60 dark:text-purple-100/60">㎡</span>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
@@ -921,7 +973,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                          <span className="opacity-60 mr-1">計測合計:</span>
                          <span className={product.override_active ? "text-indigo-600 dark:text-indigo-400" : "opacity-80"}>{product.total_m}m</span>
                          <span className="opacity-50 mx-1">/</span>
-                         <span className={product.override_active ? "text-indigo-600 dark:text-indigo-400" : "opacity-80"}>{(product.total_m * 0.9).toFixed(2)}㎡</span>
+                         <span className={product.override_active ? "text-indigo-600 dark:text-indigo-400" : "opacity-80"}>{(product.total_m * parseWallpaperWidthM(product.spec)).toFixed(2)}㎡</span>
                        </span>
                     </div>
                   </div>

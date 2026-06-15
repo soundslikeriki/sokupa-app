@@ -58,14 +58,6 @@ export async function POST(req: NextRequest) {
       ? authHeader.slice(7).trim()
       : "";
     const lineUserId = cookieLineUserId || headerLineUserId;
-    console.log("[admin generate-invite] auth-check", {
-      hasAdminEnv: Boolean(process.env.ADMIN_LINE_USER_ID),
-      adminLineUserIdLen: adminLineUserId.length,
-      hasLineUserIdCookie: Boolean(cookieLineUserId),
-      hasLineUserIdHeader: Boolean(headerLineUserId),
-      lineUserIdLen: lineUserId.length,
-      authorized: Boolean(lineUserId && lineUserId === adminLineUserId),
-    });
     if (!lineUserId || lineUserId !== adminLineUserId) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
@@ -92,4 +84,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
-

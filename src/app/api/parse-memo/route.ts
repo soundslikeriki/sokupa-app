@@ -190,13 +190,6 @@ function mergeVisionWithCatalog(item: Record<string, unknown>, cat: CatalogAugme
   };
 }
 
-type ProductMasterRow = {
-  manufacturer: string | null;
-  spec: string | null;
-  repeat_info: unknown;
-  notes: string | null;
-};
-
 function isLikelyWallpaperProductCode(value: string): boolean {
   return /^[A-Z]{2,4}\s*[\-]?\s*\d{3,5}$/i.test(value.trim());
 }
@@ -238,12 +231,6 @@ async function enrichWithProductMaster(items: any[]) {
         .maybeSingle();
 
       if (master) {
-        if (master.is_live_searched) {
-          console.log(`[🔍 ネット引用] 品番: ${productCode}`);
-        } else {
-          console.log(`[🎯 DBヒット] 品番: ${productCode}`);
-        }
-
         const mfgRaw = master.manufacturers as any;
         const mfgName = mfgRaw ? (Array.isArray(mfgRaw) ? mfgRaw[0]?.name : mfgRaw.name) : undefined;
         const masterUrl = typeof master.source_url === "string" ? master.source_url.trim() : "";
@@ -328,14 +315,12 @@ async function enrichWithProductMaster(items: any[]) {
         const isWallpaperCode = isLikelyWallpaperProductCode(productCode);
         
         if (hasSomeInfo || isWallpaperCode) {
-          console.log(`[🔍 ネット引用 (補正/未達)] 品番: ${productCode}`);
           return {
             ...item,
             needs_review: false,
             is_live_searched: true,
           };
         } else {
-          console.log(`[❌ 検索失敗] 品番: ${productCode} (DBもネットも見つかりませんでした)`);
           return {
             ...item,
             notes: (item.notes ? item.notes + ' ' : '') + "※この品番はデータベースに未登録です。",
