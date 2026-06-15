@@ -800,14 +800,14 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                         </Badge>
                       )}
                     </div>
-                    <div className="flex shrink-0 flex-wrap items-center gap-2 self-start sm:self-auto">
-                      <div className="flex items-center gap-2 rounded-xl border border-black/5 bg-black/5 p-1.5 dark:bg-white/5">
+                    <div className="grid w-full gap-2 self-start sm:w-[25rem] sm:self-auto">
+                      <div className="grid w-full grid-cols-[4.5rem_2.75rem_minmax(4.25rem,1fr)_1.5rem_2.75rem] items-center gap-2 rounded-xl border border-black/5 bg-black/5 p-1.5 dark:bg-white/5 sm:grid-cols-[5rem_2.75rem_minmax(5rem,1fr)_1.75rem_2.75rem]">
                         <span className="pl-2 text-[10px] font-medium opacity-60 sm:text-xs">ロス率</span>
                         <Button
                           type="button"
                           variant="outline"
                           size="icon"
-                          className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
+                          className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
                           onClick={() => handleAdjustLossRate(product.product_code, product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT, -1)}
                           disabled={(product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT) <= 0}
                           aria-label={`${product.product_code} のロス率を1%減らす`}
@@ -818,53 +818,51 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                           type="number"
                           min="0"
                           step="1"
-                          className="h-11 w-16 bg-white px-2 text-center text-base font-bold tabular-nums dark:bg-black"
+                          className="h-11 w-full bg-white px-2 text-center text-base font-bold tabular-nums dark:bg-black"
                           value={lossRates[product.product_code] ?? product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}
                           onChange={(e) => handleLossRateChange(product.product_code, e.target.value)}
                           aria-label={`${product.product_code} のロス率を入力`}
                         />
-                        <span className="text-xs font-semibold opacity-60">%</span>
+                        <span className="text-center text-sm font-semibold opacity-60">%</span>
                         <Button
                           type="button"
                           variant="outline"
                           size="icon"
-                          className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
+                          className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
                           onClick={() => handleAdjustLossRate(product.product_code, product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT, 1)}
                           aria-label={`${product.product_code} のロス率を1%増やす`}
                         >
                           <Plus className="h-4 w-4" />
                         </Button>
                       </div>
-                      <div className="flex items-center gap-2 rounded-xl border border-black/5 bg-black/5 p-1.5 dark:bg-white/5">
+                      <div className="grid w-full grid-cols-[4.5rem_2.75rem_minmax(4.25rem,1fr)_1.5rem_2.75rem] items-center gap-2 rounded-xl border border-black/5 bg-black/5 p-1.5 dark:bg-white/5 sm:grid-cols-[5rem_2.75rem_minmax(5rem,1fr)_1.75rem_2.75rem]">
                         <span className="pl-2 text-[10px] font-medium opacity-60 sm:text-xs">発注数量</span>
                         <Button
                           type="button"
                           variant="outline"
                           size="icon"
-                          className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
+                          className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
                           onClick={() => handleAdjustOrderQuantity(product.product_code, -1)}
                           disabled={product.order_quantity <= 0}
                           aria-label={`${product.product_code} の発注数量を1m減らす`}
                         >
                           <Minus className="h-4 w-4" />
                         </Button>
-                        <div className="flex min-w-[6.5rem] items-center justify-center gap-1 rounded-lg bg-white px-2 py-1.5 dark:bg-black">
-                          <Input
-                            type="number"
-                            min="0"
-                            step="1"
-                            className="h-9 w-16 border-none bg-transparent p-0 text-center text-xl font-black tabular-nums leading-none text-indigo-600 shadow-none focus-visible:ring-0 dark:text-indigo-400 sm:text-2xl"
-                            value={product.order_quantity}
-                            onChange={(e) => handleSetOrderQuantity(product.product_code, Number(e.target.value))}
-                            aria-label={`${product.product_code} の発注数量を入力`}
-                          />
-                          <span className="text-sm font-semibold opacity-60">m</span>
-                        </div>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          className="h-11 w-full bg-white px-2 text-center text-xl font-black tabular-nums leading-none text-indigo-600 dark:bg-black dark:text-indigo-400 sm:text-2xl"
+                          value={product.order_quantity}
+                          onChange={(e) => handleSetOrderQuantity(product.product_code, Number(e.target.value))}
+                          aria-label={`${product.product_code} の発注数量を入力`}
+                        />
+                        <span className="text-center text-sm font-semibold opacity-60">m</span>
                         <Button
                           type="button"
                           variant="outline"
                           size="icon"
-                          className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
+                          className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
                           onClick={() => handleAdjustOrderQuantity(product.product_code, 1)}
                           aria-label={`${product.product_code} の発注数量を1m増やす`}
                         >
