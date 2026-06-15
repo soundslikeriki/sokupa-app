@@ -402,8 +402,10 @@ export default function HomePageClient() {
           >
             <Upload className="mx-auto mb-4 h-12 w-12 text-muted-foreground" aria-hidden />
             <p className="text-lg">クリックで画像を追加</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              PNG / JPEG / WebP / HEIC ・ 複数枚OK（最大5枚）
+            <p className="mt-1 flex flex-wrap justify-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground sm:text-sm">
+              <span className="whitespace-nowrap">PNG / JPEG / WebP / HEIC</span>
+              <span aria-hidden>・</span>
+              <span className="whitespace-nowrap">複数枚OK（最大5枚）</span>
             </p>
             <input
               id={uploadInputId}
