@@ -84,6 +84,11 @@ function formatSummaryNumber(value: number, maximumFractionDigits = 2): string {
   });
 }
 
+function calculateLossRateFromOrderQuantity(orderQuantity: number, totalM: number): number {
+  if (!Number.isFinite(orderQuantity) || !Number.isFinite(totalM) || totalM <= 0) return 0;
+  return Math.max(0, Math.round(((orderQuantity / totalM) - 1) * 100));
+}
+
 export function OrderList({ items, notes, siteName = "", needs_review_any, onItemsChange }: OrderListProps) {
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
@@ -219,10 +224,19 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
 
   const handleLossRateChange = (productCode: string, value: string) => {
     clearManualOrderQuantity(productCode);
-    const nextLoss = value === "" ? "" : Math.max(0, Number(value));
+    const parsed = Number(value);
+    const nextLoss = value === "" ? "" : Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
     setLossRates((prev) => ({
       ...prev,
       [productCode]: nextLoss,
+    }));
+  };
+
+  const handleAdjustLossRate = (productCode: string, currentLossRate: number, delta: number) => {
+    clearManualOrderQuantity(productCode);
+    setLossRates((prev) => ({
+      ...prev,
+      [productCode]: Math.max(0, Math.round(currentLossRate + delta)),
     }));
   };
 
@@ -400,14 +414,23 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
     });
   };
 
-  const handleAdjustOrderQuantity = (productCode: string, delta: number) => {
+  const handleSetOrderQuantity = (productCode: string, value: number) => {
     const currentItem = derivedItems.find((item) => item.product_code === productCode);
-    const currentQuantity = toFiniteNumber(currentItem?.order_quantity);
-    const nextQuantity = Math.max(0, currentQuantity + delta);
+    const nextQuantity = Math.max(0, Math.ceil(toFiniteNumber(value)));
     setManualOrderQuantities((prev) => ({
       ...prev,
       [productCode]: nextQuantity,
     }));
+    setLossRates((prev) => ({
+      ...prev,
+      [productCode]: calculateLossRateFromOrderQuantity(nextQuantity, toFiniteNumber(currentItem?.total_m)),
+    }));
+  };
+
+  const handleAdjustOrderQuantity = (productCode: string, delta: number) => {
+    const currentItem = derivedItems.find((item) => item.product_code === productCode);
+    const currentQuantity = toFiniteNumber(currentItem?.order_quantity);
+    handleSetOrderQuantity(productCode, currentQuantity + delta);
   };
 
   const derivedItems = useMemo(() => {
@@ -724,18 +747,40 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                       )}
                     </div>
                     <div className="flex shrink-0 flex-wrap items-center gap-2 self-start sm:self-auto">
-                      <label className="flex items-center gap-2 rounded-xl border border-black/5 bg-black/5 px-3 py-2 dark:bg-white/5">
-                        <span className="text-[10px] font-medium opacity-60 sm:text-xs">ロス率</span>
+                      <div className="flex items-center gap-2 rounded-xl border border-black/5 bg-black/5 p-1.5 dark:bg-white/5">
+                        <span className="pl-2 text-[10px] font-medium opacity-60 sm:text-xs">ロス率</span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
+                          onClick={() => handleAdjustLossRate(product.product_code, product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT, -1)}
+                          disabled={(product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT) <= 0}
+                          aria-label={`${product.product_code} のロス率を1%減らす`}
+                        >
+                          <Minus className="h-4 w-4" />
+                        </Button>
                         <Input
                           type="number"
                           min="0"
                           step="1"
-                          className="h-8 w-16 bg-white px-2 text-right text-sm font-bold tabular-nums dark:bg-black"
+                          className="h-11 w-16 bg-white px-2 text-center text-base font-bold tabular-nums dark:bg-black"
                           value={lossRates[product.product_code] ?? product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}
                           onChange={(e) => handleLossRateChange(product.product_code, e.target.value)}
+                          aria-label={`${product.product_code} のロス率を入力`}
                         />
                         <span className="text-xs font-semibold opacity-60">%</span>
-                      </label>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
+                          onClick={() => handleAdjustLossRate(product.product_code, product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT, 1)}
+                          aria-label={`${product.product_code} のロス率を1%増やす`}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
                       <div className="flex items-center gap-2 rounded-xl border border-black/5 bg-black/5 p-1.5 dark:bg-white/5">
                         <span className="pl-2 text-[10px] font-medium opacity-60 sm:text-xs">発注数量</span>
                         <Button
@@ -749,10 +794,16 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                         >
                           <Minus className="h-4 w-4" />
                         </Button>
-                        <div className="flex min-w-[5.25rem] items-baseline justify-center gap-1 rounded-lg bg-white px-2 py-2 dark:bg-black">
-                          <span className="text-xl font-black tabular-nums leading-none text-indigo-600 dark:text-indigo-400 sm:text-2xl">
-                            {product.order_quantity}
-                          </span>
+                        <div className="flex min-w-[6.5rem] items-center justify-center gap-1 rounded-lg bg-white px-2 py-1.5 dark:bg-black">
+                          <Input
+                            type="number"
+                            min="0"
+                            step="1"
+                            className="h-9 w-16 border-none bg-transparent p-0 text-center text-xl font-black tabular-nums leading-none text-indigo-600 shadow-none focus-visible:ring-0 dark:text-indigo-400 sm:text-2xl"
+                            value={product.order_quantity}
+                            onChange={(e) => handleSetOrderQuantity(product.product_code, Number(e.target.value))}
+                            aria-label={`${product.product_code} の発注数量を入力`}
+                          />
                           <span className="text-sm font-semibold opacity-60">m</span>
                         </div>
                         <Button
