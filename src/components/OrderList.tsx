@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, RefreshCw, Undo2, Globe, Plus, Trash2, Minus } from "lucide-react";
+import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus } from "lucide-react";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import { buildOrderRequestText } from "@/lib/order-text";
 import { dedupeSlashDelimited } from "@/lib/dedupeSlashList";
@@ -89,6 +89,15 @@ function calculateLossRateFromOrderQuantity(orderQuantity: number, totalM: numbe
   return Math.max(0, Math.round(((orderQuantity / totalM) - 1) * 100));
 }
 
+function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
+  return {
+    ...item,
+    entries: (item.entries ?? []).map((entry) => ({ ...entry })),
+    repeat_info: item.repeat_info ? { ...item.repeat_info } : undefined,
+    tags: item.tags ? [...item.tags] : undefined,
+  };
+}
+
 export function OrderList({ items, notes, siteName = "", needs_review_any, onItemsChange }: OrderListProps) {
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
@@ -97,6 +106,8 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   const [manualOrderQuantities, setManualOrderQuantities] = useState<Record<string, number>>({});
   const newEntryInputsRef = useRef<Record<string, NewEntryInput>>({});
   const lastSyncedItemsRef = useRef("");
+  const originalItemsRef = useRef<MemoProductItem[]>([]);
+  const previousHadItemsRef = useRef(false);
 
   const getLossRateForItem = (item: MemoProductItem): number => {
     const local = lossRates[item.product_code];
@@ -158,6 +169,28 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
       return next;
     });
   };
+
+  useEffect(() => {
+    if (items.length === 0) {
+      if (previousHadItemsRef.current) {
+        originalItemsRef.current = [];
+        previousHadItemsRef.current = false;
+        lastSyncedItemsRef.current = "";
+        setOverrides({});
+        setEditingCode({});
+        setLossRates({});
+        setNewEntryInputs({});
+        setManualOrderQuantities({});
+        newEntryInputsRef.current = {};
+      }
+      return;
+    }
+
+    if (!previousHadItemsRef.current) {
+      originalItemsRef.current = items.map(cloneMemoProductItem);
+      previousHadItemsRef.current = true;
+    }
+  }, [items]);
 
   const saveCodeEdit = async (fromCode: string) => {
     const next = editingCode[fromCode];
@@ -405,13 +438,34 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
     });
   };
 
-  const handleResetProduct = (productCode: string) => {
+  const handleResetProductToOriginal = (productCode: string) => {
+    if (!onItemsChange) return;
+    const original = originalItemsRef.current.find((item) => item.product_code === productCode);
+    if (!original) return;
+
     clearManualOrderQuantity(productCode);
+    setLossRates((prev) => {
+      if (!(productCode in prev)) return prev;
+      const next = { ...prev };
+      delete next[productCode];
+      return next;
+    });
     setOverrides((prev) => {
       const next = { ...prev };
       delete next[productCode];
       return next;
     });
+    setNewEntryInputs((prev) => {
+      if (!(productCode in prev)) return prev;
+      const next = { ...prev };
+      delete next[productCode];
+      return next;
+    });
+    delete newEntryInputsRef.current[productCode];
+
+    onItemsChange(
+      items.map((item) => (item.product_code === productCode ? cloneMemoProductItem(original) : item)),
+    );
   };
 
   const handleSetOrderQuantity = (productCode: string, value: number) => {
@@ -839,6 +893,18 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                     )}
                   </div>
 
+                  <div className="mb-6 flex justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="min-h-11 rounded-lg border-black/10 bg-white/70 px-3 text-xs font-semibold text-muted-foreground hover:bg-white hover:text-indigo-700 dark:border-white/10 dark:bg-black/30 dark:hover:bg-black"
+                      onClick={() => handleResetProductToOriginal(product.product_code)}
+                    >
+                      ↺ 解析結果に戻す
+                    </Button>
+                  </div>
+
                   <div className="mb-6 mt-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 shadow-sm transition-colors dark:border-indigo-900/30 dark:bg-indigo-900/10 sm:p-4">
                     <div className="text-xs font-bold uppercase tracking-wider text-indigo-800/60 dark:text-indigo-300/60 mb-3 flex items-center justify-between">
                       <div className="flex items-center gap-1.5 text-indigo-900 dark:text-indigo-100 font-semibold text-[11px]">
@@ -916,24 +982,12 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                   )}
 
                   <div className="group/memo relative overflow-hidden rounded-xl bg-black/5 p-2.5 dark:bg-white/5 sm:p-4">
-                    <Button 
-                      variant="outline" 
-                      size="sm"
-                      type="button"
-                      aria-label="AI初期値にもどす"
-                      title="AI初期値にもどす"
-                      onClick={() => handleResetProduct(product.product_code)}
-                      className="absolute right-1.5 top-1.5 z-10 flex h-11 w-11 min-h-11 min-w-11 items-center justify-center rounded-full border-black/10 bg-white p-0 opacity-100 shadow-sm transition-opacity hover:bg-gray-100 dark:border-white/10 dark:bg-zinc-900 dark:hover:bg-zinc-800 sm:right-2 sm:top-2 sm:h-[26px] sm:min-h-0 sm:w-auto sm:min-w-0 sm:rounded-md sm:px-2.5 sm:py-0 sm:opacity-0 sm:group-hover/memo:opacity-100"
-                    >
-                      <RefreshCw className="h-4 w-4 text-indigo-600 sm:h-3 sm:w-3" />
-                      <span className="hidden pl-1 text-[10px] sm:inline">AI初期値にもどす</span>
-                    </Button>
-                    <div className="mb-3 flex flex-wrap items-center pr-14 sm:mb-4 sm:pr-32">
+                    <div className="mb-4 flex flex-wrap items-center">
                       <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider opacity-60 sm:text-xs">
                         計測メモ
                       </span>
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                        {product.derivedEntries?.map((e: any, eidx: number) => {
                          const rawQty = overrides[product.product_code]?.entryQtys?.[eidx];
                          const rawLen = overrides[product.product_code]?.entryLengths?.[eidx];
