@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, RefreshCw, Undo2, Globe, Plus, Trash2 } from "lucide-react";
+import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, RefreshCw, Undo2, Globe, Plus, Trash2, Minus } from "lucide-react";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import { buildOrderRequestText } from "@/lib/order-text";
 import { dedupeSlashDelimited } from "@/lib/dedupeSlashList";
@@ -89,6 +89,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
   const [lossRates, setLossRates] = useState<Record<string, number | "">>({});
   const [newEntryInputs, setNewEntryInputs] = useState<Record<string, NewEntryInput>>({});
+  const [manualOrderQuantities, setManualOrderQuantities] = useState<Record<string, number>>({});
   const newEntryInputsRef = useRef<Record<string, NewEntryInput>>({});
   const lastSyncedItemsRef = useRef("");
 
@@ -144,6 +145,15 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
     }));
   };
 
+  const clearManualOrderQuantity = (productCode: string) => {
+    setManualOrderQuantities((prev) => {
+      if (!(productCode in prev)) return prev;
+      const next = { ...prev };
+      delete next[productCode];
+      return next;
+    });
+  };
+
   const saveCodeEdit = async (fromCode: string) => {
     const next = editingCode[fromCode];
     const toCode = (next?.value ?? "").trim().toUpperCase().replace(/[\s\-]+/g, "");
@@ -175,6 +185,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   };
 
   const handleOverrideChange = (productCode: string, field: keyof Omit<ItemOverride, "entryQtys" | "entryEditMode" | "entryRepeatActive" | "entryLengths">, value: string) => {
+    clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
       const val = value === "" ? "" : Number(value);
       return {
@@ -188,6 +199,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   };
 
   const handleEntryFieldChange = (productCode: string, entryIndex: number, field: "entryQtys" | "entryLengths", value: string) => {
+    clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
       const val = value === "" ? "" : Number(value);
       const prevOvr = prev[productCode] || {};
@@ -206,6 +218,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   };
 
   const handleLossRateChange = (productCode: string, value: string) => {
+    clearManualOrderQuantity(productCode);
     const nextLoss = value === "" ? "" : Math.max(0, Number(value));
     setLossRates((prev) => ({
       ...prev,
@@ -233,6 +246,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
     const length = Number(String(draft.length).trim());
     const quantity = Number(String(draft.quantity).trim());
     if (!Number.isFinite(length) || length <= 0 || !Number.isFinite(quantity) || quantity <= 0) return;
+    clearManualOrderQuantity(productCode);
 
     const sourceItems = derivedItems.length > 0 ? derivedItems.map(canonicalizeDerivedItem) : items;
     const updatedItems = sourceItems.map((item) => {
@@ -264,6 +278,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
 
   const handleDeleteEntry = (productCode: string, entryIndex: number) => {
     if (!onItemsChange) return;
+    clearManualOrderQuantity(productCode);
 
     const sourceItems = derivedItems.length > 0 ? derivedItems.map(canonicalizeDerivedItem) : items;
     const updatedItems = sourceItems.map((item) => {
@@ -305,6 +320,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   };
 
   const handleToggleEntryRepeat = (productCode: string, entryIndex: number) => {
+    clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
       const prevOvr = prev[productCode] || {};
       const prevRepeats = prevOvr.entryRepeatActive || {};
@@ -322,6 +338,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   };
 
   const handleToggleMasterRepeat = (productCode: string, currentMasterActive: boolean, numEntries: number) => {
+    clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
       const prevOvr = prev[productCode] || {};
       const newRepeats: Record<number, boolean> = {};
@@ -356,6 +373,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   };
 
   const handleResetEntry = (productCode: string, entryIndex: number) => {
+    clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
       const prevOvr = prev[productCode] || {};
       const newQtys = { ...prevOvr.entryQtys };
@@ -374,11 +392,22 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   };
 
   const handleResetProduct = (productCode: string) => {
+    clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
       const next = { ...prev };
       delete next[productCode];
       return next;
     });
+  };
+
+  const handleAdjustOrderQuantity = (productCode: string, delta: number) => {
+    const currentItem = derivedItems.find((item) => item.product_code === productCode);
+    const currentQuantity = toFiniteNumber(currentItem?.order_quantity);
+    const nextQuantity = Math.max(0, currentQuantity + delta);
+    setManualOrderQuantities((prev) => ({
+      ...prev,
+      [productCode]: nextQuantity,
+    }));
   };
 
   const derivedItems = useMemo(() => {
@@ -463,7 +492,12 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
          calcTotalM = item.total_m;
       }
 
-      const order_quantity = Math.ceil(calcTotalM * (1 + lossRate / 100));
+      const calculatedOrderQuantity = Math.ceil(calcTotalM * (1 + lossRate / 100));
+      const manualOrderQuantity = manualOrderQuantities[item.product_code];
+      const order_quantity =
+        typeof manualOrderQuantity === "number" && Number.isFinite(manualOrderQuantity)
+          ? Math.max(0, Math.round(manualOrderQuantity))
+          : calculatedOrderQuantity;
 
       return {
         ...item,
@@ -476,7 +510,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
         derivedEntries
       };
     });
-  }, [items, overrides, lossRates]);
+  }, [items, overrides, lossRates, manualOrderQuantities]);
 
   const groups = useMemo(() => groupByManufacturer(derivedItems), [derivedItems]);
   const orderSummary = useMemo(() => {
@@ -702,12 +736,35 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                         />
                         <span className="text-xs font-semibold opacity-60">%</span>
                       </label>
-                      <div className="flex items-baseline gap-2 rounded-xl border border-black/5 bg-black/5 px-3 py-2 dark:bg-white/5 sm:px-4">
-                        <span className="text-[10px] font-medium opacity-60 sm:text-xs">発注数量</span>
-                        <span className="text-xl font-black tabular-nums leading-none text-indigo-600 dark:text-indigo-400 sm:text-2xl">
-                          {product.order_quantity}
-                        </span>
-                        <span className="text-sm font-semibold opacity-60">m</span>
+                      <div className="flex items-center gap-2 rounded-xl border border-black/5 bg-black/5 p-1.5 dark:bg-white/5">
+                        <span className="pl-2 text-[10px] font-medium opacity-60 sm:text-xs">発注数量</span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
+                          onClick={() => handleAdjustOrderQuantity(product.product_code, -1)}
+                          disabled={product.order_quantity <= 0}
+                          aria-label={`${product.product_code} の発注数量を1m減らす`}
+                        >
+                          <Minus className="h-4 w-4" />
+                        </Button>
+                        <div className="flex min-w-[5.25rem] items-baseline justify-center gap-1 rounded-lg bg-white px-2 py-2 dark:bg-black">
+                          <span className="text-xl font-black tabular-nums leading-none text-indigo-600 dark:text-indigo-400 sm:text-2xl">
+                            {product.order_quantity}
+                          </span>
+                          <span className="text-sm font-semibold opacity-60">m</span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
+                          onClick={() => handleAdjustOrderQuantity(product.product_code, 1)}
+                          aria-label={`${product.product_code} の発注数量を1m増やす`}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
                       </div>
                     </div>
                   </div>
