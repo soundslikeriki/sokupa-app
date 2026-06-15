@@ -484,12 +484,11 @@ export default function HomePageClient() {
             `${images.length}枚の画像を解析する`
           )}
         </Button>
-        <p className="mt-3 text-center text-sm text-muted-foreground">
+        <p className="mt-3 text-center text-xs text-muted-foreground sm:text-sm">
           ※通知が届かない場合は
           <a href="https://lin.ee/Xr6sd53" target="_blank" rel="noopener noreferrer" className="mx-1 font-bold text-[#06C755] hover:underline">
             こちらから友だち追加
           </a>
-          してください。
         </p>
       </div>
 
