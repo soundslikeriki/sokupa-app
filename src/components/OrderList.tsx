@@ -917,6 +917,14 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                           <Plus className="h-4 w-4" />
                         </Button>
                       </div>
+                      <div className="flex min-h-11 items-center justify-between gap-2 rounded-xl border border-black/5 bg-black/5 px-3 py-2 dark:bg-white/5">
+                        <span className="text-[10px] font-medium opacity-60 sm:text-xs">計測合計</span>
+                        <span className="text-xs font-bold tabular-nums sm:text-sm">
+                          <span className={product.override_active ? "text-indigo-600 dark:text-indigo-400" : "opacity-80"}>{product.total_m}m</span>
+                          <span className="opacity-50 mx-1">/</span>
+                          <span className={product.override_active ? "text-indigo-600 dark:text-indigo-400" : "opacity-80"}>{(product.total_m * parseWallpaperWidthM(product.spec)).toFixed(2)}㎡</span>
+                        </span>
+                      </div>
                     </div>
                   </div>
 
