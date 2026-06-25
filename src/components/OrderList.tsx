@@ -722,6 +722,54 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
         </CardContent>
       </Card>
 
+      <Card className="border-none bg-white/70 shadow-lg ring-1 ring-inset ring-indigo-500/15 backdrop-blur-xl dark:bg-zinc-900/70">
+        <CardHeader className="px-3 pb-2 pt-4 sm:px-6 sm:pt-5">
+          <CardTitle className="flex items-center gap-2 text-sm font-bold text-indigo-900 dark:text-indigo-100 sm:text-base">
+            <CopyIcon className="h-4 w-4" />
+            この内容でコピーされます
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-1.5 px-3 pb-4 pt-0 sm:px-6 sm:pb-5">
+          {derivedItems.map((item) => {
+            const code = String(item.product_code ?? "").trim() || "不明";
+            const quantity = toFiniteNumber(item.order_quantity);
+            return (
+              <div
+                key={code}
+                className="flex min-w-0 items-center gap-2 rounded-lg border border-black/5 bg-black/[0.03] px-2 py-1.5 dark:border-white/5 dark:bg-white/[0.04] sm:px-3"
+              >
+                <p className="min-w-0 flex-1 truncate whitespace-nowrap text-xs font-semibold tabular-nums text-zinc-900 dark:text-zinc-100 sm:text-sm">
+                  ・{code} / 数量：{quantity}m
+                </p>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-8 w-8 rounded-md bg-white p-0 dark:bg-black"
+                    onClick={() => handleAdjustOrderQuantity(item.product_code, -1)}
+                    disabled={quantity <= 0}
+                    aria-label={`${code} の発注数量を1m減らす`}
+                  >
+                    <Minus className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="h-8 w-8 rounded-md bg-white p-0 dark:bg-black"
+                    onClick={() => handleAdjustOrderQuantity(item.product_code, 1)}
+                    aria-label={`${code} の発注数量を1m増やす`}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </CardContent>
+      </Card>
+
       <div className="space-y-4 sm:space-y-6">
         {groups.map((group) => (
           <Card key={group.label} className="border-none shadow-md overflow-hidden bg-white/60 dark:bg-zinc-900/60 backdrop-blur-md">
