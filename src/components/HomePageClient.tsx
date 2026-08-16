@@ -28,16 +28,35 @@ function getCookie(name: string): string | null {
 }
 
 function getUploadErrorStatus(err: unknown): number | undefined {
-  const anyErr = err as { statusCode?: string | number; status?: string | number } | null | undefined;
-  const raw = anyErr?.statusCode ?? anyErr?.status;
+  const anyErr = err as
+    | {
+        statusCode?: string | number;
+        status?: string | number;
+        context?: { status?: string | number };
+        response?: { status?: string | number };
+      }
+    | null
+    | undefined;
+  const raw = anyErr?.statusCode ?? anyErr?.status ?? anyErr?.context?.status ?? anyErr?.response?.status;
   if (raw === undefined) return undefined;
   const num = typeof raw === "string" ? Number(raw) : raw;
   return Number.isFinite(num) ? num : undefined;
 }
 
+function getErrorDetail(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === "string" && err) return err;
+  if (err && typeof err === "object" && "message" in err) {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === "string" && message) return message;
+  }
+  return "不明なエラー";
+}
+
 function buildUploadErrorMessage(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = getErrorDetail(err);
   const status = getUploadErrorStatus(err);
+  const prefix = "Storageへのアップロードに失敗しました";
 
   const isNetworkError =
     !status &&
@@ -46,35 +65,59 @@ function buildUploadErrorMessage(err: unknown): string {
       message.includes("NetworkError") ||
       message.toLowerCase().includes("network"));
   if (isNetworkError) {
-    return "画像アップロードに失敗しました: 通信環境をご確認ください";
+    return `${prefix}: 通信環境をご確認ください（${message}）`;
   }
 
   if (status === 401 || status === 403) {
-    return "画像アップロードに失敗しました: ログインし直してください";
+    return `${prefix}（HTTP ${status}）: ログインし直してください`;
   }
 
-  return `画像アップロードに失敗しました: ${message}${status ? ` (HTTP ${status})` : ""}`;
+  return `${prefix}${status ? `（HTTP ${status}）` : ""}: ${message}`;
 }
 
 // ネットワーク一時障害を想定し、失敗時に1回だけ自動リトライする
 async function uploadImageToStorage(path: string, blob: Blob): Promise<void> {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const { error: upErr } = await supabase.storage.from("memo_uploads").upload(path, blob, {
-      contentType: "image/jpeg",
-      upsert: true,
-    });
-    if (!upErr) return;
-
-    lastError = upErr;
-    console.error("[Sokupa] 画像アップロードエラー", {
+    console.log("[Sokupa] Storageアップロード開始", {
       attempt,
       path,
-      status: getUploadErrorStatus(upErr),
-      error: upErr,
+      sizeBytes: blob.size,
+      contentType: blob.type,
+    });
+
+    try {
+      const { error: upErr } = await supabase.storage.from("memo_uploads").upload(path, blob, {
+        contentType: "image/jpeg",
+        upsert: true,
+      });
+      if (!upErr) {
+        console.log("[Sokupa] Storageアップロード成功", {
+          attempt,
+          path,
+          sizeBytes: blob.size,
+        });
+        return;
+      }
+      lastError = upErr;
+    } catch (err) {
+      // Safariのネットワーク失敗はSupabaseのerrorではなく例外として投げられる。
+      lastError = err;
+    }
+
+    console.error("[Sokupa] Storageアップロード失敗", {
+      attempt,
+      path,
+      sizeBytes: blob.size,
+      status: getUploadErrorStatus(lastError),
+      error: lastError,
     });
 
     if (attempt === 1) {
+      console.log("[Sokupa] Storageアップロードをリトライ", {
+        nextAttempt: attempt + 1,
+        path,
+      });
       await new Promise((resolve) => setTimeout(resolve, 800));
     }
   }
@@ -188,9 +231,20 @@ export default function HomePageClient() {
       newImages.map(async (imgObj, idx) => {
         const file = imageFiles[idx];
         try {
+          console.log("[Sokupa] 画像変換開始", {
+            imageId: imgObj.id,
+            fileName: file.name,
+            fileType: file.type || "unknown",
+            sizeBytes: file.size,
+          });
           // Send 1500px max dimension image at 0.6 quality to aggressively reduce payload
           // Mobile HEIC/JPEG を AI が読み取りやすいサイズへ（長辺 2000px 目安）
           const dataUrl = await convertAndResizeForPreview(file, 2000, 0.72);
+          console.log("[Sokupa] 画像変換完了", {
+            imageId: imgObj.id,
+            fileName: file.name,
+            dataUrlLength: dataUrl.length,
+          });
           setImages((prev) =>
             prev.map((img) =>
               img.id === imgObj.id
@@ -204,7 +258,12 @@ export default function HomePageClient() {
             )
           );
         } catch (err) {
-          console.error("画像処理エラー", err);
+          console.error("[Sokupa] 画像変換失敗", {
+            imageId: imgObj.id,
+            fileName: file.name,
+            error: err,
+          });
+          setError(`画像の読み込み・変換に失敗しました（${file.name}）: ${getErrorDetail(err)}`);
           setImages((prev) =>
             prev.map((img) =>
               img.id === imgObj.id ? { ...img, status: "error" } : img
@@ -234,8 +293,31 @@ export default function HomePageClient() {
       const uploadedUrls: string[] = [];
       for (let i = 0; i < readyImages.length; i++) {
         const img = readyImages[i]!;
-        // 転送量削減のため、アップロード前に幅1500px・品質0.8で再圧縮する
-        const blob = await compressImageForUpload(img.previewUrl, 1500, 0.8);
+        console.log("[Sokupa] アップロード前圧縮開始", {
+          imageId: img.id,
+          imageIndex: i + 1,
+          totalImages: readyImages.length,
+        });
+
+        let blob: Blob;
+        try {
+          // 転送量削減のため、アップロード前に長辺1500px・品質0.8で再圧縮する
+          blob = await compressImageForUpload(img.previewUrl, 1500, 0.8);
+        } catch (err) {
+          console.error("[Sokupa] アップロード前圧縮失敗", {
+            imageId: img.id,
+            imageIndex: i + 1,
+            error: err,
+          });
+          throw new Error(`画像の圧縮に失敗しました: ${getErrorDetail(err)}`);
+        }
+
+        console.log("[Sokupa] アップロード前圧縮完了", {
+          imageId: img.id,
+          imageIndex: i + 1,
+          sizeBytes: blob.size,
+          contentType: blob.type,
+        });
 
         const path = `uploads/${Date.now()}_${img.id}.jpg`;
         await uploadImageToStorage(path, blob);
@@ -279,7 +361,8 @@ export default function HomePageClient() {
         // ignore
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "解析中にエラーが発生しました");
+      console.error("[Sokupa] 画像アップロード・解析受付フロー失敗", err);
+      setError(getErrorDetail(err) || "解析中にエラーが発生しました");
     } finally {
       setIsAnalyzing(false);
       setProgress(null);

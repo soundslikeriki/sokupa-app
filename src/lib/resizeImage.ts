@@ -110,15 +110,19 @@ export async function resizeStandardImage(
  */
 export async function compressImageForUpload(
   dataUrl: string,
-  maxWidth: number = 1500,
+  maxDimension: number = 1500,
   quality: number = 0.8
 ): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
       let { width, height } = img;
-      if (width > maxWidth) {
-        const ratio = maxWidth / width;
+      if (width <= 0 || height <= 0) {
+        reject(new Error("画像サイズを取得できませんでした。"));
+        return;
+      }
+      if (width > maxDimension || height > maxDimension) {
+        const ratio = Math.min(maxDimension / width, maxDimension / height);
         width = Math.floor(width * ratio);
         height = Math.floor(height * ratio);
       }
@@ -162,7 +166,15 @@ export async function convertAndResizeForPreview(
   quality: number = 0.6
 ): Promise<string> {
   if (isHeicLike(file)) {
-    return convertHeicToJpegDataUrl(file, maxDimension, quality);
+    // iOS SafariではOS標準デコーダの方が高速かつ省メモリ。未対応環境のみWASMへ切り替える。
+    try {
+      return await resizeStandardImage(file, maxDimension, quality);
+    } catch (nativeError) {
+      console.log("[Sokupa] HEICネイティブ変換不可、WASM変換へ切り替え", {
+        error: nativeError,
+      });
+      return convertHeicToJpegDataUrl(file, maxDimension, quality);
+    }
   }
   return resizeStandardImage(file, maxDimension, quality);
 }
