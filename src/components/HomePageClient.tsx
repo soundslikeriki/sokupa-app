@@ -9,7 +9,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/ca
 import { Input } from "@/components/ui/input";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
-import { convertAndResizeForPreview } from "@/lib/resizeImage";
+import { compressImageForUpload, convertAndResizeForPreview } from "@/lib/resizeImage";
 import { supabase } from "@/lib/supabase";
 type ProcessedImage = {
   id: string;
@@ -25,6 +25,60 @@ function getCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
   const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
   return match ? decodeURIComponent(match[2]) : null;
+}
+
+function getUploadErrorStatus(err: unknown): number | undefined {
+  const anyErr = err as { statusCode?: string | number; status?: string | number } | null | undefined;
+  const raw = anyErr?.statusCode ?? anyErr?.status;
+  if (raw === undefined) return undefined;
+  const num = typeof raw === "string" ? Number(raw) : raw;
+  return Number.isFinite(num) ? num : undefined;
+}
+
+function buildUploadErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const status = getUploadErrorStatus(err);
+
+  const isNetworkError =
+    !status &&
+    (message.includes("Load failed") ||
+      message.includes("Failed to fetch") ||
+      message.includes("NetworkError") ||
+      message.toLowerCase().includes("network"));
+  if (isNetworkError) {
+    return "画像アップロードに失敗しました: 通信環境をご確認ください";
+  }
+
+  if (status === 401 || status === 403) {
+    return "画像アップロードに失敗しました: ログインし直してください";
+  }
+
+  return `画像アップロードに失敗しました: ${message}${status ? ` (HTTP ${status})` : ""}`;
+}
+
+// ネットワーク一時障害を想定し、失敗時に1回だけ自動リトライする
+async function uploadImageToStorage(path: string, blob: Blob): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const { error: upErr } = await supabase.storage.from("memo_uploads").upload(path, blob, {
+      contentType: "image/jpeg",
+      upsert: true,
+    });
+    if (!upErr) return;
+
+    lastError = upErr;
+    console.error("[Sokupa] 画像アップロードエラー", {
+      attempt,
+      path,
+      status: getUploadErrorStatus(upErr),
+      error: upErr,
+    });
+
+    if (attempt === 1) {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
+  }
+  throw new Error(buildUploadErrorMessage(lastError));
 }
 
 export default function HomePageClient() {
@@ -180,18 +234,11 @@ export default function HomePageClient() {
       const uploadedUrls: string[] = [];
       for (let i = 0; i < readyImages.length; i++) {
         const img = readyImages[i]!;
-        const base64 = img.base64Data as string;
-        const bin = atob(base64);
-        const bytes = new Uint8Array(bin.length);
-        for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
-        const blob = new Blob([bytes], { type: "image/jpeg" });
+        // 転送量削減のため、アップロード前に幅1500px・品質0.8で再圧縮する
+        const blob = await compressImageForUpload(img.previewUrl, 1500, 0.8);
 
         const path = `uploads/${Date.now()}_${img.id}.jpg`;
-        const { error: upErr } = await supabase.storage.from("memo_uploads").upload(path, blob, {
-          contentType: "image/jpeg",
-          upsert: true,
-        });
-        if (upErr) throw new Error(`画像アップロードに失敗しました: ${upErr.message}`);
+        await uploadImageToStorage(path, blob);
         const { data } = supabase.storage.from("memo_uploads").getPublicUrl(path);
         if (!data?.publicUrl) throw new Error("画像URLの生成に失敗しました");
         uploadedUrls.push(data.publicUrl);

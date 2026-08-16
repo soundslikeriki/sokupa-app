@@ -105,6 +105,55 @@ export async function resizeStandardImage(
 }
 
 /**
+ * DataURLをCanvas経由で再圧縮し、アップロード用のBlobとして返す。
+ * 低速回線でのアップロード失敗を減らすため転送量を削減する。
+ */
+export async function compressImageForUpload(
+  dataUrl: string,
+  maxWidth: number = 1500,
+  quality: number = 0.8
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > maxWidth) {
+        const ratio = maxWidth / width;
+        width = Math.floor(width * ratio);
+        height = Math.floor(height * ratio);
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Canvas 2D コンテキストを取得できませんでした。"));
+        return;
+      }
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error("画像の圧縮に失敗しました。"));
+            return;
+          }
+          resolve(blob);
+        },
+        "image/jpeg",
+        quality
+      );
+    };
+    img.onerror = () => reject(new Error("画像の読み込みに失敗しました。"));
+    img.src = dataUrl;
+  });
+}
+
+/**
  * ファイルを判別し、適切に軽量な JPEG Base64 (DataURL) に変換して返す。
  */
 export async function convertAndResizeForPreview(
