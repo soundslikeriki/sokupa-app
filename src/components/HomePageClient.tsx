@@ -14,8 +14,9 @@ import { supabase } from "@/lib/supabase";
 type ProcessedImage = {
   id: string;
   originalName: string;
+  originalType: string;
+  originalSize: number;
   previewUrl: string;
-  base64Data?: string;
   status: "converting" | "ready" | "error";
 };
 import { cn } from "@/lib/utils";
@@ -43,6 +44,25 @@ function getUploadErrorStatus(err: unknown): number | undefined {
   return Number.isFinite(num) ? num : undefined;
 }
 
+function getOriginalError(err: unknown): unknown {
+  if (!err || typeof err !== "object" || !("originalError" in err)) return undefined;
+  return (err as { originalError?: unknown }).originalError;
+}
+
+function getErrorCause(err: unknown): unknown {
+  if (!err || typeof err !== "object" || !("cause" in err)) return undefined;
+  return (err as { cause?: unknown }).cause;
+}
+
+function getErrorName(err: unknown): string | undefined {
+  if (err instanceof Error && err.name) return err.name;
+  if (err && typeof err === "object" && "name" in err) {
+    const name = (err as { name?: unknown }).name;
+    if (typeof name === "string" && name) return name;
+  }
+  return undefined;
+}
+
 function getErrorDetail(err: unknown): string {
   if (err instanceof Error && err.message) return err.message;
   if (typeof err === "string" && err) return err;
@@ -55,68 +75,153 @@ function getErrorDetail(err: unknown): string {
 
 function buildUploadErrorMessage(err: unknown): string {
   const message = getErrorDetail(err);
+  const originalMessage = getErrorDetail(getOriginalError(err));
   const status = getUploadErrorStatus(err);
-  const prefix = "Storageへのアップロードに失敗しました";
+  const networkMessage = `${message} ${originalMessage}`;
 
   const isNetworkError =
     !status &&
-    (message.includes("Load failed") ||
-      message.includes("Failed to fetch") ||
-      message.includes("NetworkError") ||
-      message.toLowerCase().includes("network"));
+    (networkMessage.includes("Load failed") ||
+      networkMessage.includes("Failed to fetch") ||
+      networkMessage.includes("NetworkError") ||
+      networkMessage.toLowerCase().includes("network") ||
+      networkMessage.toLowerCase().includes("fetch failed"));
   if (isNetworkError) {
-    return `${prefix}: 通信環境をご確認ください（${message}）`;
+    return "画像の保存先に接続できませんでした。時間をおいて再度お試しください。続く場合は管理者にお問い合わせください。";
   }
 
   if (status === 401 || status === 403) {
-    return `${prefix}（HTTP ${status}）: ログインし直してください`;
+    return "画像のアップロード権限を確認できませんでした。ログインし直して再度お試しください。";
   }
 
-  return `${prefix}${status ? `（HTTP ${status}）` : ""}: ${message}`;
+  if (status === 404) {
+    return "画像の保存先が見つかりませんでした。管理者にお問い合わせください。";
+  }
+
+  if (status === 400 || status === 413) {
+    return "画像データを送信できませんでした。画像を選び直して再度お試しください。";
+  }
+
+  if (status && status >= 500) {
+    return "画像の保存サービスで一時的な問題が発生しています。時間をおいて再度お試しください。";
+  }
+
+  return "画像のアップロードに失敗しました。時間をおいて再度お試しください。";
+}
+
+type UploadFileContext = {
+  originalName: string;
+  originalType: string;
+  originalSize: number;
+};
+
+function getStorageHost(): string {
+  try {
+    return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").host;
+  } catch {
+    return "invalid-storage-host";
+  }
+}
+
+function getStorageEndpoint(path: string): string {
+  try {
+    const baseUrl = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "");
+    return new URL(`storage/v1/object/memo_uploads/${path}`, `${baseUrl.href.replace(/\/$/, "")}/`).href;
+  } catch {
+    return "invalid-storage-endpoint";
+  }
 }
 
 // ネットワーク一時障害を想定し、失敗時に1回だけ自動リトライする
-async function uploadImageToStorage(path: string, blob: Blob): Promise<void> {
+async function uploadImageToStorage(path: string, blob: Blob, fileContext: UploadFileContext): Promise<void> {
   let lastError: unknown = null;
+  let lastFailureSource: "storage-sdk-error" | "thrown-exception" = "storage-sdk-error";
   for (let attempt = 1; attempt <= 2; attempt++) {
+    const attemptStartedAtMs = Date.now();
+    const uploadStartedAt = new Date(attemptStartedAtMs).toISOString();
     console.log("[Sokupa] Storageアップロード開始", {
+      stage: "storage-upload",
       attempt,
-      path,
-      sizeBytes: blob.size,
-      contentType: blob.type,
+      uploadStartedAt,
+      storageHost: getStorageHost(),
+      storageEndpoint: getStorageEndpoint(path),
+      bucket: "memo_uploads",
+      objectPath: path,
+      authorizationMode: "anon-key",
+      hasAnonKey: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
+      uploadFile: { type: blob.type, sizeBytes: blob.size },
+      originalFile: fileContext,
     });
 
     try {
       const { error: upErr } = await supabase.storage.from("memo_uploads").upload(path, blob, {
         contentType: "image/jpeg",
-        upsert: true,
+        upsert: false,
       });
       if (!upErr) {
         console.log("[Sokupa] Storageアップロード成功", {
+          stage: "storage-upload",
           attempt,
-          path,
-          sizeBytes: blob.size,
+          uploadStartedAt,
+          completedAt: new Date().toISOString(),
+          elapsedMs: Date.now() - attemptStartedAtMs,
+          storageHost: getStorageHost(),
+          storageEndpoint: getStorageEndpoint(path),
+          bucket: "memo_uploads",
+          objectPath: path,
+          uploadFile: { type: blob.type, sizeBytes: blob.size },
         });
         return;
       }
+      lastFailureSource = "storage-sdk-error";
       lastError = upErr;
     } catch (err) {
       // Safariのネットワーク失敗はSupabaseのerrorではなく例外として投げられる。
+      lastFailureSource = "thrown-exception";
       lastError = err;
     }
 
+    const originalError = getOriginalError(lastError);
+    const errorCause = getErrorCause(originalError) ?? getErrorCause(lastError);
     console.error("[Sokupa] Storageアップロード失敗", {
+      stage: "storage-upload",
       attempt,
-      path,
-      sizeBytes: blob.size,
-      status: getUploadErrorStatus(lastError),
-      error: lastError,
+      uploadStartedAt,
+      failedAt: new Date().toISOString(),
+      elapsedMs: Date.now() - attemptStartedAtMs,
+      failureSource: lastFailureSource,
+      storageHost: getStorageHost(),
+      storageEndpoint: getStorageEndpoint(path),
+      bucket: "memo_uploads",
+      objectPath: path,
+      authorizationMode: "anon-key",
+      hasAnonKey: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
+      online: typeof navigator === "undefined" ? undefined : navigator.onLine,
+      httpStatus: getUploadErrorStatus(lastError),
+      uploadFile: { type: blob.type, sizeBytes: blob.size },
+      originalFile: fileContext,
+      storageError: {
+        name: getErrorName(lastError),
+        message: getErrorDetail(lastError),
+      },
+      originalError: originalError
+        ? { name: getErrorName(originalError), message: getErrorDetail(originalError) }
+        : undefined,
+      errorCause: errorCause
+        ? { name: getErrorName(errorCause), message: getErrorDetail(errorCause) }
+        : undefined,
+      storageSdkError: lastFailureSource === "storage-sdk-error" ? lastError : undefined,
     });
 
     if (attempt === 1) {
       console.log("[Sokupa] Storageアップロードをリトライ", {
+        stage: "storage-upload-retry",
         nextAttempt: attempt + 1,
-        path,
+        previousAttemptStartedAt: uploadStartedAt,
+        storageHost: getStorageHost(),
+        storageEndpoint: getStorageEndpoint(path),
+        bucket: "memo_uploads",
+        objectPath: path,
       });
       await new Promise((resolve) => setTimeout(resolve, 800));
     }
@@ -143,7 +248,7 @@ export default function HomePageClient() {
   } | null>(null);
 
   const readyImages = useMemo(
-    () => images.filter((img) => img.status === "ready" && img.base64Data),
+    () => images.filter((img) => img.status === "ready" && img.previewUrl),
     [images],
   );
 
@@ -220,6 +325,8 @@ export default function HomePageClient() {
     const newImages: ProcessedImage[] = imageFiles.map((file) => ({
       id: Math.random().toString(36).slice(2) + Date.now().toString(36),
       originalName: file.name,
+      originalType: file.type || "unknown",
+      originalSize: file.size,
       previewUrl: "",
       status: "converting" as const,
     }));
@@ -251,7 +358,6 @@ export default function HomePageClient() {
                 ? {
                     ...img,
                     previewUrl: dataUrl,
-                    base64Data: dataUrl.replace(/^data:image\/jpeg;base64,/, ""),
                     status: "ready",
                   }
                 : img
@@ -320,7 +426,11 @@ export default function HomePageClient() {
         });
 
         const path = `uploads/${Date.now()}_${img.id}.jpg`;
-        await uploadImageToStorage(path, blob);
+        await uploadImageToStorage(path, blob, {
+          originalName: img.originalName,
+          originalType: img.originalType,
+          originalSize: img.originalSize,
+        });
         const { data } = supabase.storage.from("memo_uploads").getPublicUrl(path);
         if (!data?.publicUrl) throw new Error("画像URLの生成に失敗しました");
         uploadedUrls.push(data.publicUrl);
