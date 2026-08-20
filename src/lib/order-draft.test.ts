@@ -1,0 +1,153 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import {
+  areaResultToOrderDraftInput,
+  buildOrderDraftText,
+  calculateOrderDraftTotals,
+  createOrderDraftItem,
+  dimensionItemToOrderDraftInput,
+  findDuplicateOrderDraftItem,
+  manualOrderDraftInput,
+  mergeOrderDraftItem,
+  normalizeOrderDraftProductCode,
+  removeOrderDraftItem,
+  updateOrderDraftItem,
+} from "./order-draft";
+import type { MemoProductItem, OrderDraftItem } from "../types";
+
+const dimensionSource: MemoProductItem = {
+  product_code: "TH-34486",
+  manufacturer: "サンゲツ",
+  entries: [{ original_formula: "2.7 x 10", length_m: 2.7, quantity: 10, subtotal_m: 27 }],
+  total_m: 27,
+  order_quantity: 32,
+  loss_rate_percent: 15,
+  notes: "リピート注意",
+};
+
+function draft(overrides: Partial<OrderDraftItem> = {}): OrderDraftItem {
+  return {
+    id: "draft-1",
+    productCode: "TH34486",
+    quantity: 20,
+    unit: "m",
+    sourceType: "dimension",
+    sourceLabel: "寸法計算",
+    ...overrides,
+  };
+}
+
+test("dimension conversion copies the final quantity without mutating its source", () => {
+  const converted = createOrderDraftItem(dimensionItemToOrderDraftInput(dimensionSource), "dimension-1");
+  assert.equal(converted.productCode, "TH34486");
+  assert.equal(converted.quantity, 32);
+  assert.equal(converted.manufacturer, "サンゲツ");
+  assert.equal(converted.note, "リピート注意");
+
+  const edited = updateOrderDraftItem([converted], converted.id, { quantity: 99 })[0];
+  assert.equal(edited.quantity, 99);
+  assert.equal(dimensionSource.order_quantity, 32);
+});
+
+test("area conversion supports product codes, manufacturer data, and blank product codes", () => {
+  const withCode = createOrderDraftItem(
+    areaResultToOrderDraftInput({ productCode: "re-55801", recommendedMeters: 223, manufacturer: "サンゲツ" }),
+    "area-1",
+  );
+  assert.equal(withCode.productCode, "RE55801");
+  assert.equal(withCode.quantity, 223);
+  assert.equal(withCode.manufacturer, "サンゲツ");
+  assert.equal(withCode.sourceType, "area");
+
+  const withoutCode = createOrderDraftItem(
+    areaResultToOrderDraftInput({ recommendedMeters: 18 }),
+    "area-2",
+  );
+  assert.equal(withoutCode.productCode, "");
+  assert.equal(withoutCode.quantity, 18);
+});
+
+test("manual conversion accepts blank codes and editable order fields", () => {
+  const item = createOrderDraftItem(
+    manualOrderDraftInput({ productCode: "", quantity: 2, unit: "本", note: "予備" }),
+    "manual-1",
+  );
+  assert.equal(item.productCode, "");
+  assert.equal(item.quantity, 2);
+  assert.equal(item.unit, "本");
+  assert.equal(item.note, "予備");
+  assert.equal(item.sourceType, "manual");
+});
+
+test("duplicate matching normalizes product-code variations but ignores blank placeholders", () => {
+  const existing = [draft({ productCode: "TH34486" })];
+  assert.equal(normalizeOrderDraftProductCode(" th-34486 "), "TH34486");
+  assert.equal(findDuplicateOrderDraftItem(existing, draft({ id: "new", productCode: "th-34486" }))?.id, "draft-1");
+  assert.equal(findDuplicateOrderDraftItem(existing, draft({ id: "blank", productCode: "" })), undefined);
+  assert.equal(findDuplicateOrderDraftItem(existing, draft({ id: "unspecified", productCode: "未指定" })), undefined);
+});
+
+test("duplicate resolution can merge, keep separate, or cancel", () => {
+  const existing = draft({ quantity: 150, note: "既存", sourceLabel: "寸法計算" });
+  const incoming = draft({ id: "incoming", quantity: 70, note: "今回", sourceType: "area", sourceLabel: "㎡計算" });
+
+  const merged = mergeOrderDraftItem([existing], existing.id, incoming);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].quantity, 220);
+  assert.equal(merged[0].note, "既存 / 今回");
+  assert.equal(merged[0].sourceLabel, "寸法計算 / ㎡計算");
+
+  const separate = [existing, incoming];
+  assert.equal(separate.length, 2);
+  const cancelled = [existing];
+  assert.deepEqual(cancelled, [existing]);
+});
+
+test("merge refuses to add quantities with different units", () => {
+  const existing = draft({ quantity: 20, unit: "m" });
+  const incoming = draft({ id: "incoming", quantity: 2, unit: "本" });
+  assert.equal(mergeOrderDraftItem([existing], existing.id, incoming)[0].quantity, 20);
+});
+
+test("draft fields can be edited and rows can be deleted independently", () => {
+  const edited = updateOrderDraftItem([draft()], "draft-1", {
+    productCode: "RE55801",
+    quantity: 25.5,
+    unit: "巻",
+    manufacturer: "サンゲツ",
+    note: "確認済み",
+  });
+  assert.equal(edited[0].productCode, "RE55801");
+  assert.equal(edited[0].quantity, 25.5);
+  assert.equal(edited[0].unit, "巻");
+  assert.equal(removeOrderDraftItem(edited, "draft-1").length, 0);
+});
+
+test("copy text handles empty, single, multiple, edited, and deleted lists", () => {
+  assert.equal(buildOrderDraftText([]), "【発注リスト】\n\n（材料なし）");
+
+  const first = draft({ quantity: 20 });
+  assert.equal(buildOrderDraftText([first]), "【発注リスト】\n\n・TH34486 / 20m\n\n合計：20m");
+
+  const second = draft({ id: "draft-2", productCode: "RE55801", quantity: 25 });
+  const edited = updateOrderDraftItem([first, second], "draft-1", { quantity: 23 });
+  assert.match(buildOrderDraftText(edited), /・TH34486 \/ 23m/);
+  assert.match(buildOrderDraftText(edited), /合計：48m/);
+  assert.doesNotMatch(buildOrderDraftText(removeOrderDraftItem(edited, "draft-2")), /RE55801/);
+});
+
+test("copy text and totals keep mixed units separate and label blank product codes", () => {
+  const items = [
+    draft({ productCode: "", quantity: 10 }),
+    draft({ id: "draft-2", productCode: "ROLL1", quantity: 2, unit: "本" }),
+  ];
+  assert.deepEqual(calculateOrderDraftTotals(items), [
+    { unit: "m", quantity: 10 },
+    { unit: "本", quantity: 2 },
+  ]);
+  const text = buildOrderDraftText(items);
+  assert.match(text, /品番未入力 \/ 10m/);
+  assert.match(text, /合計：10m/);
+  assert.match(text, /　　：2本/);
+});

@@ -1,14 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
-import { Calculator, Loader2, Ruler, Upload, X } from "lucide-react";
+import { Calculator, ClipboardList, Loader2, Ruler, Upload, X } from "lucide-react";
 
 import { AreaCalculator } from "@/components/AreaCalculator";
+import { OrderDraftList, type PendingOrderDraftDuplicate } from "@/components/OrderDraftList";
 import { OrderList } from "@/components/OrderList";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
+import {
+  createOrderDraftItem,
+  findDuplicateOrderDraftItem,
+  mergeOrderDraftItem,
+  removeOrderDraftItem,
+  updateOrderDraftItem,
+} from "@/lib/order-draft";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import { compressImageForUpload, convertAndResizeForPreview } from "@/lib/resizeImage";
 import { supabase } from "@/lib/supabase";
@@ -21,7 +29,16 @@ type ProcessedImage = {
   status: "converting" | "ready" | "error";
 };
 import { cn } from "@/lib/utils";
-import type { ParsedMemoPayload } from "@/types";
+import type { OrderDraftItem, OrderDraftItemInput, ParsedMemoPayload } from "@/types";
+
+type CalculationMode = "dimensions" | "area" | "order-draft";
+
+function createOrderDraftId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `draft-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
 
 function getCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
@@ -241,8 +258,11 @@ export default function HomePageClient() {
   const [parsed, setParsed] = useState<ParsedMemoPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobAccepted, setJobAccepted] = useState<{ jobId: string } | null>(null);
-  const [calculationMode, setCalculationMode] = useState<"dimensions" | "area">("dimensions");
+  const [calculationMode, setCalculationMode] = useState<CalculationMode>("dimensions");
   const [areaCalculatorMounted, setAreaCalculatorMounted] = useState(false);
+  const [orderDraftItems, setOrderDraftItems] = useState<OrderDraftItem[]>([]);
+  const [pendingOrderDraftDuplicate, setPendingOrderDraftDuplicate] =
+    useState<PendingOrderDraftDuplicate | null>(null);
   const [jobUi, setJobUi] = useState<{
     status: "queued" | "running" | "done" | "failed";
     done: number;
@@ -254,6 +274,56 @@ export default function HomePageClient() {
     () => images.filter((img) => img.status === "ready" && img.previewUrl),
     [images],
   );
+
+  const requestAddToOrderDraft = useCallback(
+    (input: OrderDraftItemInput) => {
+      const incoming = createOrderDraftItem(input, createOrderDraftId());
+      const duplicate = findDuplicateOrderDraftItem(orderDraftItems, incoming);
+      if (duplicate) {
+        setPendingOrderDraftDuplicate({ existingId: duplicate.id, incoming });
+      } else {
+        setOrderDraftItems((current) => [...current, incoming]);
+        setPendingOrderDraftDuplicate(null);
+      }
+      setCalculationMode("order-draft");
+    },
+    [orderDraftItems],
+  );
+
+  const updateOrderDraft = useCallback(
+    (
+      id: string,
+      patch: Partial<Pick<OrderDraftItem, "productCode" | "quantity" | "unit" | "manufacturer" | "note">>,
+    ) => {
+      setOrderDraftItems((current) => updateOrderDraftItem(current, id, patch));
+    },
+    [],
+  );
+
+  const deleteOrderDraft = useCallback((id: string) => {
+    setOrderDraftItems((current) => removeOrderDraftItem(current, id));
+    setPendingOrderDraftDuplicate((current) =>
+      current?.existingId === id ? null : current,
+    );
+  }, []);
+
+  const mergePendingOrderDraft = useCallback(() => {
+    if (!pendingOrderDraftDuplicate) return;
+    setOrderDraftItems((current) =>
+      mergeOrderDraftItem(
+        current,
+        pendingOrderDraftDuplicate.existingId,
+        pendingOrderDraftDuplicate.incoming,
+      ),
+    );
+    setPendingOrderDraftDuplicate(null);
+  }, [pendingOrderDraftDuplicate]);
+
+  const keepPendingOrderDraftSeparate = useCallback(() => {
+    if (!pendingOrderDraftDuplicate) return;
+    setOrderDraftItems((current) => [...current, pendingOrderDraftDuplicate.incoming]);
+    setPendingOrderDraftDuplicate(null);
+  }, [pendingOrderDraftDuplicate]);
 
   // LINEログイン情報（通知先）
   useEffect(() => {
@@ -623,7 +693,7 @@ export default function HomePageClient() {
       <div
         role="tablist"
         aria-label="クロス数量の計算方法"
-        className="grid grid-cols-2 gap-1 rounded-lg border border-black/5 bg-black/5 p-1 dark:border-white/5 dark:bg-white/5"
+        className="grid grid-cols-3 gap-1 rounded-lg border border-black/5 bg-black/5 p-1 dark:border-white/5 dark:bg-white/5"
       >
         <button
           type="button"
@@ -639,7 +709,8 @@ export default function HomePageClient() {
           onClick={() => setCalculationMode("dimensions")}
         >
           <Ruler className="h-4 w-4 shrink-0" />
-          寸法から計算
+          <span className="sm:hidden">寸法計算</span>
+          <span className="hidden sm:inline">寸法から計算</span>
         </button>
         <button
           type="button"
@@ -658,7 +729,29 @@ export default function HomePageClient() {
           }}
         >
           <Calculator className="h-4 w-4 shrink-0" />
-          ㎡から計算
+          <span className="sm:hidden">㎡計算</span>
+          <span className="hidden sm:inline">㎡から計算</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={calculationMode === "order-draft"}
+          aria-controls="order-draft-panel"
+          className={cn(
+            "flex min-h-11 min-w-0 items-center justify-center gap-1.5 rounded-md px-1.5 text-xs font-bold transition-colors sm:gap-2 sm:px-2 sm:text-sm",
+            calculationMode === "order-draft"
+              ? "bg-white text-foreground shadow-sm dark:bg-black"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          onClick={() => setCalculationMode("order-draft")}
+        >
+          <ClipboardList className="h-4 w-4 shrink-0" />
+          <span className="truncate">発注リスト</span>
+          {orderDraftItems.length > 0 ? (
+            <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-violet-600 px-1 text-[10px] text-white">
+              {orderDraftItems.length}
+            </span>
+          ) : null}
         </button>
       </div>
 
@@ -821,14 +914,28 @@ export default function HomePageClient() {
             needs_review_any: nextItems.some((i) => i.needs_review),
           }))
         }
+        onAddToOrderDraft={requestAddToOrderDraft}
       />
       </section>
 
       {areaCalculatorMounted ? (
         <section id="area-calculator-panel" role="tabpanel" hidden={calculationMode !== "area"}>
-          <AreaCalculator />
+          <AreaCalculator onAddToOrderDraft={requestAddToOrderDraft} />
         </section>
       ) : null}
+
+      <section id="order-draft-panel" role="tabpanel" hidden={calculationMode !== "order-draft"}>
+        <OrderDraftList
+          items={orderDraftItems}
+          pendingDuplicate={pendingOrderDraftDuplicate}
+          onUpdate={updateOrderDraft}
+          onDelete={deleteOrderDraft}
+          onManualAdd={requestAddToOrderDraft}
+          onMergeDuplicate={mergePendingOrderDraft}
+          onKeepDuplicateSeparate={keepPendingOrderDraftSeparate}
+          onCancelDuplicate={() => setPendingOrderDraftDuplicate(null)}
+        />
+      </section>
     </main>
   );
 }

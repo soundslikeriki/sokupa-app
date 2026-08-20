@@ -8,6 +8,7 @@ import {
   ChevronUp,
   Globe,
   Loader2,
+  ListPlus,
   Minus,
   Plus,
   Search,
@@ -25,6 +26,8 @@ import {
   WIDE_WALLPAPER_WIDTH_CM,
 } from "@/lib/area-calculation";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
+import { areaResultToOrderDraftInput } from "@/lib/order-draft";
+import type { OrderDraftItemInput } from "@/types";
 
 type WidthMode = "standard" | "wide" | "custom" | "catalog";
 
@@ -41,6 +44,10 @@ type WallpaperLookupData = {
   is_live_searched?: boolean;
 };
 
+type AreaCalculatorProps = {
+  onAddToOrderDraft?: (item: OrderDraftItemInput) => void;
+};
+
 function formatNumber(value: number, maximumFractionDigits = 2): string {
   return value.toLocaleString("ja-JP", { maximumFractionDigits });
 }
@@ -49,7 +56,7 @@ function hasMeaningfulText(value: unknown): value is string {
   return typeof value === "string" && Boolean(value.trim()) && value.trim() !== "不明";
 }
 
-export function AreaCalculator() {
+export function AreaCalculator({ onAddToOrderDraft }: AreaCalculatorProps) {
   const [areaInput, setAreaInput] = useState("");
   const [productCode, setProductCode] = useState("");
   const [widthMode, setWidthMode] = useState<WidthMode>("standard");
@@ -333,6 +340,29 @@ export function AreaCalculator() {
               <div><dt className="text-muted-foreground">ロス込み必要m</dt><dd className="mt-0.5 font-bold tabular-nums">{formatNumber(calculation.metersWithLoss)}m</dd></div>
               <div><dt className="text-muted-foreground">推奨発注m</dt><dd className="mt-0.5 font-bold tabular-nums text-emerald-700 dark:text-emerald-300">{formatNumber(calculation.recommendedMeters, 0)}m</dd></div>
             </dl>
+            {onAddToOrderDraft ? (
+              <div className="border-t border-emerald-500/15 px-4 py-3 sm:px-5">
+                <Button
+                  type="button"
+                  className="min-h-11 w-full gap-2 bg-emerald-600 font-bold hover:bg-emerald-700 sm:w-auto"
+                  onClick={() => {
+                    const normalizedCode = normalizeWallpaperProductCode(productCode);
+                    const currentLookup = lookupData?.product_code === normalizedCode ? lookupData : null;
+                    onAddToOrderDraft(
+                      areaResultToOrderDraftInput({
+                        productCode: normalizedCode,
+                        recommendedMeters: calculation.recommendedMeters,
+                        manufacturer: currentLookup?.manufacturer,
+                        note: currentLookup?.notes,
+                      }),
+                    );
+                  }}
+                >
+                  <ListPlus className="h-4 w-4" />
+                  発注リストに追加
+                </Button>
+              </div>
+            ) : null}
           </div>
         ) : null}
 

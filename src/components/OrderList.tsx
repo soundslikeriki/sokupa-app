@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp } from "lucide-react";
+import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ListPlus } from "lucide-react";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import {
   areAllCodesCollapsed,
@@ -14,9 +14,10 @@ import {
   toggleCollapsedCode,
 } from "@/lib/collapse-state";
 import { buildOrderRequestText } from "@/lib/order-text";
+import { dimensionItemToOrderDraftInput } from "@/lib/order-draft";
 import { dedupeSlashDelimited } from "@/lib/dedupeSlashList";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
-import type { MemoProductItem } from "@/types";
+import type { MemoProductItem, OrderDraftItemInput } from "@/types";
 
 const MFG_ORDER = ["サンゲツ", "リリカラ", "ルノン", "トキワ", "シンコール", "東リ", "エービーシー商会", "不明", "その他"] as const;
 const DEFAULT_WALLPAPER_WIDTH_M = 0.92;
@@ -53,6 +54,7 @@ type OrderListProps = {
   siteName?: string;
   needs_review_any?: boolean;
   onItemsChange?: (items: MemoProductItem[]) => void;
+  onAddToOrderDraft?: (item: OrderDraftItemInput) => void;
 };
 
 type ItemOverride = {
@@ -104,7 +106,7 @@ function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
   };
 }
 
-export function OrderList({ items, notes, siteName = "", needs_review_any, onItemsChange }: OrderListProps) {
+export function OrderList({ items, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft }: OrderListProps) {
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
   const [lossRates, setLossRates] = useState<Record<string, number | "">>({});
@@ -838,6 +840,18 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                           <span>発注 <strong className="text-lg text-indigo-600 dark:text-indigo-400">{product.order_quantity}m</strong></span>
                         </div>
                       </div>
+                      {onAddToOrderDraft ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-11 shrink-0 gap-1.5 rounded-lg bg-white px-2.5 text-xs font-bold dark:bg-black"
+                          onClick={() => onAddToOrderDraft(dimensionItemToOrderDraftInput(product))}
+                          title="発注リストに追加"
+                        >
+                          <ListPlus className="h-4 w-4" />
+                          追加
+                        </Button>
+                      ) : null}
                       <Button
                         type="button"
                         variant="outline"
@@ -918,17 +932,30 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                         </Badge>
                       )}
                     </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="h-11 w-11 shrink-0 self-end rounded-lg bg-white p-0 dark:bg-black sm:self-start"
-                      onClick={() => setCollapsedCodes((current) => toggleCollapsedCode(current, product.product_code))}
-                      aria-expanded={true}
-                      aria-label={`${product.product_code} の詳細を省略`}
-                    >
-                      <ChevronUp className="h-5 w-5" />
-                    </Button>
+                    <div className="flex shrink-0 items-center gap-2 self-end sm:self-start">
+                      {onAddToOrderDraft ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-11 gap-2 rounded-lg bg-white px-3 text-xs font-bold dark:bg-black sm:text-sm"
+                          onClick={() => onAddToOrderDraft(dimensionItemToOrderDraftInput(product))}
+                        >
+                          <ListPlus className="h-4 w-4" />
+                          発注リストに追加
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
+                        onClick={() => setCollapsedCodes((current) => toggleCollapsedCode(current, product.product_code))}
+                        aria-expanded={true}
+                        aria-label={`${product.product_code} の詳細を省略`}
+                      >
+                        <ChevronUp className="h-5 w-5" />
+                      </Button>
+                    </div>
                     <div className="grid w-full gap-2 self-start sm:w-[25rem] sm:self-auto">
                       <div className="grid w-full grid-cols-[4.5rem_2.75rem_minmax(4.25rem,1fr)_1.5rem_2.75rem] items-center gap-2 rounded-xl border border-black/5 bg-black/5 p-1.5 dark:bg-white/5 sm:grid-cols-[5rem_2.75rem_minmax(5rem,1fr)_1.75rem_2.75rem]">
                         <span className="pl-2 text-[10px] font-medium opacity-60 sm:text-xs">ロス率</span>

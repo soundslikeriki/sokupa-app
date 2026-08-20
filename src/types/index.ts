@@ -55,3 +55,20 @@ export type ParsedMemoPayload = {
   /** いずれかの品番で要確認が立っている */
   needs_review_any?: boolean;
 };
+
+export type OrderDraftSourceType = "dimension" | "area" | "manual";
+
+/** 計算結果から切り離した、最終発注用の軽量な下書き */
+export type OrderDraftItem = {
+  id: string;
+  productCode: string;
+  quantity: number;
+  unit: string;
+  manufacturer?: string;
+  note?: string;
+  sourceType: OrderDraftSourceType;
+  sourceLabel: string;
+  sourceRef?: string;
+};
+
+export type OrderDraftItemInput = Omit<OrderDraftItem, "id">;
