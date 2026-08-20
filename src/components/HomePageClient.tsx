@@ -981,8 +981,10 @@ export default function HomePageClient() {
       <section id="order-draft-panel" role="tabpanel" hidden={calculationMode !== "order-draft"}>
         <OrderDraftList
           items={orderDraftItems}
+          siteName={siteName}
           pendingDuplicate={pendingOrderDraftDuplicate}
           onUpdate={updateOrderDraft}
+          onSiteNameChange={setSiteName}
           onDelete={deleteOrderDraft}
           onManualAdd={requestAddToOrderDraft}
           onMergeDuplicate={mergePendingOrderDraft}

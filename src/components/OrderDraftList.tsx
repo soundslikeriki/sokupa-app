@@ -31,11 +31,13 @@ export type PendingOrderDraftDuplicate = {
 
 type OrderDraftListProps = {
   items: OrderDraftItem[];
+  siteName: string;
   pendingDuplicate: PendingOrderDraftDuplicate | null;
   onUpdate: (
     id: string,
-    patch: Partial<Pick<OrderDraftItem, "productCode" | "quantity" | "unit" | "manufacturer" | "note">>,
+    patch: Partial<Pick<OrderDraftItem, "productCode" | "quantity" | "unit">>,
   ) => void;
+  onSiteNameChange: (siteName: string) => void;
   onDelete: (id: string) => void;
   onManualAdd: (input: OrderDraftItemInput) => void;
   onMergeDuplicate: () => void;
@@ -53,8 +55,10 @@ const SOURCE_STYLES: Record<OrderDraftSourceType, string> = {
 
 export function OrderDraftList({
   items,
+  siteName,
   pendingDuplicate,
   onUpdate,
+  onSiteNameChange,
   onDelete,
   onManualAdd,
   onMergeDuplicate,
@@ -65,12 +69,10 @@ export function OrderDraftList({
   const [manualProductCode, setManualProductCode] = useState("");
   const [manualQuantity, setManualQuantity] = useState("");
   const [manualUnit, setManualUnit] = useState("m");
-  const [manualManufacturer, setManualManufacturer] = useState("");
-  const [manualNote, setManualNote] = useState("");
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
   const totals = useMemo(() => calculateOrderDraftTotals(items), [items]);
-  const copyText = useMemo(() => buildOrderDraftText(items), [items]);
+  const copyText = useMemo(() => buildOrderDraftText(items, siteName), [items, siteName]);
   const duplicateExisting = pendingDuplicate
     ? items.find((item) => item.id === pendingDuplicate.existingId)
     : undefined;
@@ -88,22 +90,18 @@ export function OrderDraftList({
         productCode: manualProductCode,
         quantity,
         unit: manualUnit,
-        manufacturer: manualManufacturer,
-        note: manualNote,
       }),
     );
     setManualProductCode("");
     setManualQuantity("");
     setManualUnit("m");
-    setManualManufacturer("");
-    setManualNote("");
     setManualOpen(false);
   };
 
   const copyDraft = async () => {
     if (items.length === 0) return;
     try {
-      await navigator.clipboard.writeText(copyText);
+      await navigator.clipboard.writeText(buildOrderDraftText(items, siteName));
       setCopyState("copied");
       window.setTimeout(() => setCopyState("idle"), 1800);
     } catch {
@@ -128,6 +126,18 @@ export function OrderDraftList({
           </div>
         </CardHeader>
         <CardContent className="space-y-4 px-3 py-4 sm:px-6 sm:py-5">
+          <div>
+            <label htmlFor="order-draft-site-name" className="mb-1.5 block text-sm font-bold">
+              現場名（任意）
+            </label>
+            <Input
+              id="order-draft-site-name"
+              value={siteName}
+              onChange={(event) => onSiteNameChange(event.target.value)}
+              className="h-11 bg-white dark:bg-black"
+              placeholder="例: 渋谷区〇〇マンション"
+            />
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             {totals.length > 0 ? (
               totals.map((total) => (
@@ -226,16 +236,6 @@ export function OrderDraftList({
                 </div>
               </div>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <label htmlFor="manual-order-manufacturer" className="mb-1 block text-xs font-bold">メーカー（任意）</label>
-                <Input id="manual-order-manufacturer" value={manualManufacturer} onChange={(event) => setManualManufacturer(event.target.value)} className="h-11 bg-white dark:bg-black" />
-              </div>
-              <div>
-                <label htmlFor="manual-order-note" className="mb-1 block text-xs font-bold">備考（任意）</label>
-                <Input id="manual-order-note" value={manualNote} onChange={(event) => setManualNote(event.target.value)} className="h-11 bg-white dark:bg-black" />
-              </div>
-            </div>
             <Button type="button" className="min-h-11 w-full gap-2 sm:w-auto" disabled={!Number.isFinite(Number(manualQuantity)) || Number(manualQuantity) <= 0} onClick={submitManual}>
               <Plus className="h-4 w-4" />
               発注リストに追加
@@ -275,10 +275,6 @@ export function OrderDraftList({
                   </select>
                 </div>
               </div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <Input value={item.manufacturer || ""} onChange={(event) => onUpdate(item.id, { manufacturer: event.target.value })} className="h-10 bg-white text-sm dark:bg-black" placeholder="メーカー（任意）" aria-label={`${item.productCode || "品番未入力"}のメーカー`} />
-                <Input value={item.note || ""} onChange={(event) => onUpdate(item.id, { note: event.target.value })} className="h-10 bg-white text-sm dark:bg-black" placeholder="備考（任意）" aria-label={`${item.productCode || "品番未入力"}の備考`} />
-              </div>
             </CardContent>
           </Card>
         ))}
@@ -287,7 +283,7 @@ export function OrderDraftList({
       <Card className="border-violet-500/20 bg-violet-500/[0.05]">
         <CardHeader className="px-3 pb-2 pt-4 sm:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <CardTitle className="text-sm font-bold">この内容でコピーされます</CardTitle>
+            <CardTitle className="text-sm font-bold">現場名・日時を含めてコピーされます</CardTitle>
             <Button type="button" className="min-h-11 gap-2 bg-violet-600 font-bold hover:bg-violet-700" disabled={items.length === 0} onClick={() => void copyDraft()}>
               {copyState === "copied" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               {copyState === "copied" ? "コピーしました" : "発注リストをコピー"}

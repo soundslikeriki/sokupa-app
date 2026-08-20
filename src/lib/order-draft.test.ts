@@ -162,19 +162,26 @@ test("draft fields can be edited and rows can be deleted independently", () => {
 });
 
 test("copy text handles empty, single, multiple, edited, and deleted lists", () => {
-  assert.equal(buildOrderDraftText([]), "【発注リスト】\n\n（材料なし）");
+  const now = new Date("2026-08-20T02:34:00Z");
+  assert.equal(
+    buildOrderDraftText([], "", now),
+    "現場名：未入力\n日時：2026年8月20日 11:34\n\n【発注リスト】\n（品番なし）",
+  );
 
   const first = draft({ quantity: 20 });
-  assert.equal(buildOrderDraftText([first]), "【発注リスト】\n\n・TH34486 / 20m\n\n合計：20m");
+  assert.equal(
+    buildOrderDraftText([first], "新宿マンション", now),
+    "現場名：新宿マンション\n日時：2026年8月20日 11:34\n\n【発注リスト】\n・品番：TH34486 / 数量：20m",
+  );
 
   const second = draft({ id: "draft-2", productCode: "RE55801", quantity: 25 });
   const edited = updateOrderDraftItem([first, second], "draft-1", { quantity: 23 });
-  assert.match(buildOrderDraftText(edited), /・TH34486 \/ 23m/);
-  assert.match(buildOrderDraftText(edited), /合計：48m/);
-  assert.doesNotMatch(buildOrderDraftText(removeOrderDraftItem(edited, "draft-2")), /RE55801/);
+  assert.match(buildOrderDraftText(edited, "現場A", now), /・品番：TH34486 \/ 数量：23m/);
+  assert.match(buildOrderDraftText(edited, "現場A", now), /・品番：RE55801 \/ 数量：25m/);
+  assert.doesNotMatch(buildOrderDraftText(removeOrderDraftItem(edited, "draft-2"), "現場A", now), /RE55801/);
 });
 
-test("copy text and totals keep mixed units separate and label blank product codes", () => {
+test("copy text uses the legacy template while totals keep mixed units separate", () => {
   const items = [
     draft({ productCode: "", quantity: 10 }),
     draft({ id: "draft-2", productCode: "ROLL1", quantity: 2, unit: "本" }),
@@ -183,8 +190,10 @@ test("copy text and totals keep mixed units separate and label blank product cod
     { unit: "m", quantity: 10 },
     { unit: "本", quantity: 2 },
   ]);
-  const text = buildOrderDraftText(items);
-  assert.match(text, /品番未入力 \/ 10m/);
-  assert.match(text, /合計：10m/);
-  assert.match(text, /　　：2本/);
+  const text = buildOrderDraftText(items, "現場B", new Date("2026-08-20T02:34:00Z"));
+  assert.match(text, /現場名：現場B/);
+  assert.match(text, /日時：2026年8月20日 11:34/);
+  assert.match(text, /・品番：不明 \/ 数量：10m/);
+  assert.match(text, /・品番：ROLL1 \/ 数量：2本/);
+  assert.doesNotMatch(text, /合計：/);
 });

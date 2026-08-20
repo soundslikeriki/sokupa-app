@@ -4,6 +4,7 @@ import type {
   OrderDraftItemInput,
   OrderDraftSourceType,
 } from "@/types";
+import { buildOrderTextTemplate } from "@/lib/order-text";
 
 const SOURCE_LABELS: Record<OrderDraftSourceType, string> = {
   dimension: "寸法計算",
@@ -201,24 +202,17 @@ export function formatOrderDraftQuantity(value: number): string {
   return value.toLocaleString("ja-JP", { maximumFractionDigits: 2 });
 }
 
-export function buildOrderDraftText(items: readonly OrderDraftItem[]): string {
-  const lines = ["【発注リスト】", ""];
-  if (items.length === 0) {
-    lines.push("（材料なし）");
-    return lines.join("\n");
-  }
-
-  for (const item of items) {
-    lines.push(
-      `・${item.productCode || "品番未入力"} / ${formatOrderDraftQuantity(item.quantity)}${item.unit}`,
-    );
-  }
-
-  lines.push("");
-  const totals = calculateOrderDraftTotals(items);
-  totals.forEach((total, index) => {
-    const label = index === 0 ? "合計" : "　　";
-    lines.push(`${label}：${formatOrderDraftQuantity(total.quantity)}${total.unit}`);
-  });
-  return lines.join("\n");
+export function buildOrderDraftText(
+  items: readonly OrderDraftItem[],
+  siteName?: string,
+  now = new Date(),
+): string {
+  return buildOrderTextTemplate(
+    items.map((item) => ({
+      productCode: item.productCode,
+      quantityText: `${formatOrderDraftQuantity(item.quantity)}${item.unit}`,
+    })),
+    siteName,
+    now,
+  );
 }
