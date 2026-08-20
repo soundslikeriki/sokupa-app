@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
-import { Loader2, Upload, X } from "lucide-react";
+import { Calculator, Loader2, Ruler, Upload, X } from "lucide-react";
 
+import { AreaCalculator } from "@/components/AreaCalculator";
 import { OrderList } from "@/components/OrderList";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -240,6 +241,8 @@ export default function HomePageClient() {
   const [parsed, setParsed] = useState<ParsedMemoPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobAccepted, setJobAccepted] = useState<{ jobId: string } | null>(null);
+  const [calculationMode, setCalculationMode] = useState<"dimensions" | "area">("dimensions");
+  const [areaCalculatorMounted, setAreaCalculatorMounted] = useState(false);
   const [jobUi, setJobUi] = useState<{
     status: "queued" | "running" | "done" | "failed";
     done: number;
@@ -617,6 +620,55 @@ export default function HomePageClient() {
         </div>
       </header>
 
+      <div
+        role="tablist"
+        aria-label="クロス数量の計算方法"
+        className="grid grid-cols-2 gap-1 rounded-lg border border-black/5 bg-black/5 p-1 dark:border-white/5 dark:bg-white/5"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={calculationMode === "dimensions"}
+          aria-controls="dimensions-calculator-panel"
+          className={cn(
+            "flex min-h-11 items-center justify-center gap-2 rounded-md px-2 text-xs font-bold transition-colors sm:text-sm",
+            calculationMode === "dimensions"
+              ? "bg-white text-foreground shadow-sm dark:bg-black"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          onClick={() => setCalculationMode("dimensions")}
+        >
+          <Ruler className="h-4 w-4 shrink-0" />
+          寸法から計算
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={calculationMode === "area"}
+          aria-controls="area-calculator-panel"
+          className={cn(
+            "flex min-h-11 items-center justify-center gap-2 rounded-md px-2 text-xs font-bold transition-colors sm:text-sm",
+            calculationMode === "area"
+              ? "bg-white text-foreground shadow-sm dark:bg-black"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+          onClick={() => {
+            setAreaCalculatorMounted(true);
+            setCalculationMode("area");
+          }}
+        >
+          <Calculator className="h-4 w-4 shrink-0" />
+          ㎡から計算
+        </button>
+      </div>
+
+      <section
+        id="dimensions-calculator-panel"
+        role="tabpanel"
+        hidden={calculationMode !== "dimensions"}
+        className="space-y-6 sm:space-y-8"
+      >
+
       <div className="space-y-8">
         <div>
           <label htmlFor={siteNameId} className="mb-1 block text-sm font-medium">
@@ -770,6 +822,13 @@ export default function HomePageClient() {
           }))
         }
       />
+      </section>
+
+      {areaCalculatorMounted ? (
+        <section id="area-calculator-panel" role="tabpanel" hidden={calculationMode !== "area"}>
+          <AreaCalculator />
+        </section>
+      ) : null}
     </main>
   );
 }

@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "test": "node --import tsx --test src/lib/*.test.ts",
     "clean": "rm -rf .next",
     "rebuild": "npm run clean && npm run build",
     "build": "next build",

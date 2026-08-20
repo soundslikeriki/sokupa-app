@@ -5,8 +5,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus } from "lucide-react";
+import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp } from "lucide-react";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
+import {
+  areAllCodesCollapsed,
+  pruneCollapsedCodes,
+  toggleAllCollapsedCodes,
+  toggleCollapsedCode,
+} from "@/lib/collapse-state";
 import { buildOrderRequestText } from "@/lib/order-text";
 import { dedupeSlashDelimited } from "@/lib/dedupeSlashList";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
@@ -104,6 +110,7 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   const [lossRates, setLossRates] = useState<Record<string, number | "">>({});
   const [newEntryInputs, setNewEntryInputs] = useState<Record<string, NewEntryInput>>({});
   const [manualOrderQuantities, setManualOrderQuantities] = useState<Record<string, number>>({});
+  const [collapsedCodes, setCollapsedCodes] = useState<Set<string>>(() => new Set());
   const newEntryInputsRef = useRef<Record<string, NewEntryInput>>({});
   const lastSyncedItemsRef = useRef("");
   const originalItemsRef = useRef<MemoProductItem[]>([]);
@@ -190,6 +197,17 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
       originalItemsRef.current = items.map(cloneMemoProductItem);
       previousHadItemsRef.current = true;
     }
+  }, [items]);
+
+  useEffect(() => {
+    const productCodes = items.map((item) => item.product_code);
+    setCollapsedCodes((current) => {
+      const next = pruneCollapsedCodes(current, productCodes);
+      if (next.size === current.size && Array.from(next).every((code) => current.has(code))) {
+        return current;
+      }
+      return next;
+    });
   }, [items]);
 
   const saveCodeEdit = async (fromCode: string) => {
@@ -590,6 +608,11 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
   }, [items, overrides, lossRates, manualOrderQuantities]);
 
   const groups = useMemo(() => groupByManufacturer(derivedItems), [derivedItems]);
+  const productCodes = useMemo(() => derivedItems.map((item) => item.product_code), [derivedItems]);
+  const allCodesCollapsed = useMemo(
+    () => areAllCodesCollapsed(collapsedCodes, productCodes),
+    [collapsedCodes, productCodes],
+  );
   const orderSummary = useMemo(() => {
     const totalOrderQuantity = derivedItems.reduce((sum, item) => sum + toFiniteNumber(item.order_quantity), 0);
     const totalSquareMeters = derivedItems.reduce((sum, item) => {
@@ -770,6 +793,25 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
         </CardContent>
       </Card>
 
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-black/5 bg-white/60 px-3 py-2.5 shadow-sm dark:border-white/5 dark:bg-zinc-900/60 sm:px-4">
+        <div className="min-w-0">
+          <p className="text-sm font-bold">材料詳細</p>
+          <p className="text-[11px] text-muted-foreground sm:text-xs">
+            {collapsedCodes.size}/{productCodes.length} 品番を省略中
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          className="min-h-11 shrink-0 gap-2 rounded-lg bg-white px-3 text-xs font-bold dark:bg-black sm:text-sm"
+          onClick={() => setCollapsedCodes((current) => toggleAllCollapsedCodes(current, productCodes))}
+          aria-label={allCodesCollapsed ? "すべての材料詳細を展開" : "すべての材料詳細を省略"}
+        >
+          {allCodesCollapsed ? <ChevronsDown className="h-4 w-4" /> : <ChevronsUp className="h-4 w-4" />}
+          {allCodesCollapsed ? "すべて展開" : "すべて省略"}
+        </Button>
+      </div>
+
       <div className="space-y-4 sm:space-y-6">
         {groups.map((group) => (
           <Card key={group.label} className="border-none shadow-md overflow-hidden bg-white/60 dark:bg-zinc-900/60 backdrop-blur-md">
@@ -780,8 +822,36 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
               </Badge>
             </CardHeader>
             <CardContent className="p-0">
-              {group.rows.map((product, idx) => (
+              {group.rows.map((product, idx) => {
+                const isCollapsed = collapsedCodes.has(product.product_code);
+                return (
                 <div key={product.product_code} className={`px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
+                  {isCollapsed ? (
+                    <div className="flex min-w-0 items-center gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-base font-extrabold tracking-tight sm:text-lg">{product.product_code}</p>
+                        <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] font-semibold tabular-nums text-muted-foreground sm:text-xs">
+                          <span>計測 <strong className="text-foreground">{product.total_m}m</strong></span>
+                          <span aria-hidden>／</span>
+                          <span>ロス <strong className="text-foreground">{product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}%</strong></span>
+                          <span aria-hidden>／</span>
+                          <span>発注 <strong className="text-lg text-indigo-600 dark:text-indigo-400">{product.order_quantity}m</strong></span>
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
+                        onClick={() => setCollapsedCodes((current) => toggleCollapsedCode(current, product.product_code))}
+                        aria-expanded={false}
+                        aria-label={`${product.product_code} の詳細を展開`}
+                      >
+                        <ChevronDown className="h-5 w-5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-4">
                     <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
                       <div className="min-w-0">
@@ -848,6 +918,17 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                         </Badge>
                       )}
                     </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-11 w-11 shrink-0 self-end rounded-lg bg-white p-0 dark:bg-black sm:self-start"
+                      onClick={() => setCollapsedCodes((current) => toggleCollapsedCode(current, product.product_code))}
+                      aria-expanded={true}
+                      aria-label={`${product.product_code} の詳細を省略`}
+                    >
+                      <ChevronUp className="h-5 w-5" />
+                    </Button>
                     <div className="grid w-full gap-2 self-start sm:w-[25rem] sm:self-auto">
                       <div className="grid w-full grid-cols-[4.5rem_2.75rem_minmax(4.25rem,1fr)_1.5rem_2.75rem] items-center gap-2 rounded-xl border border-black/5 bg-black/5 p-1.5 dark:bg-white/5 sm:grid-cols-[5rem_2.75rem_minmax(5rem,1fr)_1.75rem_2.75rem]">
                         <span className="pl-2 text-[10px] font-medium opacity-60 sm:text-xs">ロス率</span>
@@ -1193,8 +1274,11 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
                        </span>
                     </div>
                   </div>
+                    </>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </CardContent>
           </Card>
         ))}
