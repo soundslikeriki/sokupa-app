@@ -244,6 +244,22 @@ export function OrderDraftList({
         </Card>
       ) : null}
 
+      <Card className="border-violet-500/20 bg-violet-500/[0.05]">
+        <CardHeader className="px-3 pb-2 pt-4 sm:px-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle className="text-sm font-bold">現場名・日時を含めてコピーされます</CardTitle>
+            <Button type="button" className="min-h-11 gap-2 bg-violet-600 font-bold hover:bg-violet-700" disabled={items.length === 0} onClick={() => void copyDraft()}>
+              {copyState === "copied" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              {copyState === "copied" ? "コピーしました" : "発注リストをコピー"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="px-3 pb-4 sm:px-5">
+          <pre className="whitespace-pre-wrap rounded-lg border border-black/5 bg-white/80 p-3 text-xs leading-relaxed dark:border-white/5 dark:bg-black/30 sm:text-sm">{copyText}</pre>
+          {copyState === "error" ? <p className="mt-2 text-xs font-semibold text-destructive">コピーできませんでした。ブラウザの権限をご確認ください。</p> : null}
+        </CardContent>
+      </Card>
+
       <div className="space-y-3">
         {items.map((item) => (
           <Card key={item.id} className="overflow-hidden border-black/5 bg-white/75 shadow-sm dark:border-white/5 dark:bg-zinc-900/75">
@@ -279,22 +295,6 @@ export function OrderDraftList({
           </Card>
         ))}
       </div>
-
-      <Card className="border-violet-500/20 bg-violet-500/[0.05]">
-        <CardHeader className="px-3 pb-2 pt-4 sm:px-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <CardTitle className="text-sm font-bold">現場名・日時を含めてコピーされます</CardTitle>
-            <Button type="button" className="min-h-11 gap-2 bg-violet-600 font-bold hover:bg-violet-700" disabled={items.length === 0} onClick={() => void copyDraft()}>
-              {copyState === "copied" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              {copyState === "copied" ? "コピーしました" : "発注リストをコピー"}
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent className="px-3 pb-4 sm:px-5">
-          <pre className="whitespace-pre-wrap rounded-lg border border-black/5 bg-white/80 p-3 text-xs leading-relaxed dark:border-white/5 dark:bg-black/30 sm:text-sm">{copyText}</pre>
-          {copyState === "error" ? <p className="mt-2 text-xs font-semibold text-destructive">コピーできませんでした。ブラウザの権限をご確認ください。</p> : null}
-        </CardContent>
-      </Card>
     </div>
   );
 }
