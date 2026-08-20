@@ -55,6 +55,7 @@ type OrderListProps = {
   needs_review_any?: boolean;
   onItemsChange?: (items: MemoProductItem[]) => void;
   onAddToOrderDraft?: (item: OrderDraftItemInput) => void;
+  onAddAllToOrderDraft?: (items: OrderDraftItemInput[]) => void;
 };
 
 type ItemOverride = {
@@ -106,7 +107,7 @@ function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
   };
 }
 
-export function OrderList({ items, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft }: OrderListProps) {
+export function OrderList({ items, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft }: OrderListProps) {
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
   const [lossRates, setLossRates] = useState<Record<string, number | "">>({});
@@ -794,6 +795,23 @@ export function OrderList({ items, notes, siteName = "", needs_review_any, onIte
           })}
         </CardContent>
       </Card>
+
+      {onAddAllToOrderDraft && derivedItems.length > 1 ? (
+        <div className="flex justify-end">
+          <Button
+            type="button"
+            className="min-h-11 w-full gap-2 bg-violet-600 px-4 font-bold hover:bg-violet-700 sm:w-auto"
+            onClick={() =>
+              onAddAllToOrderDraft(
+                derivedItems.map((item) => dimensionItemToOrderDraftInput(item)),
+              )
+            }
+          >
+            <ListPlus className="h-4 w-4" />
+            すべて発注リストへ追加（{derivedItems.length}品番）
+          </Button>
+        </div>
+      ) : null}
 
       <div className="flex items-center justify-between gap-3 rounded-xl border border-black/5 bg-white/60 px-3 py-2.5 shadow-sm dark:border-white/5 dark:bg-zinc-900/60 sm:px-4">
         <div className="min-w-0">

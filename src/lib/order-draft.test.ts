@@ -5,6 +5,7 @@ import {
   areaResultToOrderDraftInput,
   buildOrderDraftText,
   calculateOrderDraftTotals,
+  consumeOrderDraftQueue,
   createOrderDraftItem,
   dimensionItemToOrderDraftInput,
   findDuplicateOrderDraftItem,
@@ -102,6 +103,42 @@ test("duplicate resolution can merge, keep separate, or cancel", () => {
   assert.equal(separate.length, 2);
   const cancelled = [existing];
   assert.deepEqual(cancelled, [existing]);
+});
+
+test("batch queue adds unique products and pauses safely at each duplicate", () => {
+  const existing = draft({ productCode: "TH34486", quantity: 150 });
+  const unique = draft({ id: "unique", productCode: "RE55801", quantity: 25 });
+  const duplicate = draft({ id: "duplicate", productCode: "th-34486", quantity: 70 });
+  const afterDuplicate = draft({ id: "after", productCode: "LW100", quantity: 12 });
+
+  const firstPass = consumeOrderDraftQueue(
+    [existing],
+    [unique, duplicate, afterDuplicate],
+  );
+  assert.deepEqual(firstPass.items.map((item) => item.id), ["draft-1", "unique"]);
+  assert.equal(firstPass.pending?.existingId, "draft-1");
+  assert.equal(firstPass.pending?.incoming.id, "duplicate");
+  assert.deepEqual(firstPass.remaining.map((item) => item.id), ["after"]);
+  assert.equal(firstPass.addedCount, 1);
+
+  const merged = mergeOrderDraftItem(
+    firstPass.items,
+    firstPass.pending!.existingId,
+    firstPass.pending!.incoming,
+  );
+  const secondPass = consumeOrderDraftQueue(merged, firstPass.remaining);
+  assert.equal(secondPass.pending, null);
+  assert.deepEqual(secondPass.items.map((item) => item.id), ["draft-1", "unique", "after"]);
+  assert.equal(secondPass.items[0].quantity, 220);
+});
+
+test("batch queue treats blank product codes as independent rows", () => {
+  const blankOne = draft({ id: "blank-1", productCode: "", quantity: 10 });
+  const blankTwo = draft({ id: "blank-2", productCode: "未指定", quantity: 20 });
+  const result = consumeOrderDraftQueue([], [blankOne, blankTwo]);
+  assert.equal(result.pending, null);
+  assert.equal(result.items.length, 2);
+  assert.equal(result.addedCount, 2);
 });
 
 test("merge refuses to add quantities with different units", () => {

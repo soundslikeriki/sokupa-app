@@ -101,6 +101,41 @@ export function findDuplicateOrderDraftItem(
   return items.find((item) => normalizeOrderDraftProductCode(item.productCode) === normalized);
 }
 
+export type OrderDraftQueueResult = {
+  items: OrderDraftItem[];
+  pending: { existingId: string; incoming: OrderDraftItem } | null;
+  remaining: OrderDraftItem[];
+  addedCount: number;
+};
+
+/** 非重複品番を追加し、最初の重複だけをユーザー確認用に残す。 */
+export function consumeOrderDraftQueue(
+  items: readonly OrderDraftItem[],
+  queue: readonly OrderDraftItem[],
+): OrderDraftQueueResult {
+  const nextItems = [...items];
+  for (let index = 0; index < queue.length; index += 1) {
+    const incoming = queue[index];
+    const duplicate = findDuplicateOrderDraftItem(nextItems, incoming);
+    if (duplicate) {
+      return {
+        items: nextItems,
+        pending: { existingId: duplicate.id, incoming },
+        remaining: queue.slice(index + 1),
+        addedCount: index,
+      };
+    }
+    nextItems.push(incoming);
+  }
+
+  return {
+    items: nextItems,
+    pending: null,
+    remaining: [],
+    addedCount: queue.length,
+  };
+}
+
 function combineText(first?: string, second?: string): string | undefined {
   const values = [optionalText(first), optionalText(second)].filter(
     (value, index, all): value is string => Boolean(value) && all.indexOf(value) === index,

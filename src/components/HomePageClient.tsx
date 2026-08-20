@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
-import { Calculator, ClipboardList, Loader2, Ruler, Upload, X } from "lucide-react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Calculator, CheckCircle2, ClipboardList, Loader2, Ruler, Upload, X } from "lucide-react";
 
 import { AreaCalculator } from "@/components/AreaCalculator";
 import { OrderDraftList, type PendingOrderDraftDuplicate } from "@/components/OrderDraftList";
@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import {
   createOrderDraftItem,
-  findDuplicateOrderDraftItem,
+  consumeOrderDraftQueue,
   mergeOrderDraftItem,
   removeOrderDraftItem,
   updateOrderDraftItem,
@@ -263,6 +263,9 @@ export default function HomePageClient() {
   const [orderDraftItems, setOrderDraftItems] = useState<OrderDraftItem[]>([]);
   const [pendingOrderDraftDuplicate, setPendingOrderDraftDuplicate] =
     useState<PendingOrderDraftDuplicate | null>(null);
+  const [pendingOrderDraftQueue, setPendingOrderDraftQueue] = useState<OrderDraftItem[]>([]);
+  const [orderDraftFeedback, setOrderDraftFeedback] = useState<string | null>(null);
+  const orderDraftFeedbackTimeoutRef = useRef<number | null>(null);
   const [jobUi, setJobUi] = useState<{
     status: "queued" | "running" | "done" | "failed";
     done: number;
@@ -275,19 +278,53 @@ export default function HomePageClient() {
     [images],
   );
 
+  const showOrderDraftFeedback = useCallback((count: number) => {
+    if (count <= 0) return;
+    if (orderDraftFeedbackTimeoutRef.current !== null) {
+      window.clearTimeout(orderDraftFeedbackTimeoutRef.current);
+    }
+    setOrderDraftFeedback(count === 1 ? "発注リストに追加しました" : `${count}件を発注リストに追加しました`);
+    orderDraftFeedbackTimeoutRef.current = window.setTimeout(() => {
+      setOrderDraftFeedback(null);
+      orderDraftFeedbackTimeoutRef.current = null;
+    }, 2200);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (orderDraftFeedbackTimeoutRef.current !== null) {
+        window.clearTimeout(orderDraftFeedbackTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const processOrderDraftQueue = useCallback(
+    (baseItems: OrderDraftItem[], queue: OrderDraftItem[], resolvedCount = 0) => {
+      const result = consumeOrderDraftQueue(baseItems, queue);
+      setOrderDraftItems(result.items);
+      setPendingOrderDraftDuplicate(result.pending);
+      setPendingOrderDraftQueue(result.remaining);
+      showOrderDraftFeedback(resolvedCount + result.addedCount);
+    },
+    [showOrderDraftFeedback],
+  );
+
   const requestAddToOrderDraft = useCallback(
     (input: OrderDraftItemInput) => {
       const incoming = createOrderDraftItem(input, createOrderDraftId());
-      const duplicate = findDuplicateOrderDraftItem(orderDraftItems, incoming);
-      if (duplicate) {
-        setPendingOrderDraftDuplicate({ existingId: duplicate.id, incoming });
-      } else {
-        setOrderDraftItems((current) => [...current, incoming]);
-        setPendingOrderDraftDuplicate(null);
-      }
+      processOrderDraftQueue(orderDraftItems, [incoming]);
       setCalculationMode("order-draft");
     },
-    [orderDraftItems],
+    [orderDraftItems, processOrderDraftQueue],
+  );
+
+  const requestAddAllToOrderDraft = useCallback(
+    (inputs: OrderDraftItemInput[]) => {
+      const incoming = inputs.map((input) => createOrderDraftItem(input, createOrderDraftId()));
+      processOrderDraftQueue(orderDraftItems, incoming);
+      setCalculationMode("order-draft");
+    },
+    [orderDraftItems, processOrderDraftQueue],
   );
 
   const updateOrderDraft = useCallback(
@@ -305,25 +342,31 @@ export default function HomePageClient() {
     setPendingOrderDraftDuplicate((current) =>
       current?.existingId === id ? null : current,
     );
+    setPendingOrderDraftQueue([]);
   }, []);
 
   const mergePendingOrderDraft = useCallback(() => {
     if (!pendingOrderDraftDuplicate) return;
-    setOrderDraftItems((current) =>
-      mergeOrderDraftItem(
-        current,
-        pendingOrderDraftDuplicate.existingId,
-        pendingOrderDraftDuplicate.incoming,
-      ),
+    const merged = mergeOrderDraftItem(
+      orderDraftItems,
+      pendingOrderDraftDuplicate.existingId,
+      pendingOrderDraftDuplicate.incoming,
     );
-    setPendingOrderDraftDuplicate(null);
-  }, [pendingOrderDraftDuplicate]);
+    processOrderDraftQueue(merged, pendingOrderDraftQueue, 1);
+  }, [orderDraftItems, pendingOrderDraftDuplicate, pendingOrderDraftQueue, processOrderDraftQueue]);
 
   const keepPendingOrderDraftSeparate = useCallback(() => {
     if (!pendingOrderDraftDuplicate) return;
-    setOrderDraftItems((current) => [...current, pendingOrderDraftDuplicate.incoming]);
-    setPendingOrderDraftDuplicate(null);
-  }, [pendingOrderDraftDuplicate]);
+    processOrderDraftQueue(
+      [...orderDraftItems, pendingOrderDraftDuplicate.incoming],
+      pendingOrderDraftQueue,
+      1,
+    );
+  }, [orderDraftItems, pendingOrderDraftDuplicate, pendingOrderDraftQueue, processOrderDraftQueue]);
+
+  const cancelPendingOrderDraft = useCallback(() => {
+    processOrderDraftQueue(orderDraftItems, pendingOrderDraftQueue);
+  }, [orderDraftItems, pendingOrderDraftQueue, processOrderDraftQueue]);
 
   // LINEログイン情報（通知先）
   useEffect(() => {
@@ -755,6 +798,16 @@ export default function HomePageClient() {
         </button>
       </div>
 
+      {orderDraftFeedback ? (
+        <div
+          role="status"
+          className="flex min-h-11 items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm font-bold text-emerald-800 dark:text-emerald-200"
+        >
+          <CheckCircle2 className="h-5 w-5 shrink-0" />
+          {orderDraftFeedback}
+        </div>
+      ) : null}
+
       <section
         id="dimensions-calculator-panel"
         role="tabpanel"
@@ -915,6 +968,7 @@ export default function HomePageClient() {
           }))
         }
         onAddToOrderDraft={requestAddToOrderDraft}
+        onAddAllToOrderDraft={requestAddAllToOrderDraft}
       />
       </section>
 
@@ -933,7 +987,7 @@ export default function HomePageClient() {
           onManualAdd={requestAddToOrderDraft}
           onMergeDuplicate={mergePendingOrderDraft}
           onKeepDuplicateSeparate={keepPendingOrderDraftSeparate}
-          onCancelDuplicate={() => setPendingOrderDraftDuplicate(null)}
+          onCancelDuplicate={cancelPendingOrderDraft}
         />
       </section>
     </main>
