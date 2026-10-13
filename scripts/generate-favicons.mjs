@@ -5,7 +5,8 @@ import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.join(__dirname, "..");
-const defaultSource = path.join(__dirname, "favicon-source.svg");
+// The existing Sokupa emblem recovered from repository history, with safe padding.
+const defaultSource = path.join(__dirname, "sokupa-install-icon-source.png");
 
 function parseOutputDir() {
   const i = process.argv.indexOf("--output");
@@ -21,7 +22,20 @@ const dest = parseOutputDir();
 const response = await favicons(source, {
   path: "/",
   appName: "ソクパ",
+  appShortName: "ソクパ",
+  appDescription: "計測メモ画像から品番・数量を読み取り、メーカー別に整理します。",
   lang: "ja",
+  scope: "/",
+  start_url: "/?homescreen=1",
+  icons: {
+    android: { background: "#fff", transparent: false },
+    appleIcon: true,
+    appleStartup: false,
+    favicons: true,
+    windows: false,
+    yandex: false,
+  },
+  manifestMaskable: true,
 });
 
 await mkdir(dest, { recursive: true });

@@ -1,0 +1,23 @@
+{
+  "source_file": "sokupa-logo-original.jpeg",
+  "original_filename": "Gemini_Generated_Image_rb7ikxrb7ikxrb7i.jpeg",
+  "source_sha256": "2d2e3253322ccfd7f90b474e3774385c0071f04552ef90048c790983f053ac9c",
+  "source_dimensions": [
+    2048,
+    2048
+  ],
+  "icon_source": "sokupa-install-icon-source.png",
+  "icon_dimensions": [
+    1024,
+    1024
+  ],
+  "placement": {
+    "left": 77,
+    "top": 77,
+    "width": 870,
+    "height": 870
+  },
+  "background": "#ffffff",
+  "composition": "Original stacked emblem, SOKUPA wordmark and MEASUREMENT MEMO ANALYSIS APP subtitle retained together",
+  "notes": "Existing full original JPEG resized proportionally and padded. No redraw, generation, or rearrangement."
+}

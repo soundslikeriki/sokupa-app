@@ -19,4 +19,19 @@ export const APP_DESCRIPTION = `計測メモ画像から品番・数量・計算
 export const APP_METADATA: Metadata = {
   title: APP_BROWSER_TITLE,
   description: APP_DESCRIPTION,
+  applicationName: APP_PRODUCT_NAME,
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: APP_PRODUCT_NAME,
+    statusBarStyle: "default",
+  },
+  icons: {
+    icon: [
+      { url: "/favicon.ico", type: "image/x-icon" },
+      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
+      { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
 };
