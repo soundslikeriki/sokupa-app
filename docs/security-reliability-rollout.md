@@ -36,7 +36,7 @@
 
 1. 独立したSupabase確認環境を用意し、本番スキーマの再現と合成データだけで以下を確認する。ステージングのLINEチャネル／redirect URI、サービスキーは本番と分離する。新しい資格情報の生成・登録・本番設定変更は必要な個別確認後に行う。
 2. 現在のユーザー・管理者・無制限一覧、ポリシー、バケット設定、ジョブ状態の安全なバックアップと復元方法を準備する。既存テーブルは公開書込み可能だったため、不審な既存登録がないか利用者・無制限一覧を所有者が確認する。招待履歴欠損だけを理由に既存ユーザーを削除しない。
-3. Phase 1 `supabase/migrations/20261102183016_session_api_expansion.sql` と `supabase/migrations/20261102190336_analysis_image_leases.sql`、`supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql`、`supabase/migrations/20261102203127_verified_worker_success_ticks.sql` を順に確認環境に適用する。旧Phase 1適用済みの履歴は書き換えず追加分を適用する。既存ポリシーは原則維持し、登録／利用枠RPCと通知状態カラムを追加する。補正ログ表と稼働確認表はサーバー専用にする。対応コードより先に必要なRPC／カラムを用意する。
+3. 20261102の追加migration7本を、ファイル名の時刻順に確認環境へ適用する。Phase 1、画像リース、通知移行、成功呼出し検証、provider回復、署名nonce、transport受付ゲートの順。旧Phase 1適用済みの履歴は書き換えず未適用の追加分を適用する。既存クライアント用ポリシーはこの段階では原則維持し、対応コードより先に必要なRPC／カラムを用意する。補正ログ・稼働確認・transport表はサーバー専用とする。別フォルダのPhase 2を先に実行しない。
 4. `SESSION_SECRET`（32バイト以上、環境別の専用値）を安全に設定する。既存のLINE・Supabase・管理者・内部ワーカー設定を維持し、.env.exampleの全必要項目の存在を値を表示せず確認する。本作業では実秘密を生成していない。
 5. 確認環境へ新API／クライアントを配備し、実LINEでの管理者／既存一般（招待履歴NULL含む）／無制限／新規招待／不正セッションの動線を確認する。通常アカウントから管理操作・他人の画像／ジョブにアクセスできないことを確認する。
 6. **公開許可の安全条件を満たした後**、本番にPhase 1と新API／クライアントをdisabledで配備する。切替時は旧版の新規受付・旧版の定期ワーカーを止め、旧関数の最大300秒＋余裕として6分以上のdrainを確認する。旧版を処理経路に残したまま新しい定期回復を有効にしない。その後、本人のID、管理者操作、無制限の設定、本人専用のジョブ読取、受付停止を確認する。アップロード・解析の実稼働確認はPhase 2とCron正常稼働確認の後に行う。この段階では旧匿名DB経路のリスクはまだ残るため、Phase 2までを一つの移行作業として扱う。
@@ -53,10 +53,12 @@
 | npx tsc --noEmit / npm run lint | 成功 |
 | ローカル実Postgres 17.6 | 39項目成功。私有Unixソケットと合成データで8接続の取得・確定・再取得・旧トークン拒否・行ロック・利用枠競合・管理者無制限・稼働判定・利用枠返却の競合を確認。Supabase実サービスとは別 |
 | npm run build | 成功。既存由来のlibheif動的requireとBrowserslist古さの警告は残る。Google Fonts取得にはネットワーク許可が必要だった |
-| 隔離PostgreSQL (PGlite 0.5.14) | 89項目成功。追加SQLとPhase 2の7本を実行し、匿名／authenticated拒否、サービス権限、招待の一回性とロールバック、上限、無制限、他バケット保全、リースの排他・期限回復・旧トークン拒否・再開回数上限、新旧ワーカー切替の猶予期間を確認。本番には接続しない |
+| 隔離PostgreSQL (PGlite 0.5.14) | 93項目成功。追加SQLとPhase 2の8本を実行し、匿名／authenticated拒否、サービス権限、招待の一回性とロールバック、上限、無制限、他バケット保全、リースの排他・期限回復・旧トークン拒否・再開回数上限、新旧ワーカー切替の猶予期間を確認。本番には接続しない |
 | 定期処理の稼働判定 (PGlite) | 40項目成功。成功2回、失敗後・時間切れ後の再開、重複完了、順序逆転、旧呼出しの拒否、権限制御を確認 |
 | 通知アップグレード (PGlite) | 28項目成功。新規と旧Phase 1適用済みの両経路で、過去通知の隔離・監査、既定値、既存ID保持を確認 |
 | provider障害と枠 (PGlite) | 51項目成功。再試行・上限・予約月・返却一回性・legacy保全・権限・rollbackを確認 |
+| transport受付・復帰 (PGlite) | 109項目成功。障害後の2回、重複・遅延・偽の完了、停止再開・設定変更、権限、旧候補適用済み環境からの安全な移行を確認 |
+| スケジューラSQL／署名 (実Postgres 17.6) | 183項目成功。コア39とは別。HTTP401等での受付停止・枠予約前の拒否、観測／enqueue例外、競合と正常復帰、pg_netバッチ時刻を確認。pgcryptoは実拡張、pg_net HTTP／Vaultは合成fixture |
 | SDK→ワーカー→SQL | 33項目成功。全HTTPをモックし、実SDKの503・認証・通信不明・回復成功と、稼働判定・枠処理を一続きで確認 |
 | ブラウザ (一時Chrome、全外部通信を遮断) | 既存9項目＋独立レビュー再現11項目が成功。23m表示、負数拒否、下書き書出し・退避失敗時保全・退避後の解析再開も確認。合成破損画像の失敗表示、リピートON/OFF・再読込・幅数編集・原本復帰・発注下書きの保存／復元・ログインゲート・JS例外なし |
 
@@ -72,6 +74,7 @@ PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/ind
 PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/notification-upgrade.cjs
 PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/worker-health.cjs
 PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/provider-recovery.cjs
+PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/transport-health.cjs
 PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node --import tsx scripts/verification/provider-worker.ts
 # start the local server first; fixtures block all non-localhost browser requests
 PLAYWRIGHT_MODULE=/tmp/sokupa-sql-harness/node_modules/playwright node scripts/verification/browser-regressions.cjs
@@ -123,4 +126,12 @@ DBのジョブ取得・状態確認・確定・失敗記録、通知状態保存
 
 追加マイグレーション `20261102205248_provider_failure_recovery.sql` を上記4本の後、対応コード配備前に適用する。通常マイグレーション5本とPhase 2は引き続き段階適用する。再試行・利用枠の契約、残る重複課金リスク、旧ジョブの返却制限は [provider-recovery.md](./provider-recovery.md) に記載した。Hobby維持・Proへ変更しないという最新のユーザー方針を継続し、公開・外部設定・鍵生成は未実施。
 
-署名付き呼出しの追加migration `20261102210736_signed_scheduler_dispatches.sql` は、上記5本の後にnonceの非公開表とRPCだけを追加する。鍵や外部cronを作成しない。Supabase候補のSQL雛形は自動migration対象外で、既定無効のまま。ローカル実Postgresで16項目の署名・応答観測・重複防止を検査したが、pg_net HTTPとVaultは合成fixtureである。[実装と残る条件](../ops/cron/signed-candidate.md)を参照。
+署名付き呼出しの追加migration `20261102210736_signed_scheduler_dispatches.sql` は、上記5本の後にnonceの非公開表とRPCだけを追加する。鍵や外部cronを作成しない。Supabase候補のSQL雛形は自動migration対象外で、既定無効のまま。最新のローカル実Postgresで183項目の署名・応答観測・重複防止・受付停止と復帰を検査したが、pg_net HTTPとVaultは合成fixtureである。[実装と残る条件](../ops/cron/signed-candidate.md)を参照。
+
+## 独立レビュー5回目の追補
+
+`20261102213147_scheduler_transport_health.sql` と更新した無効雛形で、通信障害を観測した時点の受付ゲートを追加した。HTTP401を記録しても古いheartbeatで受付が続く再現を修正。新規ジョブは利用枠の予約前に拒否する。正常復帰には障害後の別UUID2件が必要で、署名nonce・DBの実ワーカー成功・HTTP応答を照合する。並行した古い成功／失敗、応答の再送、無関係なheartbeatでは復帰しない。上記109／183項目で検査した。
+
+再試行試験は `recovery_not_before - now()` の残り時間から、同じ更新トランザクションで保存した `recovery_not_before - updated_at` へ変更した。報告のsetseed(0.56)と25ms遅延を使っても60秒の設定値を検証でき、59.985秒の残り時間を誤失敗としない。
+
+pg_net 0.20.0の応答createdはバッチ開始時刻になり得るため、HTTP完了証明に使用しない。観測時刻と期限、実ワーカー完了の一致で確認し、遅すぎる観測は閉じる。実拡張・redirect経路・実Vaultは未検証。[必要な最小手順・権限・費用](../ops/cron/isolated-pgnet-runbook.md)を追加した。外部設定・鍵生成・本番変更は未実施、公開条件はまだ未充足。

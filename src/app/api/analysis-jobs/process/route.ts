@@ -50,8 +50,8 @@ export async function GET(req: NextRequest) {
       if(error)return NextResponse.json({error:"Dispatch verification unavailable"},{status:503});
       if(data!==true)return NextResponse.json({error:"Expired or duplicate dispatch"},{status:409});
     }
-    const result = await runScheduledAnalysisBatch(admin);
-    return NextResponse.json(result);
+    const result = await runScheduledAnalysisBatch(admin,undefined,dispatch?.id);
+    return NextResponse.json({...result,...(dispatch?{dispatch_id:dispatch.id}:{})});
   } catch {
     console.error("[analysis-worker] scheduled batch failed");
     return NextResponse.json({ error: "Scheduled processing failed" }, { status: 503 });

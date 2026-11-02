@@ -6,8 +6,9 @@ import { scheduledAnalysisEnabled, analysisDataAccessSecure } from "@/lib/analys
 export async function runScheduledAnalysisBatch(
   admin: SupabaseClient,
   run: (opts: Parameters<typeof runAnalysisJob>[0]) => Promise<AnalysisJobStepResult> = runAnalysisJob,
-): Promise<{ processed: number; processing_enabled: boolean }> {
-  const started = await admin.rpc("analysis_worker_tick_begin");
+  dispatchId?: string,
+): Promise<{ processed: number; processing_enabled: boolean; worker_tick_id?: string }> {
+  const started = dispatchId ? await admin.rpc("begin_signed_analysis_worker_tick",{p_dispatch_id:dispatchId}) : await admin.rpc("analysis_worker_tick_begin");
   if (started.error || typeof started.data !== "string" || !started.data) throw new Error("Worker heartbeat failed");
   const tickId = started.data;
   try {
@@ -22,7 +23,7 @@ export async function runScheduledAnalysisBatch(
     }
     const finished = await admin.rpc("analysis_worker_tick_complete", { p_tick_id: tickId, p_success: true });
     if (finished.error || finished.data !== true) throw new Error("Worker completion heartbeat failed");
-    return { processed, processing_enabled: scheduledAnalysisEnabled() };
+    return { processed, processing_enabled: scheduledAnalysisEnabled(),...(dispatchId?{worker_tick_id:tickId}:{}) };
   } catch (error) {
     await admin.rpc("analysis_worker_tick_complete", { p_tick_id: tickId, p_success: false });
     throw error;

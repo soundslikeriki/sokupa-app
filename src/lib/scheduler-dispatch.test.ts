@@ -30,10 +30,12 @@ test("signed dispatch claims its nonce before processing and rejects a replay be
  const saved=names.map(name=>process.env[name]),savedFetch=global.fetch;
  process.env.ANALYSIS_DISPATCH_SECRET=key;process.env.ANALYSIS_DISPATCH_ORIGIN=origin;process.env.ANALYSIS_BACKGROUND_MODE="disabled";process.env.NEXT_PUBLIC_SUPABASE_URL="https://db.example.test";process.env.SUPABASE_SERVICE_ROLE_KEY="synthetic-only";delete process.env.CRON_SECRET;delete process.env.ANALYSIS_JOB_SECRET;
  const calls:string[]=[];let claimed=false;
- global.fetch=async(input)=>{const url=new URL(String(input));assert.equal(url.hostname,"db.example.test");const name=url.pathname.split('/').pop()!;calls.push(name);const value=name==='claim_analysis_dispatch'?!claimed:name==='analysis_worker_tick_begin'?'synthetic-tick':true;if(name==='claim_analysis_dispatch')claimed=true;return new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});};
+ global.fetch=async(input)=>{const url=new URL(String(input));assert.equal(url.hostname,"db.example.test");const name=url.pathname.split('/').pop()!;calls.push(name);const value=name==='claim_analysis_dispatch'?!claimed:name==='begin_signed_analysis_worker_tick'?'synthetic-tick':true;if(name==='claim_analysis_dispatch')claimed=true;return new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});};
  try{
-  const now=Math.floor(Date.now()/1000);assert.equal((await GET(request(now))).status,200);assert.equal((await GET(request(now))).status,409);
-  assert.deepEqual(calls,["claim_analysis_dispatch","analysis_worker_tick_begin","analysis_worker_tick_complete","claim_analysis_dispatch"]);
+  const now=Math.floor(Date.now()/1000),response=await GET(request(now));assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{processed:0,processing_enabled:false,worker_tick_id:'synthetic-tick',dispatch_id:id});
+  assert.equal((await GET(request(now))).status,409);
+  assert.deepEqual(calls,["claim_analysis_dispatch","begin_signed_analysis_worker_tick","analysis_worker_tick_complete","claim_analysis_dispatch"]);
   assert.equal((await GET(request(now-121))).status,403);assert.equal(calls.length,4);
  }finally{global.fetch=savedFetch;names.forEach((name,i)=>{if(saved[i]===undefined)delete process.env[name];else process.env[name]=saved[i];});}
 });

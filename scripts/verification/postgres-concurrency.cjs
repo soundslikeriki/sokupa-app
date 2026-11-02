@@ -4,6 +4,7 @@ const {spawn,execFileSync}=require('node:child_process');const assert=require('n
 const {Client,Pool}=require(process.env.PG_CLIENT_MODULE||'pg');
 const {elapseHealthClock,primeWorkerHealth}=require('./worker-health-fixture.cjs');
 const {createHmac}=require('node:crypto');
+const {elapseTransportClock}=require('./transport-fixture.cjs');
 const bin=process.env.PG_TEST_BIN;
 if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary directory');
 (async()=>{
@@ -118,6 +119,7 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
   check((raceState.image_status==='done'&&raceState.quota_refunded===0)||(raceState.status==='failed'&&raceState.quota_refunded===1),'race chooses success or refund, never both');
   const coreChecks=checks;
   await admin.query(fs.readFileSync('supabase/migrations/20261102210736_signed_scheduler_dispatches.sql','utf8'));
+  await admin.query(fs.readFileSync('supabase/migrations/20261102213147_scheduler_transport_health.sql','utf8'));
   const dispatchId=(await row('select gen_random_uuid() id')).id,now=(await row('select floor(extract(epoch from now()))::bigint n')).n;
   const consumed=(await Promise.all(Array.from({length:8},()=>service('select claim_analysis_dispatch($1,$2,$3) ok',[dispatchId,now,Number(now)+120])))).flat();
   check(consumed.filter(r=>r.ok).length===1,'8 signed request replays consume the nonce once');
@@ -129,8 +131,11 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
     create function net.http_get(url text,params jsonb default '{}',headers jsonb default '{}',timeout_milliseconds integer default 5000) returns bigint language sql as $$insert into net.fixture_requests(url,headers,timeout_milliseconds) values($1,$3,$4) returning id$$;`);
   await admin.query(fs.readFileSync('ops/cron/supabase-dispatch.example.sql','utf8'));
   check((await row('select sokupa_ops.enqueue_dispatch() id')).id===null,'candidate scheduler starts disabled');
+  await service('select clear_analysis_provider_block()');await primeWorkerHealth(admin.query.bind(admin));
+  check((await row('select analysis_background_ready() ready')).ready,'control: fresh worker health is ready before selecting transport');
   const fixtureKey='synthetic-fixture-only-key-00000000000000',keyId=(await row('insert into vault.test_keys values(gen_random_uuid(),$1) returning id',[fixtureKey])).id;
   await admin.query("update sokupa_ops.scheduler_config set enabled=true,origin='https://worker.example.test',secret_id=$1",[keyId]);
+  check(!(await row('select analysis_background_ready() ready')).ready,'selecting transport closes intake until proved HTTP successes');
   let requestId=(await row('select sokupa_ops.enqueue_dispatch() id')).id;
   const sent=await row('select * from net.fixture_requests where id=$1',[requestId]),headers=sent.headers;
   const canonical=['SOKUPA-DISPATCH-V1','GET','https://worker.example.test','/api/analysis-jobs/process',headers['x-sokupa-dispatch-id'],headers['x-sokupa-issued-at'],headers['x-sokupa-expires-at']].join('\n');
@@ -139,18 +144,82 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
   check(sent.timeout_milliseconds===310000,'candidate explicitly bounds the HTTP timeout');
   const enqueue=(await Promise.all(Array.from({length:8},()=>pool.query('select sokupa_ops.enqueue_dispatch() id')))).flatMap(r=>r.rows);
   check(enqueue.every(r=>r.id===null),'same-minute scheduler duplicates cannot enqueue twice');
-  const ticksBefore=(await row('select count(*)::int n from analysis_worker_ticks')).n;
-  await admin.query("insert into net._http_response(id,status_code,content_type,content)values($1,200,'application/json',$2)",[requestId,JSON.stringify({processed:0,processing_enabled:false})]);
-  await admin.query('select sokupa_ops.reconcile_dispatches()');
-  check((await row('select status from sokupa_ops.dispatches')).status==='succeeded','expected JSON response is observed as transport success');
-  check((await row('select count(*)::int n from analysis_worker_ticks')).n===ticksBefore,'transport observation never fabricates a worker heartbeat');
-  for(const [status,type,content,timeout,expected] of [[200,'text/html','<html>Login</html>',false,'invalid_response'],[401,'application/json','{}',false,'failed'],[200,'application/json','{}',true,'failed']]){
-    await admin.query('delete from sokupa_ops.dispatches');requestId=(await row('select sokupa_ops.enqueue_dispatch() id')).id;
-    await admin.query('insert into net._http_response(id,status_code,content_type,content,timed_out)values($1,$2,$3,$4,$5)',[requestId,status,type,content,timeout]);await admin.query('select sokupa_ops.reconcile_dispatches()');
-    check((await row('select status from sokupa_ops.dispatches')).status===expected,'HTTP failure/HTML/timeout cannot be a successful invocation');
+  const prove=async(request)=>{
+    const h=(await row('select headers from net.fixture_requests where id=$1',[request])).headers;
+    check((await service('select claim_analysis_dispatch($1,$2,$3) ok',[h['x-sokupa-dispatch-id'],h['x-sokupa-issued-at'],h['x-sokupa-expires-at']]))[0].ok,'signed nonce is claimed once');
+    const tick=(await service('select begin_signed_analysis_worker_tick($1) id',[h['x-sokupa-dispatch-id']]))[0].id;
+    check(Boolean(tick),'worker tick is linked to the real dispatch ID');await service('select analysis_worker_tick_complete($1,true)',[tick]);
+    const ticks=(await row('select count(*)::int n from analysis_worker_ticks')).n;
+    // Match pg_net 0.20's transaction timestamp: created precedes the worker completion.
+    await admin.query("insert into net._http_response(id,status_code,content_type,content,created)select $1,200,'application/json',$2,enqueued_at from analysis_scheduler_transport_attempts where id=$3",[request,JSON.stringify({processed:0,processing_enabled:false,dispatch_id:h['x-sokupa-dispatch-id'],worker_tick_id:tick}),h['x-sokupa-dispatch-id']]);
+    await admin.query('select sokupa_ops.reconcile_dispatches()');
+    check((await row('select count(*)::int n from analysis_worker_ticks')).n===ticks,'observer does not manufacture worker success');
+    return {id:h['x-sokupa-dispatch-id'],tick};
+  };
+  await prove(requestId);check((await row('select status from sokupa_ops.dispatches')).status==='succeeded','expected response and matching DB tick verify transport success');
+  check((await row('select r.created<w.finished_at earlier from net._http_response r join sokupa_ops.dispatches d on d.request_id=r.id join analysis_scheduler_dispatches n on n.id=d.id join analysis_worker_ticks w on w.id=n.worker_tick_id where r.id=$1',[requestId])).earlier,'pg_net batch-start timestamp is not treated as HTTP completion');
+  check(!(await row('select analysis_background_ready() ready')).ready,'one successful transport response does not open intake');
+  const warm=async()=>{
+    await admin.query('select configure_analysis_transport(true)');await admin.query('delete from sokupa_ops.dispatches');
+    await prove((await row('select sokupa_ops.enqueue_dispatch() id')).id);
+    check(!(await row('select analysis_background_ready() ready')).ready,'first new response remains closed');
+    await elapseTransportClock(admin.query.bind(admin),60);await admin.query('delete from sokupa_ops.dispatches');
+    await prove((await row('select sokupa_ops.enqueue_dispatch() id')).id);
+    check((await row('select analysis_background_ready() ready')).ready,'two fresh verified transport responses restore intake');
+  };
+  for(const [status,type,content,timeout,error,expected] of [
+    [200,'text/html','<html>Login</html>',false,null,'invalid_response'],
+    [200,'application/json','{bad JSON',false,null,'invalid_response'],
+    [200,'application/json','{}',false,null,'invalid_response'],
+    [401,'application/json','{}',false,null,'failed'],[403,'text/html','Denied',false,null,'failed'],
+    [302,'text/html','Redirect',false,null,'failed'],[503,'application/json','{}',false,null,'failed'],
+    [200,'application/json','{}',true,null,'failed'],[null,null,null,false,'TLS certificate failed','failed'],
+  ]){
+    await warm();await admin.query('delete from sokupa_ops.dispatches');requestId=(await row('select sokupa_ops.enqueue_dispatch() id')).id;
+    await admin.query('insert into net._http_response(id,status_code,content_type,content,timed_out,error_msg)values($1,$2,$3,$4,$5,$6)',[requestId,status,type,content,timeout,error]);await admin.query('select sokupa_ops.reconcile_dispatches()');
+    check((await row('select status from sokupa_ops.dispatches')).status===expected,'HTTP/TLS/HTML/redirect failure is observed');
+    check(!(await row('select analysis_background_ready() ready')).ready,'transport failure closes admission despite fresh heartbeats');
+    await assert.rejects(create(1,'refund-only',false),/worker_unavailable/);checks++;
   }
-  await admin.query('delete from sokupa_ops.dispatches');await admin.query('select sokupa_ops.enqueue_dispatch()');await admin.query("update sokupa_ops.dispatches set response_deadline=now()-interval '1 second'");await admin.query('select sokupa_ops.reconcile_dispatches()');
-  check((await row('select status from sokupa_ops.dispatches')).status==='expired','missing response expires instead of remaining successful');
+  await warm();await admin.query('delete from sokupa_ops.dispatches');await admin.query('select sokupa_ops.enqueue_dispatch()');await admin.query("update sokupa_ops.dispatches set response_deadline=now()-interval '1 second'");await admin.query('select sokupa_ops.reconcile_dispatches()');
+  check((await row('select status from sokupa_ops.dispatches')).status==='expired','missing response expires');
+  check(!(await row('select analysis_background_ready() ready')).ready,'missing-response expiry closes admission');
+  await warm();await admin.query('delete from sokupa_ops.dispatches');requestId=(await row('select sokupa_ops.enqueue_dispatch() id')).id;
+  await admin.query("update sokupa_ops.dispatches set response_deadline=clock_timestamp()-interval '1 second'");
+  await prove(requestId);
+  check((await row('select status from sokupa_ops.dispatches')).status==='expired','a real worker proof observed after the deadline is still rejected');
+  check(!(await row('select analysis_background_ready() ready')).ready,'late observation cannot restore intake');
+  const stage=async(worker=true)=>{
+    const d=await row('select gen_random_uuid() id,floor(extract(epoch from clock_timestamp()))::bigint iat');
+    await admin.query('select begin_analysis_transport_dispatch($1,$2,$3)',[d.id,d.iat,Number(d.iat)+120]);
+    let tick=null;if(worker){await service('select claim_analysis_dispatch($1,$2,$3)',[d.id,d.iat,Number(d.iat)+120]);tick=(await service('select begin_signed_analysis_worker_tick($1) id',[d.id]))[0].id;await service('select analysis_worker_tick_complete($1,true)',[tick]);}
+    return {id:d.id,tick};
+  };
+  const record=async(d,status='succeeded')=>(await pool.query('select record_analysis_transport_result($1,$2,$3,clock_timestamp()) ok',[d.id,status,d.tick])).rows[0].ok;
+  await warm();const late=await stage(),failure=await stage(false);
+  await Promise.all([record(failure,'failed'),record(late)]);
+  check(!(await row('select analysis_background_ready() ready')).ready,'concurrent failure and an older success always close intake');
+  await record(await stage());check(!(await row('select analysis_background_ready() ready')).ready,'one recovery response cannot reuse pre-failure success');
+  await elapseTransportClock(admin.query.bind(admin),60);const restored=await stage();await record(restored);
+  check((await row('select analysis_background_ready() ready')).ready,'second new recovery response reopens intake');
+  const currentEpoch=(await row('select epoch from analysis_scheduler_transport_state')).epoch;
+  await Promise.all(Array.from({length:8},()=>record(failure,'failed')));await Promise.all(Array.from({length:8},()=>record(late)));
+  check((await row('select epoch from analysis_scheduler_transport_state')).epoch===currentEpoch,'replayed old failures and late successes cannot change restored transport generation');
+  const receiptsBefore=(await row("select count(*)::int n from analysis_scheduler_transport_attempts where outcome='succeeded' and epoch=$1",[currentEpoch])).n;
+  await Promise.all(Array.from({length:8},()=>record(restored)));
+  check((await row("select count(*)::int n from analysis_scheduler_transport_attempts where outcome='succeeded' and epoch=$1",[currentEpoch])).n===receiptsBefore,'parallel completion replays do not add success receipts');
+  await warm();await admin.query('delete from sokupa_ops.dispatches');await admin.query('select sokupa_ops.enqueue_dispatch()');
+  await admin.query('alter table net._http_response rename to hidden_http_response');await admin.query('select sokupa_ops.reconcile_dispatches()');
+  check(!(await row('select analysis_background_ready() ready')).ready,'observer infrastructure error closes intake');
+  check((await row('select failure_code from analysis_scheduler_transport_state')).failure_code==='observation_failed','observer failure persists instead of rolling back its closed gate');
+  await admin.query('alter table net.hidden_http_response rename to _http_response');
+  await warm();await admin.query('delete from sokupa_ops.dispatches');await admin.query('delete from vault.test_keys where id=$1',[keyId]);
+  check((await row('select sokupa_ops.enqueue_dispatch() id')).id===null,'missing key enqueues no request');
+  check(!(await row('select analysis_background_ready() ready')).ready,'missing key closes intake immediately');
+  check((await row('select failure_code from analysis_scheduler_transport_state')).failure_code==='enqueue_failed','enqueue exception persists its failed transport state');
+  await admin.query('insert into vault.test_keys values($1,$2)',[keyId,fixtureKey]);
+  await warm();await admin.query('update sokupa_ops.scheduler_config set enabled=false');
+  check(!(await row('select analysis_background_ready() ready')).ready,'disabled scheduler immediately closes admission');
   for(const role of ['anon','authenticated','service_role']){
     await admin.query(`set role ${role}`);await assert.rejects(admin.query('select sokupa_ops.enqueue_dispatch()'),/permission denied/);checks++;await admin.query('reset role');
   }
