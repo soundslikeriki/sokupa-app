@@ -8,9 +8,11 @@
 
 公式のnative stackは実験的。pg_cronを試す場合は2.121.0以降で版を固定し、その版のhelpで引数を確認する。共有CLI・既存stack・ホームの設定は上書きしない。[公式runtime仕様](https://supabase.com/docs/guides/local-development/docker-and-native-runtimes)
 
+追補: 公式CLI 2.121.0単体の隔離配置とchecksum検証は完了した。`--version`、`start --help`、`stack --help`、`stack prepare --help` が成功し、native／専用stack／eagerの引数を確認した。共有2.90.0は未変更。サービスは起動しておらず、アプリ／DBの資格情報は生成していない。CLI自身の一時キャッシュは隔離したSUPABASE_HOME内にある。`stack prepare` はダウンロードだけでなくstackを作成・登録するため、まだ実行していない。追加の自動生成設定・資格情報の有無を確認してから進める。
+
 | 対象 | 必要な権限／判断 | 現在の状態 |
 | --- | --- | --- |
-| このMacの作業専用一時ディレクトリ | 公式CLI／サービスのダウンロード、localhostへのbind、非rootプロセス起動、試験後の停止・削除。共有ソフト／OS利用者は変更しない | 準備の個別確認待ち。拒否や失敗ではなく未実行 |
+| このMacの作業専用一時ディレクトリ | サービスのダウンロード、localhostへのbind、非rootプロセス起動、試験後の停止・削除。共有ソフト／OS利用者は変更しない | CLI単体とhelp確認は完了。stack設定・資格情報準備／起動は個別確認待ち、未実行 |
 | ローカルの使い捨てDB | DB運用者としてpg_cron／pg_net／pgcrypto／supabase_vaultの導入・設定、合成行・試験専用Vault値、cronの登録と削除 | 実拡張は未導入。実行済みのSQLハーネスとは別 |
 | 独立Supabaseを使う場合 | 対象組織の選択、Free残枠・見積、プロジェクト作成権限、対象DBの運用権限 | 本番しか接続されていない。新規作成・新しい資格情報は未承認／未実行 |
 | 実Vercelへの到達試験 | 検証専用origin／deploymentと環境変数の設定。専用HMAC鍵をVaultと対応環境へ登録する個別確認 | チーム接続承認は済み。これは鍵生成や保護解除の承認には含めない |
