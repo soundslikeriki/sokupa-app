@@ -3,7 +3,6 @@
 begin;
 alter table public.analysis_jobs add column if not exists line_user_id text;
 alter table public.analysis_jobs add column if not exists notification_status text not null default 'legacy_unknown';
-alter table public.analysis_jobs alter column notification_status set default 'pending';
 alter table public.analysis_jobs add column if not exists notification_attempted_at timestamptz;
 alter table public.analysis_jobs add column if not exists notification_error text;
 alter table public.analysis_jobs add column if not exists notified_at timestamptz;
@@ -45,7 +44,7 @@ begin
     returning image_count into v_count;
     if v_count is null then raise exception 'monthly_limit'; end if;
   end if;
-  insert into public.analysis_jobs(line_user_id,site_name,total_images,context) values(p_line_user_id,p_site_name,array_length(p_paths,1),jsonb_build_object('site_name',p_site_name)) returning id into v_job;
+  insert into public.analysis_jobs(line_user_id,site_name,total_images,context,notification_status) values(p_line_user_id,p_site_name,array_length(p_paths,1),jsonb_build_object('site_name',p_site_name),'pending') returning id into v_job;
   insert into public.analysis_job_images(job_id,idx,url) select v_job, ordinality - 1, path from unnest(p_paths) with ordinality paths(path,ordinality);
   return v_job;
 end $$;

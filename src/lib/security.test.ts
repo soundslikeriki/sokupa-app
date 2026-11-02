@@ -4,6 +4,8 @@ import { NextRequest } from "next/server";
 import { signToken, verifyToken, SESSION_COOKIE } from "./session-token";
 import { authorize } from "./server-auth";
 import { GET as callback } from "../app/api/auth/line/callback/route";
+import { POST as resumeJob } from "../app/api/analysis-jobs/[id]/resume/route";
+import { GET as recoverJobs } from "../app/api/analysis-jobs/process/route";
 import { GET as getJob } from "../app/api/analysis-jobs/[id]/route";
 import { ownedMemoPath, memoObjectPath } from "./memo-storage";
 
@@ -51,6 +53,9 @@ test("job API uses signed session ownership and hides other users' jobs", async 
     assert.equal(response.status, 404);
     assert.equal(calls.length, 2);
     assert.equal(calls[1].searchParams.get("line_user_id"), "eq.owner");
+    const resumed = await resumeJob(new NextRequest(`${origin}/api/analysis-jobs/00000000-0000-4000-8000-000000000000/resume`, { method: "POST", headers: { origin, cookie: `${SESSION_COOKIE}=${signToken("session", "owner", 30)}` } }), { params: { id: "00000000-0000-4000-8000-000000000000" } });
+    assert.equal(resumed.status, 404);
+    assert.equal(calls[3].searchParams.get("line_user_id"), "eq.owner");
   } finally {
     global.fetch = savedFetch;
     if (savedUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL; else process.env.NEXT_PUBLIC_SUPABASE_URL = savedUrl;
@@ -108,4 +113,8 @@ test("verified legacy login keeps LINE identity and null invite history; new uni
     global.fetch = savedFetch;
     names.forEach((name, index) => { if (saved[index] === undefined) delete process.env[name]; else process.env[name] = saved[index]; });
   }
+});
+
+test("scheduled recovery requires the internal secret and is closed to anonymous requests", async () => {
+  assert.equal((await recoverJobs(new NextRequest(`${origin}/api/analysis-jobs/process`))).status, 403);
 });

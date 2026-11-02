@@ -1,4 +1,4 @@
-import { DEFAULT_LOSS_RATE_PERCENT } from "./calc-logic";
+import { calculateOrderQuantity, DEFAULT_LOSS_RATE_PERCENT } from "./calc-logic";
 import type { MemoEntry, MemoProductItem, ParsedMemoPayload } from "../types";
 
 export const roundMeters = (n: number) => Math.round((n + Number.EPSILON) * 10000) / 10000;
@@ -24,19 +24,22 @@ export function validateMemoEntry(raw: unknown): MemoEntry {
   const entry = raw as Record<string, unknown>;
   const formula = typeof entry.original_formula === "string" ? entry.original_formula.trim() : "";
   const parsed = evaluateMemoFormula(formula);
-  const length = Number(entry.length_m), quantity = Number(entry.quantity);
-  if ((!parsed && (!Number.isFinite(length) || !Number.isFinite(quantity))) || length < 0 || quantity < 0) {
+  const numeric = (value: unknown): number => typeof value === "number" ? value : typeof value === "string" && /^\d+(?:\.\d+)?$/.test(value.trim()) ? Number(value) : NaN;
+  const length = parsed?.length ?? numeric(entry.length_m), quantity = parsed?.quantity ?? numeric(entry.quantity);
+  if (!Number.isFinite(length) || !Number.isFinite(quantity) || length <= 0 || quantity < 0 || !Number.isFinite(length * quantity)) {
     throw new Error("寸法・数量を読み取れませんでした。画像を確認してください。");
   }
   // Ambiguity remains a visible review item, even if the AI happened to choose one interpretation.
-  const l = parsed?.length ?? length, q = parsed?.quantity ?? quantity;
+  const l = length, q = quantity;
   return {
     original_formula: formula, length_m: l, quantity: q, subtotal_m: roundMeters(l * q),
     ...(parsed?.ambiguous || !parsed || entry.needs_review === true ? { needs_review: true, review_reason: entry.needs_review === true ? "画像の式・寸法・幅数の読み取りを確認してください" : parsed?.ambiguous ? "ハイフンが小数表記か減算か確認してください" : "式を検算できません。原画像の寸法・数量を確認してください" } : {}),
   };
 }
 
-export function parseVisionJson(text: string): { items: Record<string, unknown>[]; notes?: string } {
+type VisionPayload = { items: Record<string, unknown>[]; notes?: string; image_needs_review?: boolean; needs_review?: boolean };
+
+export function parseVisionJson(text: string): VisionPayload {
   let result: unknown;
   try {
     result = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
@@ -46,23 +49,28 @@ export function parseVisionJson(text: string): { items: Record<string, unknown>[
   if (!payload.items.length || payload.items.some((item) => !item || typeof item !== "object" || !Array.isArray((item as {entries?:unknown}).entries) || !(item as {entries:unknown[]}).entries.length)) {
     throw new Error("品番・計算式を読み取れませんでした。画像を確認してください。");
   }
-  return payload as { items: Record<string, unknown>[]; notes?: string };
+  return payload as VisionPayload;
+}
+
+export function requiresMemoReview(payload: ParsedMemoPayload): boolean {
+  return Boolean(payload.image_needs_review || payload.needs_review_any || payload.items.some((item) => item.needs_review || item.review_reasons?.length || item.entries.some((entry) => entry.needs_review)));
 }
 
 export function mergeParsedPayloads(payloads: ParsedMemoPayload[]): ParsedMemoPayload {
   const map = new Map<string, MemoProductItem>();
   for (const payload of payloads) for (const item of payload.items) {
+    const imageReview = Boolean(payload.image_needs_review || payload.needs_review_any);
     const code = item.product_code.trim().toUpperCase().replace(/[\s-]+/g, "");
     const existing = map.get(code);
     const entries = [...(existing?.entries ?? []), ...item.entries].map(validateMemoEntry);
     const total = roundMeters(entries.reduce((sum, entry) => sum + entry.subtotal_m, 0));
     const loss = existing?.loss_rate_percent ?? item.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT;
-    const reasons = Array.from(new Set([...(existing?.review_reasons ?? []), ...(item.review_reasons ?? []), ...entries.filter((entry) => entry.needs_review).map((entry) => `式：${entry.review_reason}`)]));
-    map.set(code, { ...existing, ...item, entries, total_m: total, order_quantity: Math.ceil(roundMeters(total * (1 + loss / 100))),
-      needs_review: Boolean(existing?.needs_review || item.needs_review || entries.some((entry) => entry.needs_review)), review_reasons: reasons });
+    const reasons = Array.from(new Set([...(existing?.review_reasons ?? []), ...(item.review_reasons ?? []), ...(imageReview ? ["画像：解析結果を原画像で確認してください"] : []), ...entries.filter((entry) => entry.needs_review).map((entry) => `式：${entry.review_reason}`)]));
+    map.set(code, { ...existing, ...item, entries, total_m: total, order_quantity: calculateOrderQuantity(total, loss),
+      needs_review: Boolean(imageReview || existing?.needs_review || item.needs_review || entries.some((entry) => entry.needs_review)), review_reasons: reasons });
   }
   const items = Array.from(map.values());
-  return { items, notes: Array.from(new Set(payloads.map((p) => p.notes).filter(Boolean))).join("\n"), needs_review_any: items.some((item) => item.needs_review) };
+  return { items, notes: Array.from(new Set(payloads.map((p) => p.notes).filter(Boolean))).join("\n"), image_needs_review: payloads.some((payload) => payload.image_needs_review), needs_review_any: items.some((item) => item.needs_review) };
 }
 
 export function repeatCutLength(length: number, repeatCm: number): number {

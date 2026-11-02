@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorize } from "@/lib/server-auth";
 import { ownedMemoPath } from "@/lib/memo-storage";
-import { processAnalysisJobStep } from "@/lib/analysisJobProcessor";
+import { runAnalysisJob } from "@/lib/analysisJobProcessor";
 import { waitUntil } from "@vercel/functions";
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -23,12 +23,8 @@ export async function POST(req: NextRequest) {
       const limited = error?.message.includes("monthly_limit");
       return NextResponse.json({ error: limited ? "今月の利用上限（20枚）に達しました。" : "解析の受付に失敗しました。再度お試しください。" }, { status: limited ? 429 : 503 });
     }
-    waitUntil((async () => {
-      for (let i = 0; i < paths.length + 2; i++) {
-        const step = await processAnalysisJobStep({ admin: auth.admin, jobId });
-        if (step.status === "done" || step.status === "failed") break;
-      }
-    })());
+    // Each image has an exclusive lease; longer jobs resume in separate invocations.
+    waitUntil(runAnalysisJob({ admin: auth.admin, jobId }));
     return NextResponse.json({ success: true, job_id: jobId });
   } catch {
     return NextResponse.json({ error: "解析の受付に失敗しました" }, { status: 500 });

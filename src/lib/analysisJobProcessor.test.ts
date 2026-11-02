@@ -18,6 +18,7 @@ test("worker persists a complete merged result before notifying; LINE failure ke
       notified = true;
       return new Response(null, { status: 401 });
     }
+    if (url.pathname.endsWith("/rpc/claim_analysis_image")) return json([]);
     if (init?.method === "PATCH") {
       updates.push(JSON.parse(String(init.body)));
       return json({ id: "00000000-0000-4000-8000-000000000000" });
@@ -40,9 +41,69 @@ test("worker does not finalize while another image is running", async () => {
   const calls: string[] = [];
   const admin = createClient("https://db.example.test", "test-only-key", { auth: { persistSession: false }, global: { fetch: async (input, init) => {
     const url = new URL(String(input)); calls.push(init?.method || "GET");
-    const value = url.pathname.endsWith("/analysis_jobs") ? { id: "fake-job", status: "running", total_images: 1 } : url.searchParams.get("select") === "id,idx,url,status" ? null : [{ status: "running" }];
+    const value = url.pathname.endsWith("/analysis_jobs") ? { id: "fake-job", status: "running", total_images: 1 } : url.pathname.endsWith("/rpc/claim_analysis_image") ? [] : [{ status: "running" }];
     return new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
   } } });
   assert.equal((await processAnalysisJobStep({ admin, jobId: "fake-job" })).status, "running");
-  assert.deepEqual(calls, ["GET", "GET", "GET"]);
+  assert.deepEqual(calls, ["GET", "POST", "GET", "GET"]);
+});
+
+
+test("expired lease resumes once, fences a late worker, and never duplicates the completion notification", async () => {
+  const savedFetch = global.fetch;
+  const savedToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
+  const savedUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  process.env.LINE_CHANNEL_ACCESS_TOKEN = "synthetic-token";
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://db.example.test";
+  const job: any = { id: "00000000-0000-4000-8000-000000000000", status: "running", line_user_id: "synthetic", total_images: 1, notification_status: "pending" };
+  const image: any = { id: "image", idx: 0, url: "synthetic/00000000-0000-4000-8000-000000000000.jpg", status: "queued", parsed: null };
+  let token = 0, expired = false, parseCalls = 0, notifications = 0;
+  global.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    const json = (data: unknown) => new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+    const body = init?.body ? JSON.parse(String(init.body)) : {};
+    if (url.hostname === "api.line.me") { notifications++; assert.equal(body.messages.length, 1); return json({}); }
+    if (url.pathname.includes("/storage/")) return new Response(new Uint8Array([255,216,255,217]), { headers: { "Content-Type": "image/jpeg" } });
+    if (url.pathname.endsWith("/claim_analysis_image")) {
+      if (image.status === "done" || (image.status === "running" && !expired)) return json([]);
+      image.status = "running"; image.lease_token = `lease-${++token}`; expired = false;
+      return json([{ ...image }]);
+    }
+    if (url.pathname.endsWith("/complete_analysis_image")) {
+      if (body.p_lease_token !== image.lease_token || image.status !== "running" || expired) return json(false);
+      image.status = "done"; image.parsed = body.p_parsed; return json(true);
+    }
+    if (url.pathname.endsWith("/fail_analysis_image")) throw new Error("stale worker must not fail the new result");
+    if (url.pathname.endsWith("/analysis_jobs")) {
+      if (init?.method === "PATCH") Object.assign(job, body);
+      return json({ ...job });
+    }
+    if (url.pathname.endsWith("/analysis_job_images")) return json([{ ...image }]);
+    throw new Error("Unexpected external request");
+  };
+  const payload = (meters: number) => new Response(JSON.stringify({ data: { image_needs_review: true, items: [{ product_code: "VS2067", manufacturer: "Test", entries: [{ original_formula: `${meters}×1`, length_m: meters, quantity: 1, subtotal_m: meters }], total_m: meters, order_quantity: meters }] } }));
+  let enter!: () => void, release!: (value: Response) => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const paused = new Promise<Response>((resolve) => { release = resolve; });
+  try {
+    const admin = createClient("https://db.example.test", "synthetic-key", { auth: { persistSession: false } });
+    const first = processAnalysisJobStep({ admin, jobId: job.id, parse: async () => { parseCalls++; enter(); return paused; } });
+    await entered;
+    assert.equal((await processAnalysisJobStep({ admin, jobId: job.id, parse: async () => { throw new Error("active lease duplicated OCR"); } })).status, "running");
+    assert.equal(parseCalls, 1);
+    expired = true;
+    assert.equal((await processAnalysisJobStep({ admin, jobId: job.id, parse: async () => { parseCalls++; return payload(20); } })).status, "done");
+    release(payload(100));
+    await first;
+    assert.equal(job.result.items[0].total_m, 20);
+    assert.equal(job.result.needs_review_any, true);
+    assert.equal(job.notification_status, "accepted");
+    assert.equal((await processAnalysisJobStep({ admin, jobId: job.id })).status, "done");
+    assert.equal(notifications, 1);
+    assert.equal(parseCalls, 2);
+  } finally {
+    global.fetch = savedFetch;
+    if (savedToken === undefined) delete process.env.LINE_CHANNEL_ACCESS_TOKEN; else process.env.LINE_CHANNEL_ACCESS_TOKEN = savedToken;
+    if (savedUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL; else process.env.NEXT_PUBLIC_SUPABASE_URL = savedUrl;
+  }
 });

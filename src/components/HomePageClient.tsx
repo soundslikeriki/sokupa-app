@@ -17,7 +17,7 @@ import {
   removeOrderDraftItem,
   updateOrderDraftItem,
 } from "@/lib/order-draft";
-import { readWorkspaceDraft } from "@/lib/workspace-draft";
+import { readWorkspaceDraft, archiveWorkspaceDraft } from "@/lib/workspace-draft";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import { compressImageForUpload, convertAndResizeForPreview } from "@/lib/resizeImage";
 
@@ -261,6 +261,7 @@ export default function HomePageClient() {
   }, [orderDraftItems, pendingOrderDraftQueue, processOrderDraftQueue]);
 
   const [draftReady, setDraftReady] = useState(false);
+  const [draftRecovery, setDraftRecovery] = useState<{ key: string; raw: string } | null>(null);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -271,7 +272,9 @@ export default function HomePageClient() {
         setLineUserId(session.line_user_id);
         const saved = localStorage.getItem(`sokupa:workspace:v1:${session.line_user_id}`);
         if (saved) {
-          const draft = readWorkspaceDraft(saved);
+          let draft;
+          try { draft = readWorkspaceDraft(saved); }
+          catch (error) { setDraftRecovery({ key: `sokupa:workspace:v1:${session.line_user_id}`, raw: saved }); throw error; }
           setSiteName(typeof draft.siteName === "string" ? draft.siteName : "");
           setParsed(draft.parsed);
           setOriginalParsed(draft.originalParsed ?? draft.parsed);
@@ -485,6 +488,9 @@ export default function HomePageClient() {
           }
           return;
         }
+        if (data.status === "done" && data.can_resume) {
+          await fetch(`/api/analysis-jobs/${encodeURIComponent(last)}/resume`, { method: "POST" });
+        }
         if (data.status === "done" && data.result) {
           if (data.site_name) setSiteName(data.site_name);
           setParsed(data.result as ParsedMemoPayload);
@@ -525,6 +531,10 @@ export default function HomePageClient() {
       if (cancelled) return;
       if (qErr || !data) return;
 
+      if (data.can_resume) {
+        const resumed = await fetch(`/api/analysis-jobs/${encodeURIComponent(jobAccepted.jobId)}/resume`, { method: "POST" });
+        if (!resumed.ok) setError("解析を再開できませんでした。通信の回復後に再度確認します。");
+      }
       const status = (data.status as any) || "queued";
       const done = Number(data.done_images) || 0;
       const total = Math.max(1, Number(data.total_images) || 1);
@@ -786,7 +796,7 @@ export default function HomePageClient() {
         <Button
           type="button"
           onClick={() => void handleAnalyze()}
-          disabled={images.length === 0 || images.some((i) => i.status !== "ready") || isAnalyzing}
+          disabled={!draftReady || Boolean(jobAccepted) || images.length === 0 || images.some((i) => i.status !== "ready") || isAnalyzing}
           className="w-full py-6 text-base sm:text-lg"
         >
           {isAnalyzing ? (
@@ -813,6 +823,27 @@ export default function HomePageClient() {
         </p>
       </div>
 
+      {draftRecovery ? (
+        <Card className="border-amber-500/50">
+          <CardHeader className="space-y-3">
+            <CardTitle className="text-base">保存した下書きの復元が必要です</CardTitle>
+            <CardDescription>元の保存データは保持しています。書き出すか、元データを端末内の別の場所へ退避して新しく始められます。</CardDescription>
+            <Button type="button" variant="outline" onClick={() => {
+              const url = URL.createObjectURL(new Blob([draftRecovery.raw], { type: "application/json" }));
+              const anchor = document.createElement("a"); anchor.href = url; anchor.download = "sokupa-draft-recovery.json"; anchor.click();
+              window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+            }}>保存データをダウンロード</Button>
+            <Button type="button" onClick={() => {
+              try {
+                archiveWorkspaceDraft(localStorage, draftRecovery.key, draftRecovery.raw, crypto.randomUUID());
+                setSiteName(""); setParsed(null); setOriginalParsed(null); setOrderDraftItems([]);
+                setDraftRecovery(null); setError(null); setDraftReady(true);
+              } catch (error) { setError(`元データを退避できませんでした。書き出して保管してください。 ${getErrorDetail(error)}`); }
+            }}>元データを退避して新しく始める</Button>
+          </CardHeader>
+        </Card>
+      ) : null}
+
       {error ? (
         <Card className="border-destructive/50 bg-destructive/5">
           <CardHeader>
@@ -827,7 +858,7 @@ export default function HomePageClient() {
           <CardHeader>
             <CardTitle className="text-base">解析を受け付けました</CardTitle>
             <CardDescription>
-              スマホを閉じてもサーバー側で解析が進みます。完了したらLINEで通知します。
+              サーバー側で解析しています。中断した処理は再度開くと再開します。完了後にLINEで通知します。
               {jobUi ? (
                 <span className="mt-2 block font-semibold text-emerald-800/90 dark:text-emerald-200">
                   {jobUi.percent}% 完了（{jobUi.done}/{jobUi.total}）
@@ -848,6 +879,7 @@ export default function HomePageClient() {
           setParsed((prev) => ({
             items: nextItems,
             notes: prev?.notes,
+            image_needs_review: prev?.image_needs_review,
             needs_review_any: nextItems.some((i) => i.needs_review),
           }))
         }

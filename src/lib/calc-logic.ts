@@ -27,9 +27,18 @@ export const DEFAULT_LOSS_RATE_PERCENT = Math.round(DEFAULT_LOSS_RATE * 100);
 /**
  * 実測合計に {@link DEFAULT_LOSS_RATE} のロスを加え、切り上げた発注数量を返す（検算用）。
  */
-export function calculateFinalQuantity(measuredTotal: number): number {
-  if (!Number.isFinite(measuredTotal) || measuredTotal <= 0) {
+export function calculateOrderQuantity(measuredTotal: number, lossRatePercent: number): number {
+  if (!Number.isFinite(measuredTotal) || measuredTotal <= 0 || !Number.isFinite(lossRatePercent) || lossRatePercent < 0) {
     return 0;
   }
-  return Math.ceil(measuredTotal * (1 + DEFAULT_LOSS_RATE));
+  const value = measuredTotal * (1 + lossRatePercent / 100);
+  if (!Number.isFinite(value)) return 0;
+  const nearest = Math.round(value);
+  // Correct arithmetic noise only, without rounding away meaningful extra meters.
+  const tolerance = Math.max(1, Math.abs(value)) * Number.EPSILON * 8;
+  return Math.abs(value - nearest) <= tolerance ? nearest : Math.ceil(value);
+}
+
+export function calculateFinalQuantity(measuredTotal: number): number {
+  return calculateOrderQuantity(measuredTotal, DEFAULT_LOSS_RATE_PERCENT);
 }

@@ -11,8 +11,8 @@ const object = (value: unknown): value is Record<string, any> => Boolean(value) 
 const number = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
 function memo(value: unknown): boolean {
   if (value === null) return true;
-  return object(value) && (value.notes === undefined || typeof value.notes === "string") && Array.isArray(value.items) && value.items.length <= 1000 && value.items.every((item: unknown) =>
-    object(item) && typeof item.product_code === "string" && typeof item.manufacturer === "string" && number(item.total_m) && number(item.order_quantity) &&
+  return object(value) && ["image_needs_review", "needs_review_any"].every((key) => value[key] === undefined || typeof value[key] === "boolean") && (value.notes === undefined || typeof value.notes === "string") && Array.isArray(value.items) && value.items.length <= 1000 && value.items.every((item: unknown) =>
+    object(item) && (item.needs_review === undefined || typeof item.needs_review === "boolean") && typeof item.product_code === "string" && typeof item.manufacturer === "string" && number(item.total_m) && number(item.order_quantity) &&
     ["notes", "spec", "catalog_name", "catalog_page_num", "source_url"].every((key) => item[key] === undefined || typeof item[key] === "string") &&
     ["repeat_cm", "repeat_height_m", "manual_order_quantity", "loss_rate_percent"].every((key) => item[key] === undefined || number(item[key])) &&
     (!item.repeat_info || (object(item.repeat_info) && typeof item.repeat_info.from_product === "string")) &&
@@ -31,4 +31,13 @@ export function readWorkspaceDraft(text: string): WorkspaceDraft {
     throw new Error("保存した下書きを復元できません。端末内のデータは保持しています。");
   }
   return value as WorkspaceDraft;
+}
+
+export function archiveWorkspaceDraft(storage: Pick<Storage, "getItem" | "setItem">, key: string, raw: string, suffix: string): string {
+  if (storage.getItem(key) !== raw) throw new Error("保存データが別の画面で更新されました。再読み込みしてください。");
+  const archiveKey = `${key}:recovery:${suffix}`;
+  if (storage.getItem(archiveKey) !== null) throw new Error("退避先が既に存在します。再度お試しください。");
+  storage.setItem(archiveKey, raw);
+  if (storage.getItem(archiveKey) !== raw) throw new Error("保存データの退避を確認できませんでした。");
+  return archiveKey;
 }

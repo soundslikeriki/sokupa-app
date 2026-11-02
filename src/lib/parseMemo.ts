@@ -430,12 +430,12 @@ export async function parseMemoBody(body: ParseMemoBody) {
     }
 
     const visionStarted = Date.now();
-    const result = await visionModel.generateContent(contents, { timeout: 150_000 });
+    const result = await visionModel.generateContent(contents, { signal: AbortSignal.timeout(150_000) });
     console.info("[parse-memo] timing", { stage: "vision", durationMs: Date.now() - visionStarted });
     const responseText = result.response.text();
 
     const parsedData = parseVisionJson(responseText);
-    const rawItems = parsedData.items.map((item) => ({ ...item, vision_needs_review: item.needs_review, vision_confidence: item.confidence }));
+    const rawItems = parsedData.items.map((item) => ({ ...item, image_needs_review: parsedData.image_needs_review === true || item.image_needs_review === true, vision_needs_review: parsedData.needs_review === true || item.needs_review, vision_confidence: item.confidence }));
 
     const admin = createSupabaseAdmin();
     const catalogStarted = Date.now();
@@ -473,6 +473,7 @@ export async function parseMemoBody(body: ParseMemoBody) {
         items,
         notes: notes ?? "",
         needs_review_any,
+        image_needs_review: parsedData.image_needs_review === true,
       },
       imageCount: base64Images.length,
     });

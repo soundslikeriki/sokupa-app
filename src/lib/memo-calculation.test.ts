@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { evaluateMemoFormula, validateMemoEntry, mergeParsedPayloads, parseVisionJson, repeatCutLength } from "./memo-calculation";
 import type { MemoProductItem } from "../types";
+import { calculateFinalQuantity, calculateOrderQuantity } from "./calc-logic";
 
 test("field width additions and subtraction precede multiplication", () => {
   assert.deepEqual(evaluateMemoFormula("2.5×7+4-3"), { length: 2.5, quantity: 8, subtotal: 20, ambiguous: false });
@@ -44,4 +45,20 @@ test("repeat rounding is stable at floating point boundaries", () => {
   assert.equal(repeatCutLength(2.7, 60), 3);
   assert.equal(repeatCutLength(repeatCutLength(2.7, 60), 60), 3);
   assert.equal(repeatCutLength(0.21, 7), 0.21);
+});
+
+test("20m from decimal rows orders 23m at 15%, without hiding real excess", () => {
+  const total = 2.7 * 6 + 3.8;
+  assert.ok(total > 20);
+  assert.equal(calculateOrderQuantity(total, 15), 23);
+  assert.equal(calculateFinalQuantity(total), 23);
+  assert.equal(calculateOrderQuantity(20.00000001, 15), 24);
+  assert.equal(calculateOrderQuantity(100, 10), 110);
+});
+
+test("null, empty and non-numeric OCR fields never become successful zero measurements", () => {
+  for (const value of [null, undefined, "", " ", false, true, [], {}, NaN, Infinity, -1, 0]) {
+    assert.throws(() => validateMemoEntry({ original_formula: "", length_m: value, quantity: value }));
+  }
+  assert.equal(validateMemoEntry({ original_formula: "2.5×8", length_m: null, quantity: null }).subtotal_m, 20);
 });

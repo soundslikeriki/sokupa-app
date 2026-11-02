@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readWorkspaceDraft } from "./workspace-draft";
+import { readWorkspaceDraft, archiveWorkspaceDraft } from "./workspace-draft";
 
 test("workspace round-trip retains edits, original measurements, repeat settings and order draft", () => {
   const original = { product_code: "VS2067", manufacturer: "Test", total_m: 5.4, order_quantity: 7, entries: [{ original_formula: "2.7×2", length_m: 2.7, quantity: 2, subtotal_m: 5.4 }] };
@@ -13,4 +13,17 @@ test("workspace round-trip retains edits, original measurements, repeat settings
 
 test("corrupt, incomplete and unsupported drafts are rejected without rewriting input", () => {
   for (const text of ["bad json", "{}", '{"version":2}', '{"version":1,"siteName":"Test","parsed":{"items":[{}]},"orderDraftItems":[]}', '{"version":1,"siteName":"Test","parsed":null,"orderDraftItems":[{}]}']) assert.throws(() => readWorkspaceDraft(text));
+});
+
+test("invalid negative draft can be archived byte-for-byte; failures never replace the source", () => {
+  const raw = '{"version":1,"parsed":{"items":[{"quantity":-1}]}}';
+  const values = new Map([["draft", raw]]);
+  const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+  assert.throws(() => readWorkspaceDraft(raw));
+  const backup = archiveWorkspaceDraft(storage, "draft", raw, "synthetic");
+  assert.equal(storage.getItem(backup), raw);
+  assert.equal(storage.getItem("draft"), raw);
+  assert.throws(() => archiveWorkspaceDraft(storage, "draft", "older state", "another"));
+  assert.throws(() => archiveWorkspaceDraft({ ...storage, setItem: () => { throw new Error("quota exceeded"); } }, "draft", raw, "failed"));
+  assert.equal(storage.getItem("draft"), raw);
 });

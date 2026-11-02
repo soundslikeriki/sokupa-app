@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ListPlus } from "lucide-react";
-import { repeatCutLength } from "@/lib/memo-calculation";
-import { DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
+import { repeatCutLength, roundMeters } from "@/lib/memo-calculation";
+import { calculateOrderQuantity, DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import {
   areAllCodesCollapsed,
   pruneCollapsedCodes,
@@ -147,7 +147,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
       ...item,
       entries,
       total_m,
-      order_quantity: Math.ceil(total_m * (1 + lossRatePercent / 100)),
+      order_quantity: calculateOrderQuantity(total_m, lossRatePercent),
       loss_rate_percent: lossRatePercent,
     };
   };
@@ -247,9 +247,10 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
   };
 
   const handleOverrideChange = (productCode: string, field: keyof Omit<ItemOverride, "entryQtys" | "entryEditMode" | "entryRepeatActive" | "entryLengths">, value: string) => {
+    const val = value === "" ? "" : Number(value);
+    if (val !== "" && (!Number.isFinite(val) || val < 0)) return;
     clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
-      const val = value === "" ? "" : Number(value);
       return {
         ...prev,
         [productCode]: {
@@ -261,9 +262,10 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
   };
 
   const handleEntryFieldChange = (productCode: string, entryIndex: number, field: "entryQtys" | "entryLengths", value: string) => {
+    const val = value === "" ? "" : Number(value);
+    if (val !== "" && (!Number.isFinite(val) || val < 0)) return;
     clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
-      const val = value === "" ? "" : Number(value);
       const prevOvr = prev[productCode] || {};
       const prevFieldVals = prevOvr[field] || {};
       return {
@@ -574,7 +576,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
          }
 
          const subtotal = stripL * actualQ;
-         calcTotalM += subtotal;
+         calcTotalM = roundMeters(calcTotalM + roundMeters(subtotal));
          calcTotalQty += actualQ;
 
          return {
@@ -594,7 +596,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
 
 
 
-      const calculatedOrderQuantity = Math.ceil(calcTotalM * (1 + lossRate / 100));
+      const calculatedOrderQuantity = calculateOrderQuantity(calcTotalM, lossRate);
       const manualOrderQuantity = Object.prototype.hasOwnProperty.call(manualOrderQuantities, item.product_code) ? manualOrderQuantities[item.product_code] : item.manual_order_quantity;
       const order_quantity =
         typeof manualOrderQuantity === "number" && Number.isFinite(manualOrderQuantity)
@@ -1125,7 +1127,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                       <div className="flex-1">
                         <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">壁の高さ (m)</label>
                         <Input 
-                          type="number" 
+                          type="number" min="0"
                           step="0.1" 
                           placeholder="例: 2.4" 
                           className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
@@ -1137,7 +1139,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                       <div className="flex-1">
                         <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">リピート (cm)</label>
                         <Input 
-                          type="number" 
+                          type="number" min="0"
                           step="0.1" 
                           placeholder="例: 32" 
                           className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
@@ -1228,7 +1230,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                                       <div className="flex flex-wrap items-center gap-1 sm:gap-1.5">
                                         <Input 
                                           autoFocus
-                                          type="number" 
+                                          type="number" min="0"
                                           step="0.1" 
                                           className="h-8 w-[4.25rem] border-indigo-300 px-1 text-center text-xs font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[5.5rem] sm:text-sm"
                                           aria-label={`${product.product_code} ${eidx + 1}行目の長さ (m)`}
@@ -1238,7 +1240,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                                         <span className="shrink-0 text-[11px] sm:text-sm">m</span>
                                         <span className="mx-0.5 shrink-0 text-[11px] text-muted-foreground sm:text-sm">×</span>
                                         <Input 
-                                          type="number" 
+                                          type="number" min="0"
                                           className="h-8 w-[3.25rem] border-indigo-300 px-1 text-center text-xs font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[4rem] sm:text-sm"
                                           aria-label={`${product.product_code} ${eidx + 1}行目の幅数`}
                                           value={qValue}

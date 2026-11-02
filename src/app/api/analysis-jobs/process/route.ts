@@ -1,6 +1,8 @@
+import { timingSafeEqual } from "node:crypto";
+import { waitUntil } from "@vercel/functions";
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { processAnalysisJobStep } from "@/lib/analysisJobProcessor";
+import { processAnalysisJobStep, runAnalysisJob } from "@/lib/analysisJobProcessor";
 import { requireJobSecret } from "@/lib/jobSecret";
 
 export const runtime = "nodejs";
@@ -30,4 +32,18 @@ export async function POST(req: NextRequest) {
     const message = e instanceof Error ? e.message : "Internal Server Error";
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+/** Private scheduled recovery. Configure its scheduler only after release approval. */
+export async function GET(req: NextRequest) {
+  const expected = process.env.CRON_SECRET;
+  const supplied = req.headers.get("authorization")?.replace(/^Bearer /, "");
+  const cron = Boolean(expected && supplied && Buffer.byteLength(expected) === Buffer.byteLength(supplied) && timingSafeEqual(Buffer.from(expected), Buffer.from(supplied)));
+  if (!requireJobSecret(req) && !cron) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const admin = createSupabaseAdmin();
+  if (!admin) return NextResponse.json({ error: "Server not configured" }, { status: 503 });
+  const { data, error } = await admin.rpc("resumable_analysis_jobs");
+  if (error) return NextResponse.json({ error: "Recovery lookup failed" }, { status: 503 });
+  waitUntil(Promise.all((data ?? []).map((job: { id: string }) => runAnalysisJob({ admin, jobId: job.id }))));
+  return NextResponse.json({ accepted: data?.length ?? 0 }, { status: 202 });
 }

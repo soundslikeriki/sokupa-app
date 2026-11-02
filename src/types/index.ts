@@ -58,6 +58,7 @@ export type MemoProductItem = {
 /** /api/parse-memo の data 本体 */
 export type ParsedMemoPayload = {
   items: MemoProductItem[];
+  image_needs_review?: boolean;
   notes?: string;
   /** いずれかの品番で要確認が立っている */
   needs_review_any?: boolean;
