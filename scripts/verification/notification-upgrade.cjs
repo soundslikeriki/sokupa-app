@@ -25,6 +25,7 @@ for(const version of ['fresh','previous_phase1_applied']){
  await sql(readFileSync('supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql','utf8'));
  await sql(readFileSync('supabase/migrations/20261102203127_verified_worker_success_ticks.sql','utf8'));
  await sql(readFileSync('supabase/migrations/20261102205248_provider_failure_recovery.sql','utf8'));
+ await sql(readFileSync('supabase/migrations/20261102210736_signed_scheduler_dispatches.sql','utf8'));
  check(JSON.stringify((await db.query('select id from analysis_jobs order by id')).rows)===JSON.stringify(before),'all historic IDs retained');
  for(const id of [old,failed]) check((await row('select notification_status from analysis_jobs where id=$1',[id])).notification_status==='legacy_unknown','unproven old completion quarantined');
  check((await row('select notification_status from analysis_jobs where id=$1',[accepted])).notification_status==='accepted','accepted stays accepted');

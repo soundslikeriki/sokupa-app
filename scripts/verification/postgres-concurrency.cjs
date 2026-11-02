@@ -3,6 +3,7 @@ const fs=require('node:fs');const os=require('node:os');const path=require('node
 const {spawn,execFileSync}=require('node:child_process');const assert=require('node:assert/strict');
 const {Client,Pool}=require(process.env.PG_CLIENT_MODULE||'pg');
 const {elapseHealthClock,primeWorkerHealth}=require('./worker-health-fixture.cjs');
+const {createHmac}=require('node:crypto');
 const bin=process.env.PG_TEST_BIN;
 if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary directory');
 (async()=>{
@@ -115,7 +116,46 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
   check(race.every(r=>r.status==='fulfilled'),'completion and quota failure settlement do not deadlock');
   const raceState=await row('select j.status,j.quota_refunded,i.status image_status from analysis_jobs j join analysis_job_images i on i.job_id=j.id where j.id=$1',[raceJob]);
   check((raceState.image_status==='done'&&raceState.quota_refunded===0)||(raceState.status==='failed'&&raceState.quota_refunded===1),'race chooses success or refund, never both');
-  console.log(`PASS: ${checks} real PostgreSQL 17.6 multi-connection checks; Unix socket only; synthetic data.`);
+  const coreChecks=checks;
+  await admin.query(fs.readFileSync('supabase/migrations/20261102210736_signed_scheduler_dispatches.sql','utf8'));
+  const dispatchId=(await row('select gen_random_uuid() id')).id,now=(await row('select floor(extract(epoch from now()))::bigint n')).n;
+  const consumed=(await Promise.all(Array.from({length:8},()=>service('select claim_analysis_dispatch($1,$2,$3) ok',[dispatchId,now,Number(now)+120])))).flat();
+  check(consumed.filter(r=>r.ok).length===1,'8 signed request replays consume the nonce once');
+  check((await service('select claim_analysis_dispatch(gen_random_uuid(),$1,$2) ok',[Number(now)-121,Number(now)-1]))[0].ok===false,'expired signed requests cannot be consumed');
+  await admin.query(`create schema extensions;create extension pgcrypto with schema extensions;
+    create schema vault;create table vault.test_keys(id uuid primary key,value text);create view vault.decrypted_secrets as select id,value decrypted_secret from vault.test_keys;
+    create schema net;create table net.fixture_requests(id bigserial primary key,url text,headers jsonb,timeout_milliseconds integer);
+    create table net._http_response(id bigint,status_code integer,content_type text,headers jsonb,content text,timed_out boolean,error_msg text,created timestamptz default now());
+    create function net.http_get(url text,params jsonb default '{}',headers jsonb default '{}',timeout_milliseconds integer default 5000) returns bigint language sql as $$insert into net.fixture_requests(url,headers,timeout_milliseconds) values($1,$3,$4) returning id$$;`);
+  await admin.query(fs.readFileSync('ops/cron/supabase-dispatch.example.sql','utf8'));
+  check((await row('select sokupa_ops.enqueue_dispatch() id')).id===null,'candidate scheduler starts disabled');
+  const fixtureKey='synthetic-fixture-only-key-00000000000000',keyId=(await row('insert into vault.test_keys values(gen_random_uuid(),$1) returning id',[fixtureKey])).id;
+  await admin.query("update sokupa_ops.scheduler_config set enabled=true,origin='https://worker.example.test',secret_id=$1",[keyId]);
+  let requestId=(await row('select sokupa_ops.enqueue_dispatch() id')).id;
+  const sent=await row('select * from net.fixture_requests where id=$1',[requestId]),headers=sent.headers;
+  const canonical=['SOKUPA-DISPATCH-V1','GET','https://worker.example.test','/api/analysis-jobs/process',headers['x-sokupa-dispatch-id'],headers['x-sokupa-issued-at'],headers['x-sokupa-expires-at']].join('\n');
+  check(headers['x-sokupa-signature']===createHmac('sha256',fixtureKey).update(canonical).digest('hex'),'Postgres HMAC matches independent Node verification');
+  check(!JSON.stringify(headers).includes(fixtureKey),'only a scoped short-lived signature enters the HTTP queue');
+  check(sent.timeout_milliseconds===310000,'candidate explicitly bounds the HTTP timeout');
+  const enqueue=(await Promise.all(Array.from({length:8},()=>pool.query('select sokupa_ops.enqueue_dispatch() id')))).flatMap(r=>r.rows);
+  check(enqueue.every(r=>r.id===null),'same-minute scheduler duplicates cannot enqueue twice');
+  const ticksBefore=(await row('select count(*)::int n from analysis_worker_ticks')).n;
+  await admin.query("insert into net._http_response(id,status_code,content_type,content)values($1,200,'application/json',$2)",[requestId,JSON.stringify({processed:0,processing_enabled:false})]);
+  await admin.query('select sokupa_ops.reconcile_dispatches()');
+  check((await row('select status from sokupa_ops.dispatches')).status==='succeeded','expected JSON response is observed as transport success');
+  check((await row('select count(*)::int n from analysis_worker_ticks')).n===ticksBefore,'transport observation never fabricates a worker heartbeat');
+  for(const [status,type,content,timeout,expected] of [[200,'text/html','<html>Login</html>',false,'invalid_response'],[401,'application/json','{}',false,'failed'],[200,'application/json','{}',true,'failed']]){
+    await admin.query('delete from sokupa_ops.dispatches');requestId=(await row('select sokupa_ops.enqueue_dispatch() id')).id;
+    await admin.query('insert into net._http_response(id,status_code,content_type,content,timed_out)values($1,$2,$3,$4,$5)',[requestId,status,type,content,timeout]);await admin.query('select sokupa_ops.reconcile_dispatches()');
+    check((await row('select status from sokupa_ops.dispatches')).status===expected,'HTTP failure/HTML/timeout cannot be a successful invocation');
+  }
+  await admin.query('delete from sokupa_ops.dispatches');await admin.query('select sokupa_ops.enqueue_dispatch()');await admin.query("update sokupa_ops.dispatches set response_deadline=now()-interval '1 second'");await admin.query('select sokupa_ops.reconcile_dispatches()');
+  check((await row('select status from sokupa_ops.dispatches')).status==='expired','missing response expires instead of remaining successful');
+  for(const role of ['anon','authenticated','service_role']){
+    await admin.query(`set role ${role}`);await assert.rejects(admin.query('select sokupa_ops.enqueue_dispatch()'),/permission denied/);checks++;await admin.query('reset role');
+  }
+  console.log(`PASS: ${coreChecks} real PostgreSQL 17.6 core concurrency checks; Unix socket only; synthetic data.`);
+  console.log(`PASS: ${checks-coreChecks} isolated scheduler SQL/crypto checks; pg_net HTTP and Vault are synthetic fixtures, not real services.`);
  }finally{
   if(admin)await admin.query('rollback').catch(()=>{});
   if(pool)await pool.end();if(admin)await admin.end();

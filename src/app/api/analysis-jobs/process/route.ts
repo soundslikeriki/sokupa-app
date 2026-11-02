@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { processAnalysisJobStep } from "@/lib/analysisJobProcessor";
 import { requireJobSecret, requireScheduledSecret } from "@/lib/jobSecret";
+import {verifySchedulerDispatch} from "@/lib/scheduler-dispatch";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -38,10 +39,17 @@ export async function POST(req: NextRequest) {
 
 /** Private scheduled recovery. Configure its scheduler only after release approval. */
 export async function GET(req: NextRequest) {
-  if (!requireScheduledSecret(req)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const existingSecret=requireScheduledSecret(req);
+  const dispatch=existingSecret?null:verifySchedulerDispatch(req);
+  if (!existingSecret&&!dispatch) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const admin = createSupabaseAdmin();
   if (!admin) return NextResponse.json({ error: "Server not configured" }, { status: 503 });
   try {
+    if(dispatch){
+      const {data,error}=await admin.rpc("claim_analysis_dispatch",{p_id:dispatch.id,p_issued_at:dispatch.issuedAt,p_expires_at:dispatch.expiresAt});
+      if(error)return NextResponse.json({error:"Dispatch verification unavailable"},{status:503});
+      if(data!==true)return NextResponse.json({error:"Expired or duplicate dispatch"},{status:409});
+    }
     const result = await runScheduledAnalysisBatch(admin);
     return NextResponse.json(result);
   } catch {

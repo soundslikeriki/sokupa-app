@@ -49,11 +49,11 @@
 | 確認 | 結果 |
 | --- | --- |
 | 変更前 npm test / lint | 21件成功 / 成功 |
-| 変更後 npm test | 57件成功。認証・OAuth state・既存NULL招待履歴・所有者・数量・JSON失敗・下書き・通知・ジョブ確定順序・基盤障害時のCron失敗・provider障害分類を合成データとモックで検証 |
+| 変更後 npm test | 59件成功。認証・OAuth state・既存NULL招待履歴・所有者・数量・JSON失敗・下書き・通知・ジョブ確定順序・基盤障害時のCron失敗・provider障害分類・署名付き呼出しを合成データとモックで検証 |
 | npx tsc --noEmit / npm run lint | 成功 |
 | ローカル実Postgres 17.6 | 39項目成功。私有Unixソケットと合成データで8接続の取得・確定・再取得・旧トークン拒否・行ロック・利用枠競合・管理者無制限・稼働判定・利用枠返却の競合を確認。Supabase実サービスとは別 |
 | npm run build | 成功。既存由来のlibheif動的requireとBrowserslist古さの警告は残る。Google Fonts取得にはネットワーク許可が必要だった |
-| 隔離PostgreSQL (PGlite 0.5.14) | 85項目成功。追加SQLとPhase 2の6本を実行し、匿名／authenticated拒否、サービス権限、招待の一回性とロールバック、上限、無制限、他バケット保全、リースの排他・期限回復・旧トークン拒否・再開回数上限、新旧ワーカー切替の猶予期間を確認。本番には接続しない |
+| 隔離PostgreSQL (PGlite 0.5.14) | 89項目成功。追加SQLとPhase 2の7本を実行し、匿名／authenticated拒否、サービス権限、招待の一回性とロールバック、上限、無制限、他バケット保全、リースの排他・期限回復・旧トークン拒否・再開回数上限、新旧ワーカー切替の猶予期間を確認。本番には接続しない |
 | 定期処理の稼働判定 (PGlite) | 40項目成功。成功2回、失敗後・時間切れ後の再開、重複完了、順序逆転、旧呼出しの拒否、権限制御を確認 |
 | 通知アップグレード (PGlite) | 28項目成功。新規と旧Phase 1適用済みの両経路で、過去通知の隔離・監査、既定値、既存ID保持を確認 |
 | provider障害と枠 (PGlite) | 51項目成功。再試行・上限・予約月・返却一回性・legacy保全・権限・rollbackを確認 |
@@ -122,3 +122,5 @@ DBのジョブ取得・状態確認・確定・失敗記録、通知状態保存
 ## Provider障害の追補
 
 追加マイグレーション `20261102205248_provider_failure_recovery.sql` を上記4本の後、対応コード配備前に適用する。通常マイグレーション5本とPhase 2は引き続き段階適用する。再試行・利用枠の契約、残る重複課金リスク、旧ジョブの返却制限は [provider-recovery.md](./provider-recovery.md) に記載した。Hobby維持・Proへ変更しないという最新のユーザー方針を継続し、公開・外部設定・鍵生成は未実施。
+
+署名付き呼出しの追加migration `20261102210736_signed_scheduler_dispatches.sql` は、上記5本の後にnonceの非公開表とRPCだけを追加する。鍵や外部cronを作成しない。Supabase候補のSQL雛形は自動migration対象外で、既定無効のまま。ローカル実Postgresで16項目の署名・応答観測・重複防止を検査したが、pg_net HTTPとVaultは合成fixtureである。[実装と残る条件](../ops/cron/signed-candidate.md)を参照。

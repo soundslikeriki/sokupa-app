@@ -28,7 +28,7 @@ Vercel Cronの配送はbest effortで、失敗時の即時再試行や全呼出�
 
 ユーザーはHobby維持・Proへ変更しない方針を明示済み。Supabase Cron等の低固定費候補を優先し、Vercel Cron毎分設定は有効化しない。残る個別確認は、別スケジューラの採用と費用上限、必要な専用秘密の生成・設定、独立検証環境の資格情報です。実値の生成・登録・課金プラン変更は行っていません。
 
-Supabase Cron案は[実現可能性調査](./supabase-feasibility.md)を参照。実装・有効化はしておらず、Vercel Hobbyの業務用途条件や実行料金・配送の問題を解決済みとは扱わない。
+Supabase Cron案は[実現可能性調査](./supabase-feasibility.md)と[署名付き候補の実装・隔離試験](./signed-candidate.md)を参照。専用署名・再利用防止・無効なSQL雛形までは実装したが、実pg_net HTTP・Cron・Vaultは未検証／未有効化。実行料金や配送の問題を解決済みとは扱わない。
 
 ## 有効化手順（未実施）
 
