@@ -16,6 +16,9 @@ export type MemoEntry = {
   length_m: number;
   quantity: number;
   subtotal_m: number;
+  needs_review?: boolean;
+  review_reason?: string;
+  repeat_enabled?: boolean;
 };
 
 /** 品番単位で集約された1ブロック（AI出力スキーマ） */
@@ -25,6 +28,10 @@ export type MemoProductItem = {
   entries: MemoEntry[];
   total_m: number;
   order_quantity: number;
+  repeat_cm?: number;
+  repeat_height_m?: number;
+  manual_order_quantity?: number;
+  review_reasons?: string[];
   /** 品番ごとのロス率（%）。未指定時は既定値を使う */
   loss_rate_percent?: number;
   /** product_master 等で補完した規格（未登録時は API で「規格情報なし」） */

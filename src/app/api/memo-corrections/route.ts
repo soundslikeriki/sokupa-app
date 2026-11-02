@@ -1,3 +1,4 @@
+import { authorize } from "@/lib/server-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
 
@@ -13,6 +14,8 @@ type CorrectionPayload = {
 
 export async function POST(req: NextRequest) {
   try {
+    const auth = await authorize(req);
+    if (auth.error) return auth.error;
     const body = (await req.json()) as CorrectionPayload;
     if (!body || typeof body !== "object") {
       return NextResponse.json({ error: "Invalid body" }, { status: 400 });
@@ -32,6 +35,7 @@ export async function POST(req: NextRequest) {
 
     const { error } = await admin.from("memo_corrections").insert({
       site_name,
+      line_user_id: auth.lineUserId,
       kind,
       before,
       after,

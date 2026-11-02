@@ -5,22 +5,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-function getCookie(name: string): string | null {
-  const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
-  return match ? decodeURIComponent(match[2]) : null;
-}
-
-function setClientCookie(name: string, value: string, maxAgeSec = 60 * 60 * 24 * 365): void {
-  try {
-    const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
-    const secure = isHttps ? ";Secure" : "";
-    document.cookie =
-      `${name}=${encodeURIComponent(value)};path=/;max-age=${maxAgeSec};SameSite=Lax${secure}`;
-  } catch {
-    // ignore
-  }
-}
-
 type Props = {
   children: React.ReactNode;
 };
@@ -39,143 +23,27 @@ export function InviteGate({ children }: Props) {
     let cancelled = false;
     const run = async () => {
       try {
-        // ログアウト処理
-        if (typeof window !== "undefined") {
-          const sp = new URLSearchParams(window.location.search);
-          if (sp.get("logout") === "1") {
-            // localStorageをクリア
-            localStorage.removeItem("sokupa:invited");
-            localStorage.removeItem("sokupa:line_user_id");
-            localStorage.removeItem("sokupa:display_name");
-            // クエリを消す
-            window.history.replaceState({}, "", "/");
-            // stateをリセット
-            setInvited(false);
-            setLineUserId(null);
-            setDisplayName(null);
-            setReady(true);
-            return;
-          }
-        }
-
-        // --- 無制限ユーザー判定（招待コード/LINEログインをスキップ） ---
-        // localStorage に line_user_id が既にある場合も常にチェックする
-        let existingLineUserId: string | null = null;
-        try {
-          const lid = localStorage.getItem("sokupa:line_user_id") || getCookie("sokupa_line_user_id");
-          existingLineUserId = lid && lid.trim() ? lid : null;
-        } catch {
-          existingLineUserId = null;
-        }
-
-        // 既存の localStorage 値があるのに cookie に無い場合、cookie へ書き戻す
-        // （iOS Safari 等でサーバ Set-Cookie が落ちた以前のセッション分を復元）
-        if (existingLineUserId && !getCookie("sokupa_line_user_id")) {
-          setClientCookie("sokupa_line_user_id", existingLineUserId);
-        }
-        const existingDisplayName = (() => {
-          try {
-            return localStorage.getItem("sokupa:display_name") || getCookie("sokupa_display_name") || "";
-          } catch {
-            return "";
-          }
-        })();
-        if (existingDisplayName && !getCookie("sokupa_display_name")) {
-          setClientCookie("sokupa_display_name", existingDisplayName);
-        }
-        const existingInvited = (() => {
-          try {
-            return localStorage.getItem("sokupa:invited") === "true" || getCookie("sokupa_invited") === "true";
-          } catch {
-            return false;
-          }
-        })();
-        if (existingInvited && getCookie("sokupa_invited") !== "true") {
-          setClientCookie("sokupa_invited", "true");
-        }
-
-        if (existingLineUserId) {
-          const res = await fetch(
-            `/api/auth/check-unlimited?line_user_id=${encodeURIComponent(existingLineUserId)}`,
-            { method: "GET" },
-          );
-          const json = (await res.json().catch(() => ({}))) as { unlimited?: boolean };
-          if (!cancelled && json?.unlimited === true) {
-            setInvited(true);
-            setLineUserId(existingLineUserId);
-            setReady(true);
-            return;
-          }
-        }
-
-      // LINEログイン完了後、クエリで戻ってくる（/api/auth/line/callback -> /?line_user_id=...）
-      if (typeof window !== "undefined") {
-        const sp = new URLSearchParams(window.location.search);
-        const qLineUserId = sp.get("line_user_id");
-        const qDisplayName = sp.get("display_name");
-        if (qLineUserId) {
-          localStorage.setItem("sokupa:line_user_id", qLineUserId);
-          // サーバ Set-Cookie が落ちた環境向けにクライアント側でも cookie を書き戻す
-          setClientCookie("sokupa_line_user_id", qLineUserId);
-          if (!cancelled) setLineUserId(qLineUserId);
-        }
-        if (qDisplayName) {
-          localStorage.setItem("sokupa:display_name", qDisplayName);
-          setClientCookie("sokupa_display_name", qDisplayName);
-          if (!cancelled) setDisplayName(qDisplayName);
-        }
-        if (qLineUserId || qDisplayName) {
-          // クエリを消す
+        // Legacy IDs remain display hints only. The server verifies a signed HttpOnly session.
+        const response = await fetch("/api/auth/session", { cache: "no-store" });
+        const session = await response.json();
+        if (cancelled) return;
+        if (!response.ok) throw new Error("ログイン状態を確認できません。通信を確認して再読み込みしてください。");
+        setInvited(Boolean(session.authenticated || session.invited));
+        setLineUserId(session.authenticated ? session.line_user_id : null);
+        setDisplayName(session.authenticated ? session.display_name : null);
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("auth_error")) setError("招待コードを確認してからLINEでログインしてください。");
+        if (params.has("line_user_id") || params.has("display_name") || params.has("logout")) {
           window.history.replaceState({}, "", window.location.pathname);
         }
-
-        // クエリで line_user_id が来た場合も無制限チェック
-        if (qLineUserId) {
-          const res = await fetch(
-            `/api/auth/check-unlimited?line_user_id=${encodeURIComponent(qLineUserId)}`,
-            { method: "GET" },
-          );
-          const json = (await res.json().catch(() => ({}))) as { unlimited?: boolean };
-          if (!cancelled && json?.unlimited === true) {
-            setInvited(true);
-            setLineUserId(qLineUserId);
-            setReady(true);
-            return;
-          }
-        }
-      }
-
-      const invited =
-        localStorage.getItem("sokupa:invited") === "true" || getCookie("sokupa_invited") === "true";
-      if (!cancelled) setInvited(invited);
-      if (invited && getCookie("sokupa_invited") !== "true") {
-        setClientCookie("sokupa_invited", "true");
-      }
-      const lid = localStorage.getItem("sokupa:line_user_id") || getCookie("sokupa_line_user_id");
-      if (!cancelled) setLineUserId(lid && lid.trim() ? lid : null);
-      if (lid && lid.trim() && !getCookie("sokupa_line_user_id")) {
-        setClientCookie("sokupa_line_user_id", lid);
-      }
-      const dn = localStorage.getItem("sokupa:display_name") || getCookie("sokupa_display_name");
-      if (!cancelled) setDisplayName(dn && dn.trim() ? dn : null);
-      if (dn && dn.trim() && !getCookie("sokupa_display_name")) {
-        setClientCookie("sokupa_display_name", dn);
-      }
-      } catch {
-        if (!cancelled) {
-          setInvited(false);
-          setLineUserId(null);
-          setDisplayName(null);
-        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "通信に失敗しました");
       } finally {
         if (!cancelled) setReady(true);
       }
     };
-
     void run();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   const normalized = useMemo(() => code.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8), [code]);
@@ -196,14 +64,9 @@ export function InviteGate({ children }: Props) {
         setError("コードが無効です");
         return;
       }
-      try {
-        localStorage.setItem("sokupa:invited", "true");
-      } catch {
-        // ignore
-      }
-      // サーバ Set-Cookie が落ちた環境向けにクライアント側でも cookie を書く
-      setClientCookie("sokupa_invited", "true");
       setInvited(true);
+    } catch {
+      setError("通信に失敗しました。再度お試しください。");
     } finally {
       setSubmitting(false);
     }
@@ -244,7 +107,10 @@ export function InviteGate({ children }: Props) {
           <CardTitle className="text-xl text-center">ようこそ！ソクパへ</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground text-center">招待コードを入力してください</p>
+          <p className="text-sm text-muted-foreground text-center">初めての方は招待コードを入力してください</p>
+          <Button type="button" variant="outline" className="w-full" asChild>
+            <a href="/api/auth/line">登録済みの方・管理者はLINEでログイン</a>
+          </Button>
           <div className="flex items-start gap-2">
             <input
               type="checkbox"

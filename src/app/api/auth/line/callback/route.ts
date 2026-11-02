@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { isAdmin } from "@/lib/server-auth";
+import { INVITE_COOKIE, SESSION_COOKIE, SESSION_SECONDS, secureCookieOptions, signToken, verifyToken } from "@/lib/session-token";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -62,10 +64,9 @@ export async function GET(req: NextRequest) {
     }
 
     const cookieState = req.cookies.get("sokupa_line_state")?.value || "";
-    if (cookieState && cookieState !== state) {
-      console.warn("[LINE callback] state mismatch, continuing anyway for mobile compatibility");
+    if (!cookieState || cookieState !== state) {
+      return NextResponse.json({ error: "ログインの確認ができませんでした。元のブラウザから再度ログインしてください。" }, { status: 400 });
     }
-    // stateチェックをスキップして処理続行（cookieが保存されない環境対策）
 
     const clientId = getEnv("LINE_LOGIN_CHANNEL_ID");
     const clientSecret = getEnv("LINE_LOGIN_CHANNEL_SECRET");
@@ -74,49 +75,36 @@ export async function GET(req: NextRequest) {
     const { access_token } = await exchangeToken({ code, redirectUri, clientId, clientSecret });
     const profile = await fetchProfile(access_token);
 
-    const inviteCode = req.cookies.get("sokupa_invite_code")?.value || null;
-
+    const invite = verifyToken(req.cookies.get(INVITE_COOKIE)?.value, "invite");
     const admin = createSupabaseAdmin();
-    if (!admin) {
-      return NextResponse.json({ error: "Supabase admin not configured" }, { status: 500 });
+    if (!admin) return NextResponse.json({ error: "Server not configured" }, { status: 503 });
+
+    // Existing accounts are grandfathered even when their historic invite_code is null.
+    const { data: existing, error: lookupError } = await admin.from("users").select("line_user_id").eq("line_user_id", profile.userId).maybeSingle();
+    if (lookupError) throw new Error("Account lookup failed");
+    const { data: unlimited, error: unlimitedError } = await admin.from("unlimited_users").select("id").eq("line_user_id", profile.userId).maybeSingle();
+    if (unlimitedError) throw new Error("Account lookup failed");
+    if (!existing && !unlimited && !isAdmin(profile.userId)) {
+      if (!invite) return NextResponse.redirect(new URL("/?auth_error=invite_required", req.url));
+      const { error } = await admin.rpc("register_invited_line_user", {
+        p_line_user_id: profile.userId, p_display_name: profile.displayName ?? null,
+        p_picture_url: profile.pictureUrl ?? null, p_invite_code: invite.subject,
+      });
+      if (error) return NextResponse.json({ error: "招待コードの登録に失敗しました。コードを確認してください。" }, { status: 403 });
+    } else {
+      const { error } = await admin.from("users").upsert({
+        line_user_id: profile.userId, display_name: profile.displayName ?? null,
+        picture_url: profile.pictureUrl ?? null, last_login_at: new Date().toISOString(),
+      }, { onConflict: "line_user_id" });
+      if (error) throw new Error("Account update failed");
     }
 
-    const now = new Date().toISOString();
-    const { error: upErr } = await admin.from("users").upsert(
-      {
-        line_user_id: profile.userId,
-        display_name: profile.displayName ?? null,
-        picture_url: profile.pictureUrl ?? null,
-        invite_code: inviteCode,
-        last_login_at: now,
-      },
-      { onConflict: "line_user_id" },
-    );
-    if (upErr) {
-      return NextResponse.json({ error: upErr.message }, { status: 500 });
-    }
-
-    // localStorage保存のためクエリに乗せて / へ戻す
-    const home = new URL("/", req.url);
-    home.searchParams.set("line_user_id", profile.userId);
-    if (profile.displayName) home.searchParams.set("display_name", profile.displayName);
-
-    const isProd = process.env.NODE_ENV === "production";
-    const res = NextResponse.redirect(home.toString(), { status: 302 });
-    res.cookies.set("sokupa_line_user_id", profile.userId, {
-      httpOnly: false,
-      sameSite: "lax",
-      secure: isProd,
-      maxAge: 60 * 60 * 24 * 365, // 1年
-      path: "/",
-    });
-    res.cookies.set("sokupa_display_name", profile.displayName ?? "", {
-      httpOnly: false,
-      sameSite: "lax",
-      secure: isProd,
-      maxAge: 60 * 60 * 24 * 365, // 1年
-      path: "/",
-    });
+    const res = NextResponse.redirect(new URL("/", req.url), { status: 302 });
+    res.cookies.set(SESSION_COOKIE, signToken("session", profile.userId, SESSION_SECONDS), { ...secureCookieOptions, maxAge: SESSION_SECONDS });
+    res.cookies.delete(INVITE_COOKIE);
+    res.cookies.delete("sokupa_line_user_id");
+    res.cookies.delete("sokupa_display_name");
+    res.cookies.delete("sokupa_invited");
     res.cookies.delete("sokupa_line_state");
     res.cookies.delete("sokupa_invite_code");
     return res;

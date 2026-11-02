@@ -28,16 +28,7 @@ export function AdminClient() {
     setError(null);
     setCopied(false);
     try {
-      // cookie が消えた環境向けに localStorage の line_user_id を Authorization ヘッダで送る
-      let lineUserId = "";
-      try {
-        lineUserId = localStorage.getItem("sokupa:line_user_id") || "";
-      } catch {
-        lineUserId = "";
-      }
-      const headers: Record<string, string> = {};
-      if (lineUserId) headers["Authorization"] = `Bearer ${lineUserId}`;
-      const res = await fetch("/api/admin/generate-invite", { method: "POST", headers });
+      const res = await fetch("/api/admin/generate-invite", { method: "POST" });
       const json = (await res.json().catch(() => ({}))) as Partial<Result> & { error?: string };
       if (!res.ok) {
         setError(json?.error || "生成に失敗しました");

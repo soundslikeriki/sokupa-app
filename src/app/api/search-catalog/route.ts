@@ -1,12 +1,15 @@
+import { authorize } from "@/lib/server-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
   try {
+    const auth = await authorize(req);
+    if (auth.error) return auth.error;
     const { codes } = await req.json() as { codes?: string[] };
-    if (!codes || !Array.isArray(codes)) {
+    if (!codes || !Array.isArray(codes) || codes.length > 100 || codes.some((code) => typeof code !== "string" || code.length > 30)) {
       return NextResponse.json({ error: "Missing 'codes' array" }, { status: 400 });
     }
 

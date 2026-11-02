@@ -1,25 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
-
-export const runtime = "nodejs";
-
+import { authorize } from "@/lib/server-auth";
+export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
-  try {
-    const lineUserId = req.nextUrl.searchParams.get("line_user_id") || "";
-    if (!lineUserId) return NextResponse.json({ unlimited: false });
-
-    const admin = createSupabaseAdmin();
-    if (!admin) return NextResponse.json({ unlimited: false });
-
-    const { data } = await admin
-      .from("unlimited_users")
-      .select("id")
-      .eq("line_user_id", lineUserId)
-      .maybeSingle();
-
-    return NextResponse.json({ unlimited: !!data });
-  } catch {
-    return NextResponse.json({ unlimited: false });
-  }
+  const auth = await authorize(req);
+  if (auth.error) return auth.error;
+  const { data, error } = await auth.admin.from("unlimited_users").select("id").eq("line_user_id", auth.lineUserId).maybeSingle();
+  if (error) return NextResponse.json({ error: "確認に失敗しました" }, { status: 503 });
+  return NextResponse.json({ unlimited: auth.owner || Boolean(data) }, { headers: { "Cache-Control": "no-store" } });
 }
-

@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
     const admin = createSupabaseAdmin();
     if (!admin) return NextResponse.json({ error: "Supabase admin not configured" }, { status: 500 });
 
-    const step = await processAnalysisJobStep({ admin, jobId: job_id, headers: req.headers });
+    const step = await processAnalysisJobStep({ admin, jobId: job_id });
     if (step.status === "failed") {
       return NextResponse.json({ success: false, status: "failed", error: step.error || "failed" }, { status: 500 });
     }

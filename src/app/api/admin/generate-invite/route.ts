@@ -1,18 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { authorize } from "@/lib/server-auth";
+import { randomInt } from "node:crypto";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_ADMIN_LINE_USER_ID = "U24ce93805aa15b7601a5da448fc2d354";
 
 function generateCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // 紛らわしい文字（0,O,1,I）を除外
   let code = "";
   for (let i = 0; i < 8; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
+    code += chars[randomInt(chars.length)];
   }
   return code;
 }
@@ -50,22 +50,10 @@ ${code}
 
 export async function POST(req: NextRequest) {
   try {
-    const adminLineUserId = (process.env.ADMIN_LINE_USER_ID || DEFAULT_ADMIN_LINE_USER_ID).trim();
-    const cookieLineUserId = req.cookies.get("sokupa_line_user_id")?.value || "";
-    // cookie が消えた環境向けに Authorization: Bearer <line_user_id> も受理
-    const authHeader = req.headers.get("authorization") || "";
-    const headerLineUserId = authHeader.toLowerCase().startsWith("bearer ")
-      ? authHeader.slice(7).trim()
-      : "";
-    const lineUserId = cookieLineUserId || headerLineUserId;
-    if (!lineUserId || lineUserId !== adminLineUserId) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-
-    const admin = createSupabaseAdmin();
-    if (!admin) {
-      return NextResponse.json({ error: "Supabase admin not configured" }, { status: 500 });
-    }
+    const auth = await authorize(req);
+    if (auth.error) return auth.error;
+    if (!auth.owner) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    const { admin } = auth;
 
     // Generate & insert (retry a few times in case of rare collision)
     let lastError: string | null = null;

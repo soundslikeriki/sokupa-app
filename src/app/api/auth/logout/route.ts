@@ -6,6 +6,8 @@ export const maxDuration = 60;
 export async function GET(_req: NextRequest) {
   const res = NextResponse.redirect(new URL("/?logout=1", _req.url), { status: 302 });
 
+  res.cookies.delete("sokupa_session");
+  res.cookies.delete("sokupa_invite_proof");
   res.cookies.delete("sokupa_invited");
   res.cookies.delete("sokupa_line_user_id");
   res.cookies.delete("sokupa_display_name");

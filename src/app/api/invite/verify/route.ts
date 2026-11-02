@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
+import { sameOrigin } from "@/lib/server-auth";
+import { INVITE_COOKIE, secureCookieOptions, signToken } from "@/lib/session-token";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -33,6 +35,7 @@ function isRateLimited(ip: string, nowMs: number): boolean {
 
 export async function POST(req: NextRequest) {
   try {
+    if (!sameOrigin(req)) return NextResponse.json({ error: "Forbidden origin" }, { status: 403 });
     const ip = getClientIp(req);
     if (isRateLimited(ip, Date.now())) {
       return NextResponse.json({ error: "Too many requests" }, { status: 429 });
@@ -49,15 +52,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Supabase admin not configured" }, { status: 500 });
     }
 
-    const now = new Date().toISOString();
 
-    // One-time use: succeed only if exists AND is_used=false
+    // Check availability. Registration consumes the code only after LINE identity verification.
     const { data, error } = await admin
       .from("invite_codes")
-      .update({ is_used: true, used_at: now })
+      .select("id")
       .eq("code", code)
       .eq("is_used", false)
-      .select("id")
       .maybeSingle();
 
     if (error) {
@@ -67,23 +68,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const isProd = process.env.NODE_ENV === "production";
+    // Consume only after verified LINE login, atomically with account creation.
     const res = NextResponse.json({ success: true });
-    res.cookies.set("sokupa_invited", "true", {
-      httpOnly: false,
-      sameSite: "lax",
-      secure: isProd,
-      maxAge: 60 * 60 * 24 * 365, // 1年
-      path: "/",
-    });
-    // LINEログインのコールバックで users.invite_code に保存するため短期cookieに保持
-    res.cookies.set("sokupa_invite_code", code, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 60 * 10, // 10min
-      path: "/",
-    });
+    res.cookies.set(INVITE_COOKIE, signToken("invite", code, 60 * 30), { ...secureCookieOptions, maxAge: 60 * 30 });
     return res;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Internal Server Error";

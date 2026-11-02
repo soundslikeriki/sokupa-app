@@ -1,3 +1,4 @@
+import { authorize } from "@/lib/server-auth";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -18,6 +19,8 @@ function meaningful(value: unknown): string | undefined {
 
 export async function POST(request: NextRequest) {
   try {
+    const auth = await authorize(request);
+    if (auth.error) return auth.error;
     const body = (await request.json()) as { product_code?: unknown };
     const rawCode = typeof body.product_code === "string" ? body.product_code : "";
     const productCode = normalizeWallpaperProductCode(rawCode);

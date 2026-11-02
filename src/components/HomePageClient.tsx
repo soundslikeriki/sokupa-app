@@ -17,9 +17,10 @@ import {
   removeOrderDraftItem,
   updateOrderDraftItem,
 } from "@/lib/order-draft";
+import { readWorkspaceDraft } from "@/lib/workspace-draft";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import { compressImageForUpload, convertAndResizeForPreview } from "@/lib/resizeImage";
-import { supabase } from "@/lib/supabase";
+
 type ProcessedImage = {
   id: string;
   originalName: string;
@@ -38,12 +39,6 @@ function createOrderDraftId(): string {
     return crypto.randomUUID();
   }
   return `draft-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
-
-function getCookie(name: string): string | null {
-  if (typeof document === "undefined") return null;
-  const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
-  return match ? decodeURIComponent(match[2]) : null;
 }
 
 function getUploadErrorStatus(err: unknown): number | undefined {
@@ -65,20 +60,6 @@ function getUploadErrorStatus(err: unknown): number | undefined {
 function getOriginalError(err: unknown): unknown {
   if (!err || typeof err !== "object" || !("originalError" in err)) return undefined;
   return (err as { originalError?: unknown }).originalError;
-}
-
-function getErrorCause(err: unknown): unknown {
-  if (!err || typeof err !== "object" || !("cause" in err)) return undefined;
-  return (err as { cause?: unknown }).cause;
-}
-
-function getErrorName(err: unknown): string | undefined {
-  if (err instanceof Error && err.name) return err.name;
-  if (err && typeof err === "object" && "name" in err) {
-    const name = (err as { name?: unknown }).name;
-    if (typeof name === "string" && name) return name;
-  }
-  return undefined;
 }
 
 function getErrorDetail(err: unknown): string {
@@ -133,118 +114,28 @@ type UploadFileContext = {
   originalSize: number;
 };
 
-function getStorageHost(): string {
-  try {
-    return new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").host;
-  } catch {
-    return "invalid-storage-host";
-  }
-}
-
-function getStorageEndpoint(path: string): string {
-  try {
-    const baseUrl = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? "");
-    return new URL(`storage/v1/object/memo_uploads/${path}`, `${baseUrl.href.replace(/\/$/, "")}/`).href;
-  } catch {
-    return "invalid-storage-endpoint";
-  }
-}
-
 // ネットワーク一時障害を想定し、失敗時に1回だけ自動リトライする
-async function uploadImageToStorage(path: string, blob: Blob, fileContext: UploadFileContext): Promise<void> {
-  let lastError: unknown = null;
-  let lastFailureSource: "storage-sdk-error" | "thrown-exception" = "storage-sdk-error";
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const attemptStartedAtMs = Date.now();
-    const uploadStartedAt = new Date(attemptStartedAtMs).toISOString();
-    console.log("[Sokupa] Storageアップロード開始", {
-      stage: "storage-upload",
-      attempt,
-      uploadStartedAt,
-      storageHost: getStorageHost(),
-      storageEndpoint: getStorageEndpoint(path),
-      bucket: "memo_uploads",
-      objectPath: path,
-      authorizationMode: "anon-key",
-      hasAnonKey: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
-      uploadFile: { type: blob.type, sizeBytes: blob.size },
-      originalFile: fileContext,
-    });
-
+async function uploadImageToStorage(_path: string, blob: Blob, _fileContext: UploadFileContext): Promise<string> {
+  const uploadId = crypto.randomUUID();
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const { error: upErr } = await supabase.storage.from("memo_uploads").upload(path, blob, {
-        contentType: "image/jpeg",
-        upsert: false,
-      });
-      if (!upErr) {
-        console.log("[Sokupa] Storageアップロード成功", {
-          stage: "storage-upload",
-          attempt,
-          uploadStartedAt,
-          completedAt: new Date().toISOString(),
-          elapsedMs: Date.now() - attemptStartedAtMs,
-          storageHost: getStorageHost(),
-          storageEndpoint: getStorageEndpoint(path),
-          bucket: "memo_uploads",
-          objectPath: path,
-          uploadFile: { type: blob.type, sizeBytes: blob.size },
-        });
-        return;
-      }
-      lastFailureSource = "storage-sdk-error";
-      lastError = upErr;
-    } catch (err) {
-      // Safariのネットワーク失敗はSupabaseのerrorではなく例外として投げられる。
-      lastFailureSource = "thrown-exception";
-      lastError = err;
-    }
-
-    const originalError = getOriginalError(lastError);
-    const errorCause = getErrorCause(originalError) ?? getErrorCause(lastError);
-    console.error("[Sokupa] Storageアップロード失敗", {
-      stage: "storage-upload",
-      attempt,
-      uploadStartedAt,
-      failedAt: new Date().toISOString(),
-      elapsedMs: Date.now() - attemptStartedAtMs,
-      failureSource: lastFailureSource,
-      storageHost: getStorageHost(),
-      storageEndpoint: getStorageEndpoint(path),
-      bucket: "memo_uploads",
-      objectPath: path,
-      authorizationMode: "anon-key",
-      hasAnonKey: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
-      online: typeof navigator === "undefined" ? undefined : navigator.onLine,
-      httpStatus: getUploadErrorStatus(lastError),
-      uploadFile: { type: blob.type, sizeBytes: blob.size },
-      originalFile: fileContext,
-      storageError: {
-        name: getErrorName(lastError),
-        message: getErrorDetail(lastError),
-      },
-      originalError: originalError
-        ? { name: getErrorName(originalError), message: getErrorDetail(originalError) }
-        : undefined,
-      errorCause: errorCause
-        ? { name: getErrorName(errorCause), message: getErrorDetail(errorCause) }
-        : undefined,
-      storageSdkError: lastFailureSource === "storage-sdk-error" ? lastError : undefined,
-    });
-
-    if (attempt === 1) {
-      console.log("[Sokupa] Storageアップロードをリトライ", {
-        stage: "storage-upload-retry",
-        nextAttempt: attempt + 1,
-        previousAttemptStartedAt: uploadStartedAt,
-        storageHost: getStorageHost(),
-        storageEndpoint: getStorageEndpoint(path),
-        bucket: "memo_uploads",
-        objectPath: path,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      const response = await fetch("/api/memo-images", { method: "POST", headers: { "Content-Type": "image/jpeg", "X-Upload-Id": uploadId }, body: blob, signal: AbortSignal.timeout(45_000) });
+      const result = await response.json();
+      if (!response.ok) throw Object.assign(new Error(result.error || "画像の保存に失敗しました"), { status: response.status });
+      if (typeof result.object_path !== "string") throw new Error("画像の保存結果が不正です");
+      return result.object_path;
+    } catch (error) {
+      const status = getUploadErrorStatus(error);
+      if (attempt || (status && status < 500)) throw new Error(buildUploadErrorMessage(error));
     }
   }
-  throw new Error(buildUploadErrorMessage(lastError));
+  throw new Error("画像の保存に失敗しました");
+}
+
+async function fetchAnalysisJob(id: string) {
+  const response = await fetch(`/api/analysis-jobs/${encodeURIComponent(id)}`, { cache: "no-store" });
+  const payload = await response.json();
+  return { data: response.ok ? payload.data : null, error: response.ok ? null : payload.error };
 }
 
 export default function HomePageClient() {
@@ -256,6 +147,7 @@ export default function HomePageClient() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [parsed, setParsed] = useState<ParsedMemoPayload | null>(null);
+  const [originalParsed, setOriginalParsed] = useState<ParsedMemoPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobAccepted, setJobAccepted] = useState<{ jobId: string } | null>(null);
   const [calculationMode, setCalculationMode] = useState<CalculationMode>("dimensions");
@@ -368,58 +260,35 @@ export default function HomePageClient() {
     processOrderDraftQueue(orderDraftItems, pendingOrderDraftQueue);
   }, [orderDraftItems, pendingOrderDraftQueue, processOrderDraftQueue]);
 
-  // LINEログイン情報（通知先）
+  const [draftReady, setDraftReady] = useState(false);
   useEffect(() => {
-    try {
-      const lid = localStorage.getItem("sokupa:line_user_id") || getCookie("sokupa_line_user_id") || "";
-      setLineUserId(lid && lid.trim() ? lid : null);
-    } catch {
-      setLineUserId(null);
-    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/session", { cache: "no-store" });
+        const session = await response.json();
+        if (!response.ok || !session.authenticated || cancelled) return;
+        setLineUserId(session.line_user_id);
+        const saved = localStorage.getItem(`sokupa:workspace:v1:${session.line_user_id}`);
+        if (saved) {
+          const draft = readWorkspaceDraft(saved);
+          setSiteName(typeof draft.siteName === "string" ? draft.siteName : "");
+          setParsed(draft.parsed);
+          setOriginalParsed(draft.originalParsed ?? draft.parsed);
+          setOrderDraftItems(draft.orderDraftItems);
+        }
+        setDraftReady(true);
+      } catch (error) { if (!cancelled) setError(getErrorDetail(error)); }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
-  function mergeParsed(prev: ParsedMemoPayload | null, next: ParsedMemoPayload): ParsedMemoPayload {
-    const prevItems = prev?.items ?? [];
-    const map = new Map<string, ParsedMemoPayload["items"][number]>();
-    for (const it of prevItems) map.set(it.product_code, it);
-    for (const it of next.items) {
-      const existing = map.get(it.product_code);
-      if (!existing) {
-        map.set(it.product_code, it);
-        continue;
-      }
-      const mergedEntries = [...(existing.entries ?? []), ...(it.entries ?? [])];
-      const totalFromEntries = mergedEntries.reduce((s, e) => s + (Number(e.subtotal_m) || 0), 0);
-      const merged: typeof it = {
-        ...existing,
-        ...it,
-        entries: mergedEntries,
-        total_m: Number.isFinite(it.total_m) && it.total_m > 0 ? it.total_m : totalFromEntries,
-        order_quantity: it.order_quantity ?? existing.order_quantity,
-      };
-      map.set(it.product_code, merged);
-    }
-    const items = Array.from(map.values());
-    const needs_review_any = items.some((i) => i.needs_review);
-    return {
-      items,
-      notes: [prev?.notes, next.notes].filter(Boolean).join("\n").trim() || undefined,
-      needs_review_any,
-    };
-  }
-
-  function deriveContextFromParsed(p: ParsedMemoPayload | null): { majorManufacturers: string[]; knownProductCodes: string[] } {
-    const items = p?.items ?? [];
-    const codes = items.map((i) => i.product_code).filter(Boolean);
-    const mfgs = items.map((i) => i.manufacturer).filter(Boolean);
-    const mfgCounts = new Map<string, number>();
-    for (const m of mfgs) mfgCounts.set(m, (mfgCounts.get(m) ?? 0) + 1);
-    const majorManufacturers = Array.from(mfgCounts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 4)
-      .map(([m]) => m);
-    return { majorManufacturers, knownProductCodes: codes.slice(0, 25) };
-  }
+  useEffect(() => {
+    if (!draftReady || !lineUserId) return;
+    try {
+      localStorage.setItem(`sokupa:workspace:v1:${lineUserId}`, JSON.stringify({ version: 1, siteName, parsed, originalParsed, orderDraftItems }));
+    } catch { setError("端末への下書き保存に失敗しました。必要な内容をコピーして保存してください。"); }
+  }, [draftReady, lineUserId, siteName, parsed, originalParsed, orderDraftItems]);
 
   const imageCount = images.length;
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -450,8 +319,9 @@ export default function HomePageClient() {
     setImages((prev) => [...prev, ...newImages]);
     setError(null);
 
-    Promise.all(
-      newImages.map(async (imgObj, idx) => {
+    void (async () => {
+      for (let idx = 0; idx < newImages.length; idx++) {
+        const imgObj = newImages[idx];
         const file = imageFiles[idx];
         try {
           console.log("[Sokupa] 画像変換開始", {
@@ -492,8 +362,8 @@ export default function HomePageClient() {
             )
           );
         }
-      })
-    );
+      }
+    })();
   }, [imageCount]);
 
   const removeFile = useCallback((id: string) => {
@@ -501,17 +371,17 @@ export default function HomePageClient() {
   }, []);
 
   const handleAnalyze = async () => {
+    if (!draftReady || jobAccepted) return;
     if (isAnalyzing) return;
     if (readyImages.length === 0) return;
     setIsAnalyzing(true);
     setError(null);
-    setParsed(null);
     setProgress({ done: 0, total: readyImages.length });
     setJobAccepted(null);
     setJobUi(null);
 
     try {
-      // 1) upload prepared JPEGs to Supabase Storage and obtain public URLs
+      // Save prepared JPEGs through the authenticated server API.
       const uploadedUrls: string[] = [];
       for (let i = 0; i < readyImages.length; i++) {
         const img = readyImages[i]!;
@@ -542,14 +412,12 @@ export default function HomePageClient() {
         });
 
         const path = `uploads/${Date.now()}_${img.id}.jpg`;
-        await uploadImageToStorage(path, blob, {
+        const objectPath = await uploadImageToStorage(path, blob, {
           originalName: img.originalName,
           originalType: img.originalType,
           originalSize: img.originalSize,
         });
-        const { data } = supabase.storage.from("memo_uploads").getPublicUrl(path);
-        if (!data?.publicUrl) throw new Error("画像URLの生成に失敗しました");
-        uploadedUrls.push(data.publicUrl);
+        uploadedUrls.push(objectPath);
 
         setProgress((p) => (p ? { ...p, done: Math.min(p.total, p.done + 1) } : null));
       }
@@ -559,9 +427,8 @@ export default function HomePageClient() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          image_urls: uploadedUrls,
+          image_paths: uploadedUrls,
           site_name: siteName?.trim() || undefined,
-          line_user_id: lineUserId || undefined,
           context: {
             site_name: siteName?.trim() || undefined,
             major_manufacturers: [],
@@ -580,9 +447,15 @@ export default function HomePageClient() {
         throw new Error(msg);
       }
 
+      if (parsed) {
+        try { localStorage.setItem(`sokupa:workspace:v1:${lineUserId}:previous`, JSON.stringify({ version: 1, siteName, parsed, originalParsed, orderDraftItems })); }
+        catch { setError("前回の結果を端末に保存できませんでした。必要な内容をコピーしてください。"); }
+      }
+      setParsed(null);
+      setOriginalParsed(null);
       setJobAccepted({ jobId: String(createJson.job_id) });
       try {
-        localStorage.setItem("sokupa:lastJobId", String(createJson.job_id));
+        localStorage.setItem(`sokupa:lastJobId:${lineUserId}`, String(createJson.job_id));
       } catch {
         // ignore
       }
@@ -597,23 +470,26 @@ export default function HomePageClient() {
 
   // Restore last job on reload (so closing browser continues UX)
   useEffect(() => {
+    if (!draftReady) return;
     let cancelled = false;
     (async () => {
       try {
-        const last = localStorage.getItem("sokupa:lastJobId");
+        const last = localStorage.getItem(`sokupa:lastJobId:${lineUserId}`) || localStorage.getItem("sokupa:lastJobId");
         if (!last) return;
-        const { data, error } = await supabase
-          .from("analysis_jobs")
-          .select("status,result,error")
-          .eq("id", last)
-          .maybeSingle();
+        const { data, error } = await fetchAnalysisJob(last);
         if (cancelled) return;
         if (error || !data) {
-          localStorage.removeItem("sokupa:lastJobId");
+          if (data === null && error === "Not found") {
+            localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`);
+            localStorage.removeItem("sokupa:lastJobId");
+          }
           return;
         }
         if (data.status === "done" && data.result) {
+          if (data.site_name) setSiteName(data.site_name);
           setParsed(data.result as ParsedMemoPayload);
+          setOriginalParsed(data.result as ParsedMemoPayload);
+          localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`);
           localStorage.removeItem("sokupa:lastJobId");
           return;
         }
@@ -623,6 +499,7 @@ export default function HomePageClient() {
           } catch {
             // ignore
           }
+          localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`);
           localStorage.removeItem("sokupa:lastJobId");
           return;
         }
@@ -635,19 +512,16 @@ export default function HomePageClient() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [draftReady, lineUserId]);
 
   // Poll job status every ~3s and auto-show results when done
   useEffect(() => {
     if (!jobAccepted?.jobId) return;
     let cancelled = false;
 
+    let polling = false;
     const pollOnce = async () => {
-      const { data, error: qErr } = await supabase
-        .from("analysis_jobs")
-        .select("status,done_images,total_images,result,error")
-        .eq("id", jobAccepted.jobId)
-        .maybeSingle();
+      const { data, error: qErr } = await fetchAnalysisJob(jobAccepted.jobId);
       if (cancelled) return;
       if (qErr || !data) return;
 
@@ -668,6 +542,7 @@ export default function HomePageClient() {
         setJobAccepted(null);
         setJobUi(null);
         try {
+          localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`);
           localStorage.removeItem("sokupa:lastJobId");
         } catch {
           // ignore
@@ -676,11 +551,14 @@ export default function HomePageClient() {
 
       if (status === "done") {
         if (data.result) {
+          if (data.site_name) setSiteName(data.site_name);
           setParsed(data.result as ParsedMemoPayload);
+          setOriginalParsed(data.result as ParsedMemoPayload);
           setJobAccepted(null);
           setJobUi(null);
           try {
-            localStorage.removeItem("sokupa:lastJobId");
+            localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`);
+          localStorage.removeItem("sokupa:lastJobId");
           } catch {
             // ignore
           }
@@ -695,13 +573,18 @@ export default function HomePageClient() {
       }
     };
 
-    void pollOnce();
-    const t = window.setInterval(() => void pollOnce(), 3000);
+    const poll = () => {
+      if (polling) return;
+      polling = true;
+      void pollOnce().catch(() => { if (!cancelled) setError("結果を取得できません。通信の回復後に再確認します。"); }).finally(() => { polling = false; });
+    };
+    poll();
+    const t = window.setInterval(poll, 3000);
     return () => {
       cancelled = true;
       window.clearInterval(t);
     };
-  }, [jobAccepted?.jobId]);
+  }, [jobAccepted?.jobId, lineUserId]);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-2 py-8 sm:gap-8 sm:px-4 sm:py-10 md:px-6 lg:px-8">
@@ -957,6 +840,7 @@ export default function HomePageClient() {
 
       <OrderList
         items={parsed?.items ?? []}
+        sourceItems={originalParsed?.items}
         notes={parsed?.notes}
         siteName={siteName}
         needs_review_any={parsed?.needs_review_any}
