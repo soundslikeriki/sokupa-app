@@ -1,9 +1,9 @@
-import { timingSafeEqual } from "node:crypto";
-import { waitUntil } from "@vercel/functions";
+import { analysisDataAccessSecure } from "@/lib/analysis-background";
+import { runScheduledAnalysisBatch } from "@/lib/analysis-scheduled";
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
-import { processAnalysisJobStep, runAnalysisJob } from "@/lib/analysisJobProcessor";
-import { requireJobSecret } from "@/lib/jobSecret";
+import { processAnalysisJobStep } from "@/lib/analysisJobProcessor";
+import { requireJobSecret, requireScheduledSecret } from "@/lib/jobSecret";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
     const admin = createSupabaseAdmin();
     if (!admin) return NextResponse.json({ error: "Supabase admin not configured" }, { status: 500 });
 
+    if (!(await analysisDataAccessSecure(admin))) return NextResponse.json({ error: "Private data access not secured" }, { status: 503 });
     const step = await processAnalysisJobStep({ admin, jobId: job_id });
     if (step.status === "failed") {
       return NextResponse.json({ success: false, status: "failed", error: step.error || "failed" }, { status: 500 });
@@ -36,14 +37,14 @@ export async function POST(req: NextRequest) {
 
 /** Private scheduled recovery. Configure its scheduler only after release approval. */
 export async function GET(req: NextRequest) {
-  const expected = process.env.CRON_SECRET;
-  const supplied = req.headers.get("authorization")?.replace(/^Bearer /, "");
-  const cron = Boolean(expected && supplied && Buffer.byteLength(expected) === Buffer.byteLength(supplied) && timingSafeEqual(Buffer.from(expected), Buffer.from(supplied)));
-  if (!requireJobSecret(req) && !cron) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!requireScheduledSecret(req)) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const admin = createSupabaseAdmin();
   if (!admin) return NextResponse.json({ error: "Server not configured" }, { status: 503 });
-  const { data, error } = await admin.rpc("resumable_analysis_jobs");
-  if (error) return NextResponse.json({ error: "Recovery lookup failed" }, { status: 503 });
-  waitUntil(Promise.all((data ?? []).map((job: { id: string }) => runAnalysisJob({ admin, jobId: job.id }))));
-  return NextResponse.json({ accepted: data?.length ?? 0 }, { status: 202 });
+  try {
+    const result = await runScheduledAnalysisBatch(admin);
+    return NextResponse.json(result);
+  } catch {
+    console.error("[analysis-worker] scheduled batch failed");
+    return NextResponse.json({ error: "Scheduled processing failed" }, { status: 503 });
+  }
 }

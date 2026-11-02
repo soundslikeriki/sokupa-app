@@ -18,7 +18,7 @@
 - OCRのJSON不正、空の品番／式、画像欠損は失敗として扱う。画像読込・圧縮の失敗とタイムアウトを検知。HEIC変換は順番に行い、複数同時デコードのメモリ負荷を抑える。
 - 現場名、編集結果、解析原本、発注下書きを利用者別・バージョン付きで端末保存。不正な保存データは上書きせずエラーにする。新規解析前には直前の下書きも別キーへ退避する。画像プレビュー自体は保存しないため、画像は再選択が必要。
 - 実測の元の長さとリピート後の長さを分離。再描画／再読込でリピートを二重適用せず、解除で元に戻せる。元の解析値も保持する。
-- 解析結果のDB確定後にLINE通知。通知と発注テキストを一つのpushにまとめ、HTTP失敗を検知。ジョブUUIDを最初から再試行キーに使用する。`pending / accepted / failed / uncertain / legacy_unknown` を記録する。`accepted` はLINE API受付を意味し、端末への到着保証ではない。23時間を超えた失敗の自動再送は止める。旧完了ジョブは `legacy_unknown` とし、一括再通知しない。要確認の結果は通知に発注テキストを含めない。
+- 解析結果のDB確定後にLINE通知。通知と発注テキストを一つのpushにまとめ、HTTP失敗を検知。ジョブUUIDを最初から再試行キーに使用する。`pending / accepted / failed / uncertain / legacy_unknown` を記録する。`accepted` はLINE API受付を意味し、端末への到着保証ではない。23時間を超えた失敗の自動再送は止める。旧完了ジョブは `legacy_unknown` とし、一括再通知しない。追加マイグレーションでは旧Phase 1適用済みの既定値も明示修正し、過去の不明なpending/failedを監査記録付きで隔離する。要確認の結果は通知に発注テキストを含めない。
 - 画像処理全体とvision／catalogの時間をログへ分けて出す。生画像・LINEトークン・セッション値はログに出さない。
 
 ## 互換性
@@ -30,17 +30,17 @@
 - 旧画面を開きっぱなしの利用者は切替後に再読込が必要。旧匿名アップロード・直接DBポーリングは閉じた後には使えない。
 - 現行の一括5画像と一般利用者20画像/月を維持。管理者・無制限ユーザーは月間枠を消費しない。月境界は業務に合わせAsia/Tokyoで統一した。
 
-## 移行順序（本番は承認待ち）
+## 移行順序（本番は公開条件の確認待ち）
 
-**二つのSQLを一括適用しない。** Phase 2は自動マイグレーション対象外の `supabase/rollout/` に置いた。通常のDB migration実行で先に匿名アクセスを閉じる事故を避ける。
+**追加マイグレーション群とPhase 2のSQLを一括適用しない。** Phase 2は自動マイグレーション対象外の `supabase/rollout/` に置いた。通常のDB migration実行で先に匿名アクセスを閉じる事故を避ける。
 
-1. 独立したSupabase確認環境を用意し、本番スキーマの再現と合成データだけで以下を確認する。ステージングのLINEチャネル／redirect URI、サービスキーは本番と分離する。新しい資格情報の生成・登録・本番設定変更は承認後に行う。
+1. 独立したSupabase確認環境を用意し、本番スキーマの再現と合成データだけで以下を確認する。ステージングのLINEチャネル／redirect URI、サービスキーは本番と分離する。新しい資格情報の生成・登録・本番設定変更は必要な個別確認後に行う。
 2. 現在のユーザー・管理者・無制限一覧、ポリシー、バケット設定、ジョブ状態の安全なバックアップと復元方法を準備する。既存テーブルは公開書込み可能だったため、不審な既存登録がないか利用者・無制限一覧を所有者が確認する。招待履歴欠損だけを理由に既存ユーザーを削除しない。
-3. Phase 1 `supabase/migrations/20261102183016_session_api_expansion.sql` と `supabase/migrations/20261102190336_analysis_image_leases.sql` を順に確認環境に適用する。既存ポリシーは原則維持し、登録／利用枠RPCと通知状態カラムを追加する。補正ログ表だけはサーバー専用にする。対応コードより先に必要なRPC／カラムを用意する。
+3. Phase 1 `supabase/migrations/20261102183016_session_api_expansion.sql` と `supabase/migrations/20261102190336_analysis_image_leases.sql`、`supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql` を順に確認環境に適用する。旧Phase 1適用済みの履歴は書き換えず追加分を適用する。既存ポリシーは原則維持し、登録／利用枠RPCと通知状態カラムを追加する。補正ログ表だけはサーバー専用にする。対応コードより先に必要なRPC／カラムを用意する。
 4. `SESSION_SECRET`（32バイト以上、環境別の専用値）を安全に設定する。既存のLINE・Supabase・管理者・内部ワーカー設定を維持し、.env.exampleの全必要項目の存在を値を表示せず確認する。本作業では実秘密を生成していない。
 5. 確認環境へ新API／クライアントを配備し、実LINEでの管理者／既存一般（招待履歴NULL含む）／無制限／新規招待／不正セッションの動線を確認する。通常アカウントから管理操作・他人の画像／ジョブにアクセスできないことを確認する。
-6. **承認後**、本番にPhase 1と新API／クライアントを配備する。切替時は旧版の新規受付・旧版の定期ワーカーを止め、旧関数の最大300秒＋余裕として6分以上のdrainを確認する。旧版を処理経路に残したまま新しい定期回復を有効にしない。その後、本人のID、管理者操作、無制限、アップロード、ジョブ取得を確認する。この段階では旧匿名DB経路のリスクはまだ残るため、Phase 2までを一つの移行作業として扱う。
-7. 新クライアントが匿名DB／Storageへアクセスしていないことを確認後、**別途承認済みの切替操作として** `supabase/rollout/20261102183142_restrict_private_data_access.sql` を適用する。敏感な表・レガシー `memo_jobs` ・カタログ表からpublic/anon/authenticated権限を取り除き、RLSを有効にする。memo_uploadsだけを非公開にし、確認済みの公開ポリシーだけを削除する。他バケットのポリシーを削除しない。
+6. **公開許可の安全条件を満たした後**、本番にPhase 1と新API／クライアントをdisabledで配備する。切替時は旧版の新規受付・旧版の定期ワーカーを止め、旧関数の最大300秒＋余裕として6分以上のdrainを確認する。旧版を処理経路に残したまま新しい定期回復を有効にしない。その後、本人のID、管理者操作、無制限の設定、本人専用のジョブ読取、受付停止を確認する。アップロード・解析の実稼働確認はPhase 2とCron正常稼働確認の後に行う。この段階では旧匿名DB経路のリスクはまだ残るため、Phase 2までを一つの移行作業として扱う。
+7. 独立環境で新クライアントの全機能を確認し、本番にはdisabledで新API経路を配備して認証・ID・本人専用読取を確認後、**公開許可の安全条件を満たした切替操作として** `supabase/rollout/20261102183142_restrict_private_data_access.sql` を適用する。敏感な表・レガシー `memo_jobs` ・カタログ表からpublic/anon/authenticated権限を取り除き、RLSを有効にする。memo_uploadsだけを非公開にし、確認済みの公開ポリシーだけを削除する。他バケットのポリシーを削除しない。
 8. 匿名／偽装LINE IDでの表読取・変更、画像の一覧／取得／追加／更新が拒否されることを合成データで確認する。管理者本人で一連の機能が使え、既存ID・無制限・行数が変わらないことを確認する。旧URLを持つジョブも管理用SDKで読めることを確認する。Supabase advisorsとポリシー一覧も再確認する。
 9. 公開済みデータのコピーは遡って回収できない。既存の公開URLやCDNキャッシュの挙動も確認する。ロールバック時は署名認証とAPI経路を維持した修正を優先し、旧 `public ALL true` を安易に戻さない。Phase 1の追加カラム／関数は残してよく、行の削除・ID変更は不要。
 
@@ -49,10 +49,12 @@
 | 確認 | 結果 |
 | --- | --- |
 | 変更前 npm test / lint | 21件成功 / 成功 |
-| 変更後 npm test | 44件成功。認証・OAuth state・既存NULL招待履歴・所有者・数量・JSON失敗・下書き・通知・ジョブ確定順序を合成データとモックで検証 |
+| 変更後 npm test | 50件成功。認証・OAuth state・既存NULL招待履歴・所有者・数量・JSON失敗・下書き・通知・ジョブ確定順序を合成データとモックで検証 |
 | npx tsc --noEmit / npm run lint | 成功 |
+| ローカル実Postgres 17.6 | 20項目成功。私有Unixソケットと合成データで8接続の取得・確定・再取得・旧トークン拒否・行ロック・利用枠競合・管理者無制限を確認。Supabase実サービスとは別 |
 | npm run build | 成功。既存由来のlibheif動的requireとBrowserslist古さの警告は残る。Google Fonts取得にはネットワーク許可が必要だった |
-| 隔離PostgreSQL (PGlite 0.5.14) | 64項目成功。追加リースSQLを含め3本を実行し、匿名／authenticated拒否、サービス権限、招待の一回性とロールバック、上限、無制限、他バケット保全、リースの排他・期限回復・旧トークン拒否・再開回数上限、新旧ワーカー切替の猶予期間を確認。本番には接続しない |
+| 隔離PostgreSQL (PGlite 0.5.14) | 79項目成功。稼働確認SQLを含め4本を実行し、匿名／authenticated拒否、サービス権限、招待の一回性とロールバック、上限、無制限、他バケット保全、リースの排他・期限回復・旧トークン拒否・再開回数上限、新旧ワーカー切替の猶予期間を確認。本番には接続しない |
+| 通知アップグレード (PGlite) | 28項目成功。新規と旧Phase 1適用済みの両経路で、過去通知の隔離・監査、既定値、既存ID保持を確認 |
 | ブラウザ (一時Chrome、全外部通信を遮断) | 既存9項目＋独立レビュー再現11項目が成功。23m表示、負数拒否、下書き書出し・退避失敗時保全・退避後の解析再開も確認。合成破損画像の失敗表示、リピートON/OFF・再読込・幅数編集・原本復帰・発注下書きの保存／復元・ログインゲート・JS例外なし |
 
 再実行:
@@ -64,6 +66,7 @@ npm run lint
 npm run build
 # optional harness packages are installed outside the repository; these paths are environment-specific
 PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/security-migrations.cjs
+PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/notification-upgrade.cjs
 # start the local server first; fixtures block all non-localhost browser requests
 PLAYWRIGHT_MODULE=/tmp/sokupa-sql-harness/node_modules/playwright node scripts/verification/browser-regressions.cjs
 PLAYWRIGHT_MODULE=/tmp/sokupa-sql-harness/node_modules/playwright node scripts/verification/independent-review-browser.cjs
@@ -75,7 +78,7 @@ PLAYWRIGHT_MODULE=/tmp/sokupa-sql-harness/node_modules/playwright node scripts/v
 - PGliteはSQL／RLSの検証であり、SupabaseのData API、Storage gateway、CDN、Vercel実行環境の完全な再現ではない。独立Supabase環境での最終確認が必要。
 - 76〜238秒の原因は未確定。画像取得、vision、カタログ検索、DB確定、LINE API受付に分けた観測で切り分ける。カタログ検索は既存の最大12ステップを維持しており、時間短縮の実測値はない。
 - **中断ジョブの再開にはリースと呼出し元を分けて扱う。** 6分のリース（300秒の関数上限＋余裕）をDBで発行し、期限切れだけを再取得する。完了・失敗の書込みもリーストークンとDB時刻で判定し、古いワーカーの結果は拒否する。初回を含め最大3回で停止し、失敗を明示する。利用枠を再度消費しない。旧running行にもupdated_atから期限を計算する。既存行／旧コードが挿入した画像は、旧300秒ワーカーが終了するまで6分の移行猶予を設ける。新しい作成RPCは即時処理できる。旧挿入経路の通知初期値はlegacy_unknownを維持し、移行中に旧コードが送った通知を再送対象にしない。
-- 利用者が画面を開いている／開き直した場合は、本人確認付き `POST /api/analysis-jobs/[id]/resume` が安全に再開する。既存内部シークレット付き `GET /api/analysis-jobs/process` は再開対象を最大3ジョブ取り出し、定期回復に使える。Vercel Cronを使う場合は任意の専用 `CRON_SECRET` のBearerにも対応する。**スケジューラは未設定・未公開**。閉じたままの継続には、公開前にプラン・頻度・費用を確認してスケジューラを承認・設定する必要がある。短い解析は既存同様に一回のバックグラウンド処理で複数画像を進めるが、30秒経過後は次画像を新しい呼出しへ分ける。
+- 利用者が画面を開いている／開き直した場合は、本人確認付き `POST /api/analysis-jobs/[id]/resume` が安全に再開する。既存内部シークレット付き `GET /api/analysis-jobs/process` は再開対象を最大3ジョブ取り出し、定期回復に使える。Vercel Cron構成の専用 `CRON_SECRET` のBearerにも対応する。**スケジューラは未設定・未公開**。受付の既定モードはdisabled。2回以上の正常な定期呼出しと直近稼働をDBで確認し、scheduledへ切り替えるまで、画像保存・ジョブ作成・利用者の再開は503で拒否する。閉じたままの継続には、公開前にプラン・頻度・費用を確認してスケジューラを承認・設定する必要がある。短い解析は既存同様に一回のバックグラウンド処理で複数画像を進めるが、30秒経過後は次画像を新しい呼出しへ分ける。
 - 外部AI APIの実行とDB保存を一つのトランザクションにはできない。強制終了直前のAI処理が外部で完了していた場合、期限後の再解析で推論料金が重なる可能性は残る。DB結果の二重確定・旧結果の上書き・LINEの重複通知は防ぐ設計とし、外部AI料金までexactly-onceとは主張しない。実Vercelでの強制終了・スケジューラ運用は確認環境での検証が必要。
 - LINE API再送は同じキーで行い、受付状態を記録する。旧完了ジョブ・期限超過・不明な成否は自動一括再送しない。実際の到着確認は利用者側で必要。
 - 招待コードのIPレート制限は既存のメモリ方式のまま。複数インスタンス横断の永続制限、登録済みアカウントによる大量Storage保存の制限・不要画像の保持期限は別途検討が必要。
@@ -91,3 +94,11 @@ PLAYWRIGHT_MODULE=/tmp/sokupa-sql-harness/node_modules/playwright node scripts/v
 3. 画像全体の要確認: rootのimage_needs_reviewを全品番へ伝搬し、カタログ補完後も保持。通知側も全体・品番・式のフラグを確認し、要確認なら発注文を含めない。
 4. 負の幅数・下書き停止: 長さ／幅数／リピートへの負数・非有限入力を拒否。復元失敗時は原文JSONのダウンロードと、読戻し確認付きの別キー退避を用意。退避が失敗した場合は元データを上書きせず停止し、成功後は新規解析できる。解析ボタンの無効状態も実際の準備状態と一致させた。
 5. 空OCRが0になる問題: null、空文字、空白、真偽値、配列、オブジェクト等を数値へ暗黙変換しない。読取可能な式も実寸もない場合は失敗。明示された有効な式からの検算は維持。
+
+## 独立再レビューの追補
+
+画面から独立した毎分Cronと受付前の稼働確認を追加し、31秒の1枚目の後に、次の定期呼出しで2枚目が完了する回帰確認を追加した。Cronは未有効化で、設定・費用・個別確認・実環境検証は [ops/cron/README.md](../ops/cron/README.md) に具体化した。旧Phase 1適用済みのdefault修正と過去通知の隔離・監査は追加マイグレーションで行い、新規／旧履歴の両方を28項目検査した。
+
+公開の包括許可は受領済み。ただし独立Supabase、実LINE、iOS等の重大な互換性確認、必要な資格情報・チームアクセスの個別確認、本番バックアップ／復元が未完了のため、公開条件は未充足。本番変更・公開はまだ実施していない。
+
+ローカル実Postgresの追加検証: `scripts/verification/postgres-concurrency.cjs` をPostgres 17.6で実行し、20項目成功。TCPを無効にした私有一時Unixソケットと合成データだけを使い、終了時にDBを削除した。実資格情報は使わず、OSユーザー・外部サービスも作成していない。接続プール／Data APIを含むSupabase実環境の検証は未実施。

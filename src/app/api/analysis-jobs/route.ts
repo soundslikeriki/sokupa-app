@@ -1,3 +1,4 @@
+import { analysisBackgroundReady } from "@/lib/analysis-background";
 import { NextRequest, NextResponse } from "next/server";
 import { authorize } from "@/lib/server-auth";
 import { ownedMemoPath } from "@/lib/memo-storage";
@@ -14,6 +15,7 @@ export async function POST(req: NextRequest) {
     if (!Array.isArray(paths) || !paths.length || paths.length > 5 || paths.some((path) => !ownedMemoPath(path, auth.lineUserId))) {
       return NextResponse.json({ error: "自分の画像を1〜5枚指定してください" }, { status: 400 });
     }
+    if (!(await analysisBackgroundReady(auth.admin))) return NextResponse.json({ error: "解析サービスの準備ができていません。時間をおいて再度お試しください。" }, { status: 503 });
     const site = typeof body.site_name === "string" ? body.site_name.trim().slice(0, 200) : null;
     // Quota reservation + job/images creation is one transaction, including simultaneous requests.
     const { data: jobId, error } = await auth.admin.rpc("create_analysis_job", {

@@ -1,3 +1,4 @@
+import { analysisBackgroundReady } from "@/lib/analysis-background";
 import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { authorize } from "@/lib/server-auth";
@@ -12,6 +13,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const { data, error } = await auth.admin.from("analysis_jobs").select("id").eq("id", params.id).eq("line_user_id", auth.lineUserId).maybeSingle();
   if (error) return NextResponse.json({ error: "再開を確認できませんでした" }, { status: 503 });
   if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!(await analysisBackgroundReady(auth.admin))) return NextResponse.json({ error: "解析サービスの準備ができていません。時間をおいて再度お試しください。" }, { status: 503 });
   waitUntil(runAnalysisJob({ admin: auth.admin, jobId: params.id }));
   return NextResponse.json({ success: true }, { status: 202 });
 }

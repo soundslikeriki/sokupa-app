@@ -858,7 +858,7 @@ export default function HomePageClient() {
           <CardHeader>
             <CardTitle className="text-base">解析を受け付けました</CardTitle>
             <CardDescription>
-              サーバー側で解析しています。中断した処理は再度開くと再開します。完了後にLINEで通知します。
+              サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。
               {jobUi ? (
                 <span className="mt-2 block font-semibold text-emerald-800/90 dark:text-emerald-200">
                   {jobUi.percent}% 完了（{jobUi.done}/{jobUi.total}）

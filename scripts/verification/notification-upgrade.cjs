@@ -1,0 +1,47 @@
+// Both migration histories, synthetic rows only. No Supabase or LINE access.
+const {PGlite}=require(process.env.PGLITE_MODULE || '@electric-sql/pglite');
+const {readFileSync}=require('node:fs');const assert=require('node:assert/strict');
+(async()=>{let checks=0;
+for(const version of ['fresh','previous_phase1_applied']){
+ const db=new PGlite();const sql=text=>db.exec(text);const row=async(text,args)=>(await db.query(text,args)).rows[0];
+ const check=(value,msg)=>{assert.ok(value,`${version}: ${msg}`);checks++;};
+ await sql(`create role anon;create role authenticated;create role service_role bypassrls;
+ create schema storage;create table storage.buckets(id text primary key,public boolean,file_size_limit bigint,allowed_mime_types text[]);insert into storage.buckets(id,public)values('memo_uploads',true);create table storage.objects(id int);alter table storage.objects enable row level security;
+ create table users(line_user_id text primary key,display_name text,picture_url text,invite_code text,last_login_at timestamptz);
+ create table invite_codes(code text primary key,is_used boolean,used_at timestamptz);
+ create table unlimited_users(line_user_id text primary key);
+ create table usage_limits(line_user_id text,year_month text,image_count integer,updated_at timestamptz,unique(line_user_id,year_month));
+ create table analysis_jobs(id uuid primary key default gen_random_uuid(),updated_at timestamptz default now(),line_user_id text,status text default 'queued',site_name text,context jsonb,total_images integer,done_images integer default 0,result jsonb,error text);
+ create table analysis_job_images(id uuid primary key default gen_random_uuid(),job_id uuid references analysis_jobs(id),idx integer,url text,status text default 'queued',parsed jsonb,error text,updated_at timestamptz default now());
+ insert into users(line_user_id) values('owner');`);
+ await sql(readFileSync(version==='fresh'?'supabase/migrations/20261102183016_session_api_expansion.sql':'scripts/verification/fixtures/phase1-before-notification-fix.sql','utf8'));
+ const old=(await row("insert into analysis_jobs(line_user_id,status,total_images,notification_status) values('owner','done',1,'pending') returning id")).id;
+ const failed=(await row("insert into analysis_jobs(line_user_id,status,total_images,notification_status) values('owner','done',1,'failed') returning id")).id;
+ const tracked=(await row("insert into analysis_jobs(line_user_id,status,total_images,notification_status,notification_attempted_at) values('owner','done',1,'pending',now()) returning id")).id;
+ const accepted=(await row("insert into analysis_jobs(line_user_id,status,total_images,notification_status) values('owner','done',1,'accepted') returning id")).id;
+ await sql(readFileSync('supabase/migrations/20261102190336_analysis_image_leases.sql','utf8'));
+ const before=(await db.query('select id from analysis_jobs order by id')).rows;
+ await sql(readFileSync('supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql','utf8'));
+ check(JSON.stringify((await db.query('select id from analysis_jobs order by id')).rows)===JSON.stringify(before),'all historic IDs retained');
+ for(const id of [old,failed]) check((await row('select notification_status from analysis_jobs where id=$1',[id])).notification_status==='legacy_unknown','unproven old completion quarantined');
+ check((await row('select notification_status from analysis_jobs where id=$1',[accepted])).notification_status==='accepted','accepted stays accepted');
+ check((await row('select notification_protocol from analysis_jobs where id=$1',[tracked])).notification_protocol==='line_retry_v1','tracked retry remains eligible');
+ const recovery=(await db.query('select * from resumable_analysis_jobs()')).rows.map(r=>r.id);
+ check(!recovery.includes(old)&&!recovery.includes(failed),'old completions never enter scheduled resends');
+ check((await row('select previous_status from analysis_notification_migration_audit where job_id=$1',[old])).previous_status==='pending','quarantine keeps original metadata for reconciliation');
+ check(recovery.includes(tracked),'known stable-key retry can resume');
+ const future=(await row("insert into analysis_jobs(line_user_id,status,total_images) values('owner','done',1) returning id,notification_status"));
+ check(future.notification_status==='legacy_unknown','old default is repaired even on an already-applied Phase 1');
+ check(!(await db.query('select * from resumable_analysis_jobs()')).rows.some(r=>r.id===future.id),'future legacy inserts are not resent');
+ await assert.rejects(db.query("select create_analysis_job('owner',ARRAY['owner/path.jpg'],'Synthetic',true)"),/worker_unavailable/);checks++;
+ check((await row('select count(*)::int n from analysis_jobs')).n===5,'disabled worker creates no job');
+ await sql(readFileSync('supabase/rollout/20261102183142_restrict_private_data_access.sql','utf8'));
+ await sql("select analysis_worker_tick_start();select analysis_worker_tick_finish(true);update analysis_worker_state set last_started_at=now()-interval '1 minute';select analysis_worker_tick_start();select analysis_worker_tick_finish(true);");
+ const fresh=(await row("select create_analysis_job('owner',ARRAY['owner/path.jpg'],'Synthetic',true) id")).id;
+ const freshRow=await row('select notification_status,notification_protocol from analysis_jobs where id=$1',[fresh]);
+ check(freshRow.notification_status==='pending'&&freshRow.notification_protocol==='line_retry_v1','new transactional jobs have explicit protocol');
+ check((await db.query('select * from claim_analysis_image($1)',[fresh])).rows.length===1,'new jobs can run immediately');
+ await db.close();
+}
+console.log(`PASS: ${checks} fresh/previous-Phase-1 upgrade checks; synthetic PostgreSQL only.`);
+})().catch(error=>{console.error(error.message);process.exitCode=1});

@@ -35,9 +35,25 @@ const assert = require('node:assert/strict');
   `);
   await sql(readFileSync(resolve('supabase/migrations/20261102183016_session_api_expansion.sql'), 'utf8'));
   await sql(readFileSync(resolve('supabase/migrations/20261102190336_analysis_image_leases.sql'), 'utf8'));
-  await sql('grant all on public.memo_corrections to service_role');
-  // Existing browser paths still work during additive phase.
+  await sql(readFileSync(resolve('supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql'), 'utf8'));
+  check((await scalar('select public.analysis_processing_secure() as ok')).ok===false,'processing stays disabled while anonymous access is open');
+  // Check additive browser compatibility, then close access before testing scheduled intake.
   await sql('set role anon; select * from public.users; reset role'); checks++;
+  await sql(readFileSync(resolve('supabase/rollout/20261102183142_restrict_private_data_access.sql'), 'utf8'));
+  check((await scalar('select public.analysis_processing_secure() as ok')).ok===true,'processing security gate opens only after cutover');
+  check((await scalar('select public.analysis_background_ready() as ready')).ready===false,'worker is not ready without heartbeat');
+  await sql('select public.analysis_worker_tick_start(); select public.analysis_worker_tick_finish(true);');
+  check((await scalar('select public.analysis_background_ready() as ready')).ready===false,'one heartbeat does not activate job intake');
+  await sql("update analysis_worker_state set last_started_at=now()-interval '1 minute'");
+  await sql('select public.analysis_worker_tick_start(); select public.analysis_worker_tick_finish(true);');
+  check((await scalar('select public.analysis_background_ready() as ready')).ready===true,'two spaced successful heartbeats permit intake');
+  await sql('select public.analysis_worker_tick_finish(false)');
+  check((await scalar('select public.analysis_background_ready() as ready')).ready===false,'worker error closes intake');
+  await sql('select public.analysis_worker_tick_finish(true)');
+  await sql("update analysis_worker_state set previous_started_at=now()-interval '4 minutes',last_started_at=now()-interval '3 minutes'");
+  check((await scalar('select public.analysis_background_ready() as ready')).ready===false,'stopped scheduler closes intake');
+  await sql("update analysis_worker_state set previous_started_at=now()-interval '1 minute',last_started_at=now(),last_success_at=now(),last_error=null");
+  await sql('grant all on public.memo_corrections to service_role');
   const asRole = async (role, query) => { await sql(`set role ${role}`); try { return await scalar(query); } finally { await sql('reset role'); } };
   await assert.rejects(asRole('anon', `select public.register_invited_line_user('bad',null,null,'ABCDEFGH')`), /permission denied/); checks++;
   await asRole('service_role', `select public.register_invited_line_user('new-user','Test',null,'ABCDEFGH')`);
@@ -94,9 +110,11 @@ const assert = require('node:assert/strict');
   const before = await scalar('select count(*)::integer as n from users');
   await sql(readFileSync(resolve('supabase/rollout/20261102183142_restrict_private_data_access.sql'), 'utf8'));
   for (const role of ['anon','authenticated']) {
-    for (const table of ['users','invite_codes','unlimited_users','usage_limits','analysis_jobs','analysis_job_images','memo_corrections','ocr_order_cache','memo_jobs','manufacturers','catalogs','wallpapers']) {
+    for (const table of ['users','invite_codes','unlimited_users','usage_limits','analysis_jobs','analysis_job_images','memo_corrections','ocr_order_cache','memo_jobs','manufacturers','catalogs','wallpapers','analysis_worker_state','analysis_notification_migration_audit']) {
       await assert.rejects(asRole(role, `select * from public.${table}`), /permission denied/); checks++;
     }
+    await assert.rejects(asRole(role, 'select public.analysis_worker_tick_start()'), /permission denied/); checks++;
+    await assert.rejects(asRole(role, 'select public.analysis_background_ready()'), /permission denied/); checks++;
     await assert.rejects(asRole(role, `select public.create_analysis_job('owner',ARRAY['owner/path'],'bad',true)`), /permission denied/); checks++;
     await assert.rejects(asRole(role, `insert into storage.objects values('memo_uploads','denied.jpg') returning name`), /row-level security/); checks++;
   }

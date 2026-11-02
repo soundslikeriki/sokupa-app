@@ -48,6 +48,18 @@ test("worker does not finalize while another image is running", async () => {
   assert.deepEqual(calls, ["GET", "POST", "GET", "GET"]);
 });
 
+test("unproven old pending completion is quarantined without sending LINE", async () => {
+  const updates: any[] = [];
+  const admin = createClient("https://db.example.test", "synthetic-key", { auth: { persistSession: false }, global: { fetch: async (input, init) => {
+    const url = new URL(String(input));
+    assert.equal(url.hostname, "db.example.test");
+    const value = init?.method === "PATCH" ? (updates.push(JSON.parse(String(init.body))), null) : { id: "synthetic", status: "done", notification_status: "pending", notification_protocol: "legacy_unknown", result: { items: [] } };
+    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
+  } } });
+  assert.equal((await processAnalysisJobStep({ admin, jobId: "synthetic" })).status, "done");
+  assert.equal(updates[0].notification_status, "legacy_unknown");
+});
+
 
 test("expired lease resumes once, fences a late worker, and never duplicates the completion notification", async () => {
   const savedFetch = global.fetch;

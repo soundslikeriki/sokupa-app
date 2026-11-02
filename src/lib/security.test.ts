@@ -8,6 +8,8 @@ import { POST as resumeJob } from "../app/api/analysis-jobs/[id]/resume/route";
 import { GET as recoverJobs } from "../app/api/analysis-jobs/process/route";
 import { GET as getJob } from "../app/api/analysis-jobs/[id]/route";
 import { ownedMemoPath, memoObjectPath } from "./memo-storage";
+import { POST as createJob } from "../app/api/analysis-jobs/route";
+import { GET as workerHealth } from "../app/api/analysis-jobs/worker-health/route";
 
 process.env.SESSION_SECRET = "test-only-fixture-not-a-real-secret-0000";
 const origin = "https://app.example.test";
@@ -117,4 +119,52 @@ test("verified legacy login keeps LINE identity and null invite history; new uni
 
 test("scheduled recovery requires the internal secret and is closed to anonymous requests", async () => {
   assert.equal((await recoverJobs(new NextRequest(`${origin}/api/analysis-jobs/process`))).status, 403);
+});
+
+test("disabled background processing refuses new work before creating a job or charging quota", async () => {
+  const savedFetch = global.fetch;
+  const names = ["ANALYSIS_BACKGROUND_MODE", "NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
+  const saved = names.map((name) => process.env[name]);
+  process.env.ANALYSIS_BACKGROUND_MODE = "disabled";
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://db.example.test";
+  process.env.SUPABASE_SERVICE_ROLE_KEY = "synthetic-key";
+  let calls = 0;
+  global.fetch = async (input) => {
+    const url = new URL(String(input));
+    assert.ok(url.pathname.endsWith("/users")); calls++;
+    return new Response(JSON.stringify({ line_user_id: "owner", display_name: "Synthetic" }), { headers: { "Content-Type": "application/json" } });
+  };
+  try {
+    const response = await createJob(new NextRequest(`${origin}/api/analysis-jobs`, { method: "POST", headers: { origin, "Content-Type": "application/json", cookie: `${SESSION_COOKIE}=${signToken("session", "owner", 30)}` }, body: JSON.stringify({ image_paths: ["owner/00000000-0000-4000-8000-000000000000.jpg"] }) }));
+    assert.equal(response.status, 503); assert.equal(calls, 1);
+  } finally { global.fetch = savedFetch; names.forEach((name,index) => { if (saved[index] === undefined) delete process.env[name]; else process.env[name] = saved[index]; }); }
+});
+
+test("scheduled HTTP response waits for its heartbeat; read-only health checks cannot fake scheduler activity", async () => {
+  const savedFetch = global.fetch;
+  const names = ["ANALYSIS_BACKGROUND_MODE", "CRON_SECRET", "NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
+  const saved = names.map((name) => process.env[name]);
+  process.env.ANALYSIS_BACKGROUND_MODE = "disabled"; process.env.CRON_SECRET = "synthetic-cron-secret";
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://db.example.test"; process.env.SUPABASE_SERVICE_ROLE_KEY = "synthetic-key";
+  let enter!: () => void, release!: () => void, settled = false;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  const paused = new Promise<void>((resolve) => { release = resolve; });
+  const calls: string[] = [];
+  global.fetch = async (input) => {
+    const name = new URL(String(input)).pathname.split("/").pop()!; calls.push(name);
+    if (name === "analysis_worker_tick_finish") { enter(); await paused; }
+    return new Response(JSON.stringify(name === "analysis_background_ready" ? false : null), { headers: { "Content-Type": "application/json" } });
+  };
+  const request = (path: string) => new NextRequest(`${origin}${path}`, { headers: { authorization: "Bearer synthetic-cron-secret" } });
+  try {
+    const pending = recoverJobs(request("/api/analysis-jobs/process")).then((response) => { settled = true; return response; });
+    await entered; assert.equal(settled, false); release();
+    const response = await pending;
+    assert.equal(response.status, 200); assert.equal((await response.json()).processing_enabled, false);
+    assert.deepEqual(calls, ["analysis_worker_tick_start", "analysis_worker_tick_finish"]);
+    process.env.ANALYSIS_BACKGROUND_MODE = "scheduled";
+    assert.equal((await workerHealth(request("/api/analysis-jobs/worker-health"))).status, 503);
+    assert.equal(calls[calls.length - 1], "analysis_background_ready");
+    assert.equal(calls.filter((name) => name === "analysis_worker_tick_start").length, 1);
+  } finally { release(); global.fetch = savedFetch; names.forEach((name,index) => { if (saved[index] === undefined) delete process.env[name]; else process.env[name] = saved[index]; }); }
 });

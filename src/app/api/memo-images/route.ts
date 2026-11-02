@@ -1,3 +1,4 @@
+import { analysisBackgroundReady } from "@/lib/analysis-background";
 import { NextRequest, NextResponse } from "next/server";
 import { authorize } from "@/lib/server-auth";
 import { MAX_MEMO_BYTES, MEMO_BUCKET, UUID_PATTERN } from "@/lib/memo-storage";
@@ -5,6 +6,7 @@ export const runtime = "nodejs";
 export async function POST(req: NextRequest) {
   const auth = await authorize(req);
   if (auth.error) return auth.error;
+  if (!(await analysisBackgroundReady(auth.admin))) return NextResponse.json({ error: "解析サービスの準備ができていません。時間をおいて再度お試しください。" }, { status: 503 });
   const uploadId = req.headers.get("x-upload-id") ?? "";
   if (!UUID_PATTERN.test(uploadId)) return NextResponse.json({ error: "Invalid upload ID" }, { status: 400 });
   if (Number(req.headers.get("content-length")) > MAX_MEMO_BYTES) return NextResponse.json({ error: "画像が大きすぎます" }, { status: 413 });

@@ -10,6 +10,10 @@ import { sendLineMessages } from "@/lib/line-notification";
 async function notifyCompletion(admin: SupabaseClient, job: any, result: ParsedMemoPayload) {
   const started = Date.now();
   try {
+    if (job.notification_protocol !== "line_retry_v1") {
+      await admin.from("analysis_jobs").update({ notification_status: "legacy_unknown" }).eq("id", job.id).in("notification_status", ["pending", "failed"]);
+      return;
+    }
     // LINE retains retry keys for 24 hours. Never automatically resend outside that window.
     if (job.notification_attempted_at && started - Date.parse(job.notification_attempted_at) > 23 * 60 * 60 * 1000) {
       await admin.from("analysis_jobs").update({ notification_status: "uncertain", notification_error: "Retry window expired; confirm delivery before resending", updated_at: new Date().toISOString() }).eq("id", job.id).neq("notification_status", "accepted");
@@ -51,7 +55,7 @@ export async function processAnalysisJobStep(opts: {
 
   const { data: job, error: jobErr } = await admin
     .from("analysis_jobs")
-    .select("id,status,site_name,line_user_id,context,total_images,done_images,notification_status,notification_attempted_at,result")
+    .select("id,status,site_name,line_user_id,context,total_images,done_images,notification_status,notification_protocol,notification_attempted_at,result")
     .eq("id", jobId)
     .maybeSingle();
   if (jobErr || !job) {
@@ -111,6 +115,7 @@ export async function processAnalysisJobStep(opts: {
         done_images: job.total_images ?? 0,
         result: resultPayload,
         notification_status: "pending",
+        notification_protocol: "line_retry_v1",
         updated_at: new Date().toISOString(),
       })
       .eq("id", jobId).in("status", ["queued", "running"]).select("id").maybeSingle();
@@ -120,7 +125,7 @@ export async function processAnalysisJobStep(opts: {
     }
     if (!finalized) return { status: "done" };
 
-    await notifyCompletion(admin, job, resultPayload);
+    await notifyCompletion(admin, { ...job, notification_protocol: "line_retry_v1" }, resultPayload);
     return { status: "done" };
   }
 
