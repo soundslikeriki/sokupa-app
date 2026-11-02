@@ -371,6 +371,8 @@ export async function augmentProductWithCatalogSearch(
 
   try {
     const res = await generateText({
+      maxRetries: 0,
+      abortSignal: AbortSignal.timeout(90_000),
       model: google(CATALOG_MODEL),
       tools: { google_search: google.tools.googleSearch({}) },
       stopWhen: stepCountIs(12),
@@ -385,8 +387,8 @@ export async function augmentProductWithCatalogSearch(
       return fallback;
     }
     parsed = augmentResponseSchema.parse(raw);
-  } catch (e) {
-    console.warn("wallpaper catalog search failed:", productCode, e);
+  } catch {
+    console.warn("wallpaper catalog search unavailable", {productCode});
     return fallback;
   }
 

@@ -7,7 +7,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   if (auth.error) return auth.error;
   if (!UUID_PATTERN.test(params.id)) return NextResponse.json({ error: "Invalid job" }, { status: 400 });
   const { data, error } = await auth.admin.from("analysis_jobs")
-    .select("id,status,site_name,done_images,total_images,result,error,notification_status,analysis_job_images(status,lease_expires_at,updated_at,recovery_not_before)")
+    .select("id,status,site_name,done_images,total_images,result,error,failure_kind,quota_reserved,quota_refunded,quota_tracking,notification_status,analysis_job_images(status,lease_expires_at,updated_at,recovery_not_before)")
     .eq("id", params.id).eq("line_user_id", auth.lineUserId).maybeSingle();
   if (error) return NextResponse.json({ error: "結果の取得に失敗しました" }, { status: 503 });
   if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });

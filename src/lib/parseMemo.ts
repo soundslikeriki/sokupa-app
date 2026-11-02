@@ -7,6 +7,7 @@ import { dedupeSlashDelimited } from "@/lib/dedupeSlashList";
 import { manufacturerFromOfficialUrl } from "@/lib/officialDomainManufacturer";
 import { augmentProductWithCatalogSearch, type CatalogAugment } from "@/lib/wallpaperCatalogSearch";
 import type { MemoProductItem } from "@/types";
+import { MemoProviderError, providerError } from "@/lib/analysis-failure";
 
 const MAX_IMAGES = 16;
 /** 画像解析（JSON 安定のため Google 検索ツールは付けない） */
@@ -394,10 +395,7 @@ export async function parseMemoBody(body: ParseMemoBody) {
       process.env.GEMINI_API_KEY?.trim();
 
     if (!apiKey) {
-      console.error("[ERROR] Missing Env Vars: GOOGLE_GENERATIVE_AI_API_KEY or GEMINI_API_KEY is required but not set in Vercel.");
-      return NextResponse.json({
-        error: "サーバーサイドの環境変数が設定されていません。「GOOGLE_GENERATIVE_AI_API_KEY」または「GEMINI_API_KEY」を Vercel に追加してください。"
-      }, { status: 500 });
+      throw new MemoProviderError({kind:"infrastructure",code:"configuration",retryable:false,delivery_unknown:false});
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
@@ -430,7 +428,10 @@ export async function parseMemoBody(body: ParseMemoBody) {
     }
 
     const visionStarted = Date.now();
-    const result = await visionModel.generateContent(contents, { signal: AbortSignal.timeout(150_000) });
+    const signal = AbortSignal.timeout(150_000);
+    let result;
+    try { result = await visionModel.generateContent(contents, { signal }); }
+    catch (error) { throw providerError(error, signal.aborted); }
     console.info("[parse-memo] timing", { stage: "vision", durationMs: Date.now() - visionStarted });
     const responseText = result.response.text();
 
@@ -478,8 +479,12 @@ export async function parseMemoBody(body: ParseMemoBody) {
       imageCount: base64Images.length,
     });
   } catch (error: unknown) {
+    if (error instanceof MemoProviderError) {
+      console.error("[parse-memo] provider failure", {code:error.failure.code,status:error.upstreamStatus,retryable:error.failure.retryable});
+      return NextResponse.json({error:error.message,failure:error.failure},{status:error.upstreamStatus===429?429:503});
+    }
     const message = error instanceof Error ? error.message : "画像解析に失敗しました";
-    console.error("Parse Memo Error:", error);
-    return NextResponse.json({ error: message || "画像解析に失敗しました" }, { status: 500 });
+    console.error("[parse-memo] content validation failed");
+    return NextResponse.json({ error: message || "画像解析に失敗しました",failure:{kind:"content",code:"content",retryable:false,delivery_unknown:false} }, { status: 422 });
   }
 }

@@ -49,13 +49,15 @@
 | 確認 | 結果 |
 | --- | --- |
 | 変更前 npm test / lint | 21件成功 / 成功 |
-| 変更後 npm test | 54件成功。認証・OAuth state・既存NULL招待履歴・所有者・数量・JSON失敗・下書き・通知・ジョブ確定順序・基盤障害時のCron失敗を合成データとモックで検証 |
+| 変更後 npm test | 57件成功。認証・OAuth state・既存NULL招待履歴・所有者・数量・JSON失敗・下書き・通知・ジョブ確定順序・基盤障害時のCron失敗・provider障害分類を合成データとモックで検証 |
 | npx tsc --noEmit / npm run lint | 成功 |
-| ローカル実Postgres 17.6 | 32項目成功。私有Unixソケットと合成データで8接続の取得・確定・再取得・旧トークン拒否・行ロック・利用枠競合・管理者無制限・稼働判定の競合を確認。Supabase実サービスとは別 |
+| ローカル実Postgres 17.6 | 39項目成功。私有Unixソケットと合成データで8接続の取得・確定・再取得・旧トークン拒否・行ロック・利用枠競合・管理者無制限・稼働判定・利用枠返却の競合を確認。Supabase実サービスとは別 |
 | npm run build | 成功。既存由来のlibheif動的requireとBrowserslist古さの警告は残る。Google Fonts取得にはネットワーク許可が必要だった |
-| 隔離PostgreSQL (PGlite 0.5.14) | 83項目成功。稼働確認SQLを含め5本を実行し、匿名／authenticated拒否、サービス権限、招待の一回性とロールバック、上限、無制限、他バケット保全、リースの排他・期限回復・旧トークン拒否・再開回数上限、新旧ワーカー切替の猶予期間を確認。本番には接続しない |
+| 隔離PostgreSQL (PGlite 0.5.14) | 85項目成功。追加SQLとPhase 2の6本を実行し、匿名／authenticated拒否、サービス権限、招待の一回性とロールバック、上限、無制限、他バケット保全、リースの排他・期限回復・旧トークン拒否・再開回数上限、新旧ワーカー切替の猶予期間を確認。本番には接続しない |
 | 定期処理の稼働判定 (PGlite) | 40項目成功。成功2回、失敗後・時間切れ後の再開、重複完了、順序逆転、旧呼出しの拒否、権限制御を確認 |
 | 通知アップグレード (PGlite) | 28項目成功。新規と旧Phase 1適用済みの両経路で、過去通知の隔離・監査、既定値、既存ID保持を確認 |
+| provider障害と枠 (PGlite) | 51項目成功。再試行・上限・予約月・返却一回性・legacy保全・権限・rollbackを確認 |
+| SDK→ワーカー→SQL | 33項目成功。全HTTPをモックし、実SDKの503・認証・通信不明・回復成功と、稼働判定・枠処理を一続きで確認 |
 | ブラウザ (一時Chrome、全外部通信を遮断) | 既存9項目＋独立レビュー再現11項目が成功。23m表示、負数拒否、下書き書出し・退避失敗時保全・退避後の解析再開も確認。合成破損画像の失敗表示、リピートON/OFF・再読込・幅数編集・原本復帰・発注下書きの保存／復元・ログインゲート・JS例外なし |
 
 再実行:
@@ -69,6 +71,8 @@ npm run build
 PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/security-migrations.cjs
 PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/notification-upgrade.cjs
 PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/worker-health.cjs
+PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/provider-recovery.cjs
+PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node --import tsx scripts/verification/provider-worker.ts
 # start the local server first; fixtures block all non-localhost browser requests
 PLAYWRIGHT_MODULE=/tmp/sokupa-sql-harness/node_modules/playwright node scripts/verification/browser-regressions.cjs
 PLAYWRIGHT_MODULE=/tmp/sokupa-sql-harness/node_modules/playwright node scripts/verification/independent-review-browser.cjs
@@ -114,3 +118,7 @@ DBのジョブ取得・状態確認・確定・失敗記録、通知状態保存
 旧版の開始／完了RPCはservice_roleにも拒否する。アップグレード時はdisabled・旧ワーカーdrain後に追加SQLと対応コードを配備し、新しい呼出し2回の完了を確認する。適用後は旧f71f09fのワーカーへ単純に戻さず、この稼働判定に対応する修正版を使用する。
 
 ローカル実Postgresの32項目には、8接続での同時開始・同じ完了の重複・失敗と古い成功の競合・失敗後2回の回復・期限切れ再起動も含む。画面は今回変更していない。ブラウザ20項目は前回ビルドでの確認結果。
+
+## Provider障害の追補
+
+追加マイグレーション `20261102205248_provider_failure_recovery.sql` を上記4本の後、対応コード配備前に適用する。通常マイグレーション5本とPhase 2は引き続き段階適用する。再試行・利用枠の契約、残る重複課金リスク、旧ジョブの返却制限は [provider-recovery.md](./provider-recovery.md) に記載した。Hobby維持・Proへ変更しないという最新のユーザー方針を継続し、公開・外部設定・鍵生成は未実施。

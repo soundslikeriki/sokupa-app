@@ -37,8 +37,8 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
    create table storage.objects(id int);alter table storage.objects enable row level security;
    insert into storage.buckets(id,public)values('memo_uploads',true);
    grant all on all tables in schema public,storage to service_role;
-   insert into users(line_user_id)values('owner'),('limited');`);
-  for(const file of ['supabase/migrations/20261102183016_session_api_expansion.sql','supabase/migrations/20261102190336_analysis_image_leases.sql','supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql','supabase/migrations/20261102203127_verified_worker_success_ticks.sql','supabase/rollout/20261102183142_restrict_private_data_access.sql'])await admin.query(fs.readFileSync(file,'utf8'));
+   insert into users(line_user_id)values('owner'),('limited'),('refund-only');`);
+  for(const file of ['supabase/migrations/20261102183016_session_api_expansion.sql','supabase/migrations/20261102190336_analysis_image_leases.sql','supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql','supabase/migrations/20261102203127_verified_worker_success_ticks.sql','supabase/migrations/20261102205248_provider_failure_recovery.sql','supabase/rollout/20261102183142_restrict_private_data_access.sql'])await admin.query(fs.readFileSync(file,'utf8'));
   await primeWorkerHealth(admin.query.bind(admin));
   check((await service('select analysis_background_ready() ready'))[0].ready,'service role can confirm readiness after closed grants');
   const create=async(count=1,user='owner',owner=true)=>(await service('select create_analysis_job($1,$2,$3,$4) id',[user,Array.from({length:count},(_,i)=>`${user}/${i}.jpg`),'Synthetic',owner]))[0].id;
@@ -98,6 +98,23 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
   await finishTick(await beginTick());check(!(await healthy()),'first success after restart remains closed');
   await elapseHealthClock(admin.query.bind(admin),60);await finishTick(await beginTick());
   check(await healthy(),'restart requires two new successful requests');
+  const refundJob=await create(2,'refund-only',false),refundImage=(await claim(refundJob))[0];
+  const refundResults=(await Promise.all(Array.from({length:8},()=>service('select defer_analysis_image($1,$2,$3,false,0,true) state',[refundImage.id,refundImage.lease_token,'timeout'])))).flat();
+  check(refundResults.filter(r=>r.state==='failed').length===1,'8 concurrent provider failures settle the job once');
+  check(refundResults.filter(r=>r.state==='stale').length===7,'late failures are fenced before changing quota');
+  check((await row("select image_count from usage_limits where line_user_id='refund-only'")).image_count===0,'entire unusable reservation is returned once');
+  check((await row('select quota_refunded from analysis_jobs where id=$1',[refundJob])).quota_refunded===2,'refund ledger equals original reservation');
+  const replay=(await Promise.all(Array.from({length:8},()=>service('select release_analysis_job_quota($1) n',[refundJob])))).flat();
+  check(replay.every(r=>r.n===0),'8 concurrent refund replays return no extra quota');
+  await service('select clear_analysis_provider_block()');
+  const raceJob=await create(1,'refund-only',false),raceImage=(await claim(raceJob))[0];
+  const race=await Promise.allSettled([
+    service('select complete_analysis_image($1,$2,$3) ok',[raceImage.id,raceImage.lease_token,payload]),
+    service("select defer_analysis_image($1,$2,'timeout',false,0,true) state",[raceImage.id,raceImage.lease_token]),
+  ]);
+  check(race.every(r=>r.status==='fulfilled'),'completion and quota failure settlement do not deadlock');
+  const raceState=await row('select j.status,j.quota_refunded,i.status image_status from analysis_jobs j join analysis_job_images i on i.job_id=j.id where j.id=$1',[raceJob]);
+  check((raceState.image_status==='done'&&raceState.quota_refunded===0)||(raceState.status==='failed'&&raceState.quota_refunded===1),'race chooses success or refund, never both');
   console.log(`PASS: ${checks} real PostgreSQL 17.6 multi-connection checks; Unix socket only; synthetic data.`);
  }finally{
   if(admin)await admin.query('rollback').catch(()=>{});

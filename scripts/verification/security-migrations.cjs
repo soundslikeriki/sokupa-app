@@ -38,6 +38,7 @@ const {elapseHealthClock,primeWorkerHealth}=require('./worker-health-fixture.cjs
   await sql(readFileSync(resolve('supabase/migrations/20261102190336_analysis_image_leases.sql'), 'utf8'));
   await sql(readFileSync(resolve('supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql'), 'utf8'));
   await sql(readFileSync(resolve('supabase/migrations/20261102203127_verified_worker_success_ticks.sql'), 'utf8'));
+  await sql(readFileSync(resolve('supabase/migrations/20261102205248_provider_failure_recovery.sql'), 'utf8'));
   check((await scalar('select public.analysis_processing_secure() as ok')).ok===false,'processing stays disabled while anonymous access is open');
   // Check additive browser compatibility, then close access before testing scheduled intake.
   await sql('set role anon; select * from public.users; reset role'); checks++;
@@ -116,7 +117,7 @@ const {elapseHealthClock,primeWorkerHealth}=require('./worker-health-fixture.cjs
   const before = await scalar('select count(*)::integer as n from users');
   await sql(readFileSync(resolve('supabase/rollout/20261102183142_restrict_private_data_access.sql'), 'utf8'));
   for (const role of ['anon','authenticated']) {
-    for (const table of ['users','invite_codes','unlimited_users','usage_limits','analysis_jobs','analysis_job_images','memo_corrections','ocr_order_cache','memo_jobs','manufacturers','catalogs','wallpapers','analysis_worker_state','analysis_worker_ticks','analysis_notification_migration_audit']) {
+    for (const table of ['users','invite_codes','unlimited_users','usage_limits','analysis_jobs','analysis_job_images','memo_corrections','ocr_order_cache','memo_jobs','manufacturers','catalogs','wallpapers','analysis_provider_state','analysis_worker_state','analysis_worker_ticks','analysis_notification_migration_audit']) {
       await assert.rejects(asRole(role, `select * from public.${table}`), /permission denied/); checks++;
     }
     await assert.rejects(asRole(role, 'select public.analysis_worker_tick_start()'), /permission denied/); checks++;

@@ -6,6 +6,7 @@ import { mergeParsedPayloads, requiresMemoReview } from "@/lib/memo-calculation"
 import { parseMemoBody } from "@/lib/parseMemo";
 import { MEMO_BUCKET, memoObjectPath, MAX_MEMO_BYTES } from "@/lib/memo-storage";
 import { sendLineMessages } from "@/lib/line-notification";
+import { isInfrastructureParseFailure, providerError, type ParseFailure } from "@/lib/analysis-failure";
 
 export type AnalysisJobStepResult = {
   status: "running" | "done" | "failed";
@@ -69,7 +70,7 @@ export async function processAnalysisJobStep(opts: {
 
   const { data: job, error: jobErr } = await admin
     .from("analysis_jobs")
-    .select("id,status,site_name,line_user_id,context,total_images,done_images,notification_status,notification_protocol,notification_attempted_at,result")
+    .select("id,status,site_name,line_user_id,context,total_images,done_images,notification_status,notification_protocol,notification_attempted_at,result,failure_kind,error")
     .eq("id", jobId)
     .maybeSingle();
   if (jobErr || !job) {
@@ -82,7 +83,7 @@ export async function processAnalysisJobStep(opts: {
     } catch { return infrastructureFailure("Notification state unavailable", "done"); }
     return { status: "done" };
   }
-  if (job.status === "failed") return { status: "failed", failureKind: "job" };
+  if (job.status === "failed") return job.failure_kind === "infrastructure" ? infrastructureFailure(job.error || "Infrastructure failure", "failed") : { status: "failed", failureKind: "job" };
 
   const { data: claims, error: imgErr } = opts.finalizeOnly
     ? { data: [], error: null }
@@ -102,6 +103,12 @@ export async function processAnalysisJobStep(opts: {
     if (rowsErr) {
       console.error("[analysis-job] finalize rows failed", { jobId, rowsErr });
       return infrastructureFailure(rowsErr.message, "failed");
+    }
+    // A claim can stop an exhausted lease and settle quota in its transaction.
+    if ((rows ?? []).some(row => row.status === "failed")) {
+      const {data: current,error: currentError}=await admin.from("analysis_jobs").select("status,error,failure_kind").eq("id",jobId).maybeSingle();
+      if (currentError || !current) return infrastructureFailure("Job status lookup failed");
+      if (current.status === "failed" && current.failure_kind === "infrastructure") return infrastructureFailure(current.error || "Infrastructure failure", "failed");
     }
 
     // Another worker may own a running image. Never finalize a partial result.
@@ -147,6 +154,11 @@ export async function processAnalysisJobStep(opts: {
     return { status: "done" };
   }
 
+  const recordProviderFailure = async (failure: ParseFailure): Promise<AnalysisJobStepResult> => {
+    const {data,error}=await admin.rpc("defer_analysis_image",{p_image_id:img.id,p_lease_token:img.lease_token,p_code:failure.code,p_retryable:failure.retryable,p_retry_after_seconds:failure.retry_after_seconds??0,p_delivery_unknown:failure.delivery_unknown});
+    if (error || !["queued","failed","stale"].includes(data)) return infrastructureFailure("Provider failure recording failed");
+    return infrastructureFailure(data === "queued" ? "解析サービスが一時的に利用できません。待ち時間を置いて再試行します。" : "解析サービスの障害により処理を停止しました。",data === "failed" ? "failed" : "running");
+  };
   try {
     const context = job.context && typeof job.context === "object" ? job.context : {};
     const started = Date.now();
@@ -158,7 +170,11 @@ export async function processAnalysisJobStep(opts: {
       base64Image: Buffer.from(await image.arrayBuffer()).toString("base64"), mimeType: image.type || "image/jpeg", context,
     });
     console.info("[analysis-job] image timing", { jobId, imageId: img.id, durationMs: Date.now() - started, status: parseRes.status });
-    const parseJson = (await parseRes.json()) as any;
+    let parseJson: any;
+    try { parseJson = await parseRes.json(); }
+    catch { return recordProviderFailure(providerError({status:502}).failure); }
+    if (isInfrastructureParseFailure(parseJson?.failure)) return recordProviderFailure(parseJson.failure);
+    if (parseRes.status === 429 || parseRes.status >= 500) return recordProviderFailure(providerError({status:parseRes.status}).failure);
     if (!parseRes.ok || parseJson?.error || !parseJson?.data?.items?.length) {
       throw new Error(parseJson?.error || `parse-memo failed: ${parseRes.status}`);
     }
