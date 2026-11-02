@@ -28,6 +28,8 @@ Vercel Cronの配送はbest effortで、失敗時の即時再試行や全呼出�
 
 残る個別確認は、Proへのプラン変更・継続費用または別スケジューラの採用、専用 `CRON_SECRET` と `SESSION_SECRET` の生成・設定、独立検証環境の資格情報です。実値の生成・登録・課金プラン変更は行っていません。
 
+Supabase Cron案は[実現可能性調査](./supabase-feasibility.md)を参照。実装・有効化はしておらず、Vercel Hobbyの業務用途条件や実行料金・配送の問題を解決済みとは扱わない。
+
 ## 有効化手順（未実施）
 
 1. 独立Supabaseと、LINEログインを検証できる独立Vercelプロジェクトを準備する。実際のCronはそのプロジェクトのproduction deploymentに対して検証する。通常のPreviewがCronを実行する前提にしない。[Cronの対象URL](https://vercel.com/docs/cron-jobs)
