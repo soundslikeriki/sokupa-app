@@ -9,6 +9,7 @@ test("provider classification separates retryable errors, configuration and unkn
   for (const status of [429,500,502,503]) assert.equal(providerError({status}).failure.retryable,true);
   for (const status of [401,403]) assert.equal(providerError({status}).failure.code,"authentication");
   for (const status of [400,402,404]) assert.equal(providerError({status}).failure.code,"configuration");
+  assert.equal(providerError({status:400,message:"Unable to process input image"}).failure.kind,"content");
   for (const error of [new TypeError("synthetic network loss"),new DOMException("synthetic abort","AbortError"),new DOMException("synthetic timeout","TimeoutError"),{status:408},{status:504}]) {
     assert.equal(providerError(error).failure.retryable,false);assert.equal(providerError(error).failure.delivery_unknown,true);
   }

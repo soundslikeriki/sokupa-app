@@ -481,7 +481,7 @@ export async function parseMemoBody(body: ParseMemoBody) {
   } catch (error: unknown) {
     if (error instanceof MemoProviderError) {
       console.error("[parse-memo] provider failure", {code:error.failure.code,status:error.upstreamStatus,retryable:error.failure.retryable});
-      return NextResponse.json({error:error.message,failure:error.failure},{status:error.upstreamStatus===429?429:503});
+      return NextResponse.json({error:error.message,failure:error.failure},{status:error.failure.kind==="content"?422:error.upstreamStatus===429?429:503});
     }
     const message = error instanceof Error ? error.message : "画像解析に失敗しました";
     console.error("[parse-memo] content validation failed");
