@@ -2,6 +2,7 @@
 const fs=require('node:fs');const os=require('node:os');const path=require('node:path');
 const {spawn,execFileSync}=require('node:child_process');const assert=require('node:assert/strict');
 const {Client,Pool}=require(process.env.PG_CLIENT_MODULE||'pg');
+const {elapseHealthClock,primeWorkerHealth}=require('./worker-health-fixture.cjs');
 const bin=process.env.PG_TEST_BIN;
 if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary directory');
 (async()=>{
@@ -37,10 +38,8 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
    insert into storage.buckets(id,public)values('memo_uploads',true);
    grant all on all tables in schema public,storage to service_role;
    insert into users(line_user_id)values('owner'),('limited');`);
-  for(const file of ['supabase/migrations/20261102183016_session_api_expansion.sql','supabase/migrations/20261102190336_analysis_image_leases.sql','supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql','supabase/rollout/20261102183142_restrict_private_data_access.sql'])await admin.query(fs.readFileSync(file,'utf8'));
-  await service('select analysis_worker_tick_start()');await service('select analysis_worker_tick_finish(true)');
-  await admin.query("update analysis_worker_state set last_started_at=now()-interval '1 minute'");
-  await service('select analysis_worker_tick_start()');await service('select analysis_worker_tick_finish(true)');
+  for(const file of ['supabase/migrations/20261102183016_session_api_expansion.sql','supabase/migrations/20261102190336_analysis_image_leases.sql','supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql','supabase/migrations/20261102203127_verified_worker_success_ticks.sql','supabase/rollout/20261102183142_restrict_private_data_access.sql'])await admin.query(fs.readFileSync(file,'utf8'));
+  await primeWorkerHealth(admin.query.bind(admin));
   check((await service('select analysis_background_ready() ready'))[0].ready,'service role can confirm readiness after closed grants');
   const create=async(count=1,user='owner',owner=true)=>(await service('select create_analysis_job($1,$2,$3,$4) id',[user,Array.from({length:count},(_,i)=>`${user}/${i}.jpg`),'Synthetic',owner]))[0].id;
   const claim=job=>service('select * from claim_analysis_image($1)',[job]);
@@ -73,6 +72,32 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
   check((await row("select count(*)::int n from analysis_jobs where line_user_id='limited'")).n===1,'rejected reservations create no orphan jobs');
   check((await Promise.all(Array.from({length:8},()=>create()))).length===8,'owner remains unlimited under concurrent creation');
   check((await row("select count(*)::int n from usage_limits where line_user_id='owner'")).n===0,'owner consumes no monthly quota');
+  const beginTick=async()=>(await service('select analysis_worker_tick_begin() id'))[0].id;
+  const finishTick=async(id,success=true)=>(await service('select analysis_worker_tick_complete($1,$2) ok',[id,success]))[0].ok;
+  const healthy=async()=>(await service('select analysis_background_ready() ready'))[0].ready;
+  await finishTick(await beginTick(),false);
+  const parallelTicks=await Promise.all(Array.from({length:8},()=>beginTick()));
+  await Promise.all(parallelTicks.map(id=>finishTick(id)));
+  check(new Set(parallelTicks).size===8,'8 concurrent health starts have unique IDs');
+  check(!(await healthy()),'8 concurrent successes cannot fake two spaced healthy calls');
+  const duplicateResults=await Promise.all(Array.from({length:8},()=>finishTick(parallelTicks[0])));
+  check(duplicateResults.every(Boolean),'concurrent same-outcome completion retries are idempotent');
+  check(!(await healthy()),'duplicate callbacks do not add success timestamps');
+  await elapseHealthClock(admin.query.bind(admin),60);
+  await finishTick(await beginTick());check(await healthy(),'a second spaced success opens intake across real connections');
+  const oldTick=await beginTick(),failedTick=await beginTick();
+  await Promise.all([finishTick(failedTick,false),finishTick(oldTick)]);
+  check(!(await healthy()),'concurrent failure and older success always leave intake closed');
+  await elapseHealthClock(admin.query.bind(admin),60);await finishTick(await beginTick());
+  check(!(await healthy()),'one recovery success cannot reuse successes from before failure');
+  await elapseHealthClock(admin.query.bind(admin),60);await finishTick(await beginTick());
+  check(await healthy(),'two new recovery successes restore intake');
+  await finishTick(failedTick,false);await finishTick(oldTick);
+  check(await healthy(),'late/replayed callbacks from the old epoch cannot change restored health');
+  await elapseHealthClock(admin.query.bind(admin),121);check(!(await healthy()),'stale real scheduler state closes intake');
+  await finishTick(await beginTick());check(!(await healthy()),'first success after restart remains closed');
+  await elapseHealthClock(admin.query.bind(admin),60);await finishTick(await beginTick());
+  check(await healthy(),'restart requires two new successful requests');
   console.log(`PASS: ${checks} real PostgreSQL 17.6 multi-connection checks; Unix socket only; synthetic data.`);
  }finally{
   if(admin)await admin.query('rollback').catch(()=>{});

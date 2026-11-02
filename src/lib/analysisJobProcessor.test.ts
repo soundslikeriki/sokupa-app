@@ -3,6 +3,41 @@ import assert from "node:assert/strict";
 import { createClient } from "@supabase/supabase-js";
 import { processAnalysisJobStep } from "./analysisJobProcessor";
 
+test("database/storage infrastructure errors stay distinct from persisted image failures", async () => {
+  const savedUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://db.example.test";
+  const item = { product_code: "VS2067", manufacturer: "Test", entries: [{ original_formula: "20×1", length_m: 20, quantity: 1, subtotal_m: 20 }], total_m: 20, order_quantity: 23 };
+  const stages = ["job_fetch", "claim", "rows", "current_status", "failure_save", "invalid_result_save", "finalize_save", "complete_image", "fail_image", "storage", "notification_quarantine", "notification_attempt", "content_failure"];
+  try {
+    for (const stage of stages) {
+      const claimed = ["complete_image", "fail_image", "storage", "content_failure"].includes(stage);
+      const admin = createClient("https://db.example.test", "synthetic-key", { auth: { persistSession: false }, global: { fetch: async (input, init) => {
+        const url = new URL(String(input)), name = url.pathname.split("/").pop();
+        const json = (data: unknown, status=200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
+        const failure = () => json({ message: "Synthetic database failure" },400);
+        assert.equal(url.hostname,"db.example.test");
+        if (url.pathname.includes("/storage/")) return stage === "storage" ? json({ message: "Synthetic storage unavailable" },403) : new Response(new Uint8Array([255,216,255,217]),{headers:{"Content-Type":"image/jpeg"}});
+        if (name === "claim_analysis_image") return stage === "claim" ? failure() : json(claimed ? [{ id: "image", idx: 0, url: "synthetic/0.jpg", lease_token: "lease" }] : []);
+        if (name === "complete_analysis_image") return failure();
+        if (name === "fail_analysis_image") return stage === "content_failure" ? json(true) : failure();
+        if (name === "analysis_jobs") {
+          if (init?.method === "PATCH" || stage === "job_fetch" || url.searchParams.get("select") === "status,error") return failure();
+          return json({ id: "synthetic-job", status: stage.startsWith("notification") ? "done" : "running", total_images: 1, notification_status: "pending", notification_protocol: stage === "notification_quarantine" ? "legacy_unknown" : "line_retry_v1", result: { items: [item] } });
+        }
+        if (name === "analysis_job_images") {
+          if (stage === "rows") return failure();
+          if (stage === "current_status") return json([{ status: "queued" }]);
+          if (stage === "failure_save") return json([{ status: "failed" }]);
+          return json([{ status: "done", parsed: { items: [stage === "invalid_result_save" ? { product_code: "VS2067", entries: [{}] } : item] } }]);
+        }
+        throw new Error(`Unexpected synthetic request: ${name}`);
+      } } });
+      const result = await processAnalysisJobStep({ admin, jobId: "synthetic-job", parse: async () => new Response(JSON.stringify(stage === "complete_image" ? { data: { items: [item] } } : { error: "Unreadable synthetic image" }), { status: stage === "complete_image" ? 200 : 400 }) });
+      assert.equal(result.failureKind, stage === "content_failure" ? "job" : "infrastructure",stage);
+    }
+  } finally { if (savedUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL; else process.env.NEXT_PUBLIC_SUPABASE_URL = savedUrl; }
+});
+
 test("worker persists a complete merged result before notifying; LINE failure keeps analysis done", async () => {
   const savedFetch = global.fetch;
   const savedToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;

@@ -12,13 +12,13 @@ test("disabled processing only observes health; stale workers close intake", asy
   let healthy = false;
   const admin = createClient("https://db.example.test", "synthetic-key", { auth: { persistSession: false }, global: { fetch: async (input) => {
     const name = new URL(String(input)).pathname.split("/").pop()!; calls.push(name);
-    return new Response(JSON.stringify(name === "analysis_background_ready" ? healthy : null), { headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify(name === "analysis_background_ready" ? healthy : name === "analysis_worker_tick_begin" ? "synthetic-tick" : true), { headers: { "Content-Type": "application/json" } });
   } } });
   try {
     process.env.ANALYSIS_BACKGROUND_MODE = "disabled";
     assert.equal(await analysisBackgroundReady(admin), false);
     assert.deepEqual(await runScheduledAnalysisBatch(admin, async () => { throw new Error("disabled worker processed OCR"); }), { processed: 0, processing_enabled: false });
-    assert.deepEqual(calls, ["analysis_worker_tick_start", "analysis_worker_tick_finish"]);
+    assert.deepEqual(calls, ["analysis_worker_tick_begin", "analysis_worker_tick_complete"]);
     process.env.ANALYSIS_BACKGROUND_MODE = "scheduled";
     assert.equal(await analysisBackgroundReady(admin), false);
     healthy = true;
@@ -44,8 +44,8 @@ test("independent scheduled ticks finish two 31-second images after the browser 
     if (url.pathname.includes("/storage/")) return new Response(new Uint8Array([255,216,255,217]), { headers: { "Content-Type": "image/jpeg" } });
     if (url.hostname !== "db.example.test") throw new Error("Unexpected external request");
     const name = url.pathname.split("/").pop();
-    if (name === "analysis_worker_tick_start") { heartbeats++; return json(null); }
-    if (name === "analysis_worker_tick_finish") { assert.equal(body.p_success, true); return json(null); }
+    if (name === "analysis_worker_tick_begin") { heartbeats++; return json("synthetic-tick"); }
+    if (name === "analysis_worker_tick_complete") { assert.equal(body.p_success, true); assert.equal(body.p_tick_id, "synthetic-tick"); return json(true); }
     if (name === "analysis_processing_secure") return json(true);
     if (name === "resumable_analysis_jobs") return json(job.status === "done" ? [] : [{ id: job.id }]);
     if (name === "claim_analysis_image") { const image = images.find((item) => item.status === "queued"); if (!image) return json([]); image.status = "running"; job.status = "running"; return json([{ ...image }]); }
@@ -78,13 +78,50 @@ test("failed scheduled batch waits for other claimed work and records an unhealt
   const paused = new Promise<void>((resolve) => { release = resolve; });
   const admin = createClient("https://db.example.test", "synthetic-key", { auth: { persistSession: false }, global: { fetch: async (input, init) => {
     const name = new URL(String(input)).pathname.split("/").pop();
-    if (name === "analysis_worker_tick_finish") finished.push(JSON.parse(String(init?.body)).p_success);
-    return new Response(JSON.stringify(name === "analysis_processing_secure" ? true : name === "resumable_analysis_jobs" ? [{ id: "fail" }, { id: "pause" }] : null), { headers: { "Content-Type": "application/json" } });
+    if (name === "analysis_worker_tick_complete") finished.push(JSON.parse(String(init?.body)).p_success);
+    return new Response(JSON.stringify(name === "analysis_processing_secure" ? true : name === "resumable_analysis_jobs" ? [{ id: "fail" }, { id: "pause" }] : name === "analysis_worker_tick_begin" ? "synthetic-tick" : true), { headers: { "Content-Type": "application/json" } });
   } } });
   try {
-    const promise = runScheduledAnalysisBatch(admin, async ({jobId}) => { if (jobId === "fail") throw new Error("synthetic failure"); enter(); await paused; });
+    const promise = runScheduledAnalysisBatch(admin, async ({jobId}) => { if (jobId === "fail") throw new Error("synthetic failure"); enter(); await paused; return { status: "done" }; });
     const rejected = assert.rejects(promise, /Scheduled processing incomplete/);
     await entered; assert.deepEqual(finished, []); release(); await rejected;
     assert.deepEqual(finished, [false]);
   } finally { release(); if (saved === undefined) delete process.env.ANALYSIS_BACKGROUND_MODE; else process.env.ANALYSIS_BACKGROUND_MODE = saved; }
+});
+
+test("DB job fetch failure is an unhealthy scheduled invocation, regardless of failed job status", async () => {
+  const saved = process.env.ANALYSIS_BACKGROUND_MODE;
+  process.env.ANALYSIS_BACKGROUND_MODE = "scheduled";
+  const outcomes: boolean[] = [];
+  const admin = createClient("https://db.example.test", "synthetic-key", { auth: { persistSession: false }, global: { fetch: async (input, init) => {
+    const name = new URL(String(input)).pathname.split("/").pop();
+    if (name === "analysis_worker_tick_complete") { const body = JSON.parse(String(init?.body)); assert.equal(body.p_tick_id, "synthetic-tick"); outcomes.push(body.p_success); }
+    if (name === "analysis_jobs") return new Response(JSON.stringify({ message: "Synthetic DB unavailable" }), { status: 503, headers: { "Content-Type": "application/json" } });
+    const data = name === "analysis_worker_tick_begin" ? "synthetic-tick" : name === "resumable_analysis_jobs" ? [{ id: "synthetic-job" }] : true;
+    return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+  } } });
+  try {
+    await assert.rejects(runScheduledAnalysisBatch(admin), /Scheduled processing incomplete/);
+    assert.deepEqual(outcomes, [false]);
+  } finally { if (saved === undefined) delete process.env.ANALYSIS_BACKGROUND_MODE; else process.env.ANALYSIS_BACKGROUND_MODE = saved; }
+});
+
+test("persisted image failure completes a healthy tick; infrastructure errors in every status do not", async () => {
+  const saved = process.env.ANALYSIS_BACKGROUND_MODE;
+  process.env.ANALYSIS_BACKGROUND_MODE = "scheduled";
+  const outcomes: boolean[] = [];
+  const admin = createClient("https://db.example.test", "synthetic-key", { auth: { persistSession: false }, global: { fetch: async (input, init) => {
+    const name = new URL(String(input)).pathname.split("/").pop();
+    if (name === "analysis_worker_tick_complete") outcomes.push(JSON.parse(String(init?.body)).p_success);
+    const data = name === "analysis_worker_tick_begin" ? "synthetic-tick" : name === "resumable_analysis_jobs" ? [{ id: "synthetic-job" }] : true;
+    return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
+  } } });
+  try {
+    await runScheduledAnalysisBatch(admin, async () => ({ status: "failed", error: "Unreadable image", failureKind: "job" }));
+    assert.deepEqual(outcomes, [true]);
+    for (const status of ["running", "failed", "done"] as const) {
+      await assert.rejects(runScheduledAnalysisBatch(admin, async () => ({ status, error: "Synthetic infrastructure failure", failureKind: "infrastructure" })), /Scheduled processing incomplete/);
+    }
+    assert.deepEqual(outcomes, [true, false, false, false]);
+  } finally { if (saved === undefined) delete process.env.ANALYSIS_BACKGROUND_MODE; else process.env.ANALYSIS_BACKGROUND_MODE = saved; }
 });

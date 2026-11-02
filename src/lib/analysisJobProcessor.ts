@@ -7,21 +7,33 @@ import { parseMemoBody } from "@/lib/parseMemo";
 import { MEMO_BUCKET, memoObjectPath, MAX_MEMO_BYTES } from "@/lib/memo-storage";
 import { sendLineMessages } from "@/lib/line-notification";
 
+export type AnalysisJobStepResult = {
+  status: "running" | "done" | "failed";
+  error?: string;
+  /** A terminal content/job failure does not mean the worker infrastructure is unhealthy. */
+  failureKind?: "job" | "infrastructure";
+};
+
+const infrastructureFailure = (error: string, status: AnalysisJobStepResult["status"] = "running"): AnalysisJobStepResult => ({ status, error, failureKind: "infrastructure" });
+class NotificationStateError extends Error {}
+
 async function notifyCompletion(admin: SupabaseClient, job: any, result: ParsedMemoPayload) {
   const started = Date.now();
   try {
     if (job.notification_protocol !== "line_retry_v1") {
-      await admin.from("analysis_jobs").update({ notification_status: "legacy_unknown" }).eq("id", job.id).in("notification_status", ["pending", "failed"]);
+      const { error } = await admin.from("analysis_jobs").update({ notification_status: "legacy_unknown" }).eq("id", job.id).in("notification_status", ["pending", "failed"]);
+      if (error) throw new NotificationStateError("Notification quarantine recording failed");
       return;
     }
     // LINE retains retry keys for 24 hours. Never automatically resend outside that window.
     if (job.notification_attempted_at && started - Date.parse(job.notification_attempted_at) > 23 * 60 * 60 * 1000) {
-      await admin.from("analysis_jobs").update({ notification_status: "uncertain", notification_error: "Retry window expired; confirm delivery before resending", updated_at: new Date().toISOString() }).eq("id", job.id).neq("notification_status", "accepted");
+      const { error } = await admin.from("analysis_jobs").update({ notification_status: "uncertain", notification_error: "Retry window expired; confirm delivery before resending", updated_at: new Date().toISOString() }).eq("id", job.id).neq("notification_status", "accepted");
+      if (error) throw new NotificationStateError("Notification expiry recording failed");
       return;
     }
     if (!job.notification_attempted_at) {
       const { error } = await admin.from("analysis_jobs").update({ notification_attempted_at: new Date().toISOString() }).eq("id", job.id).is("notification_attempted_at", null);
-      if (error) throw new Error("notification attempt recording failed");
+      if (error) throw new NotificationStateError("notification attempt recording failed");
     }
     const messages = [{ type: "text", text: `✅ ソクパ解析が完了しました！${job.site_name ? `\n現場：${job.site_name}` : ""}\nアプリを開いて結果を確認してください。` }];
     // Uncertain calculations must be reviewed in the app before presenting an order text.
@@ -31,11 +43,13 @@ async function notifyCompletion(admin: SupabaseClient, job: any, result: ParsedM
     }
     await sendLineMessages(job.line_user_id, messages, job.id);
     const { error } = await admin.from("analysis_jobs").update({ notification_status: "accepted", notification_error: null, notified_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", job.id);
-    if (error) throw new Error("notification state update failed");
+    if (error) throw new NotificationStateError("notification state update failed");
     console.info("[analysis-job] notification", { jobId: job.id, status: "accepted", durationMs: Date.now() - started });
   } catch (error) {
+    if (error instanceof NotificationStateError) throw error;
     const message = error instanceof Error ? error.message : "notification failed";
-    await admin.from("analysis_jobs").update({ notification_status: "failed", notification_error: message, updated_at: new Date().toISOString() }).eq("id", job.id).neq("notification_status", "accepted");
+    const { error: recordError } = await admin.from("analysis_jobs").update({ notification_status: "failed", notification_error: message, updated_at: new Date().toISOString() }).eq("id", job.id).neq("notification_status", "accepted");
+    if (recordError) throw new NotificationStateError("Notification failure recording failed");
     console.error("[analysis-job] notification", { jobId: job.id, status: "failed", durationMs: Date.now() - started });
   }
 }
@@ -50,7 +64,7 @@ export async function processAnalysisJobStep(opts: {
   /** Internal test seam; never supplied from HTTP input. */
   parse?: (body: Parameters<typeof parseMemoBody>[0]) => Promise<Response>;
   finalizeOnly?: boolean;
-}): Promise<{ status: "running" | "done" | "failed"; error?: string }> {
+}): Promise<AnalysisJobStepResult> {
   const { admin, jobId } = opts;
 
   const { data: job, error: jobErr } = await admin
@@ -60,20 +74,22 @@ export async function processAnalysisJobStep(opts: {
     .maybeSingle();
   if (jobErr || !job) {
     console.error("[analysis-job] job fetch failed", { jobId, jobErr });
-    return { status: "failed", error: jobErr?.message || "job not found" };
+    return infrastructureFailure(jobErr?.message || "job not found", "failed");
   }
   if (job.status === "done") {
-    if (["pending", "failed"].includes(job.notification_status) && job.result) await notifyCompletion(admin, job, job.result as ParsedMemoPayload);
+    try {
+      if (["pending", "failed"].includes(job.notification_status) && job.result) await notifyCompletion(admin, job, job.result as ParsedMemoPayload);
+    } catch { return infrastructureFailure("Notification state unavailable", "done"); }
     return { status: "done" };
   }
-  if (job.status === "failed") return { status: "failed" };
+  if (job.status === "failed") return { status: "failed", failureKind: "job" };
 
   const { data: claims, error: imgErr } = opts.finalizeOnly
     ? { data: [], error: null }
     : await admin.rpc("claim_analysis_image", { p_job_id: jobId });
   if (imgErr) {
     console.error("[analysis-job] claim failed", { jobId, error: imgErr.message });
-    return { status: "running", error: "Image claim failed" };
+    return infrastructureFailure("Image claim failed");
   }
   const img = claims?.[0] as { id: string; idx: number; url: string; lease_token: string } | undefined;
 
@@ -85,18 +101,19 @@ export async function processAnalysisJobStep(opts: {
       .order("idx", { ascending: true });
     if (rowsErr) {
       console.error("[analysis-job] finalize rows failed", { jobId, rowsErr });
-      return { status: "failed", error: rowsErr.message };
+      return infrastructureFailure(rowsErr.message, "failed");
     }
 
     // Another worker may own a running image. Never finalize a partial result.
     if ((rows ?? []).some((row) => row.status === "running" || row.status === "queued")) {
-      const { data: current } = await admin.from("analysis_jobs").select("status,error").eq("id", jobId).maybeSingle();
-      if (current?.status === "failed") return { status: "failed", error: current.error };
+      const { data: current, error: currentError } = await admin.from("analysis_jobs").select("status,error").eq("id", jobId).maybeSingle();
+      if (currentError || !current) return infrastructureFailure("Job status lookup failed");
+      if (current.status === "failed") return { status: "failed", error: current.error, failureKind: "job" };
       return { status: "running" };
     }
     if ((rows ?? []).length === 0 || (rows ?? []).length !== job.total_images || (rows ?? []).some((row) => row.status !== "done" || !Array.isArray(row.parsed?.items) || row.parsed.items.length === 0)) {
-      await admin.from("analysis_jobs").update({ status: "failed", error: "画像の解析結果が揃っていません。画像を確認してください。" }).eq("id", jobId);
-      return { status: "failed", error: "Incomplete image results" };
+      const { error } = await admin.from("analysis_jobs").update({ status: "failed", error: "画像の解析結果が揃っていません。画像を確認してください。" }).eq("id", jobId);
+      return error ? infrastructureFailure("Job failure recording failed") : { status: "failed", error: "Incomplete image results", failureKind: "job" };
     }
     const payloads = (rows ?? [])
       .filter((r: any) => r.status === "done" && r.parsed)
@@ -104,8 +121,8 @@ export async function processAnalysisJobStep(opts: {
     let resultPayload: ParsedMemoPayload;
     try { resultPayload = mergeParsedPayloads(payloads); }
     catch {
-      await admin.from("analysis_jobs").update({ status: "failed", error: "保存された解析結果が不正です。画像を確認してください。" }).eq("id", jobId);
-      return { status: "failed", error: "Invalid parsed result" };
+      const { error } = await admin.from("analysis_jobs").update({ status: "failed", error: "保存された解析結果が不正です。画像を確認してください。" }).eq("id", jobId);
+      return error ? infrastructureFailure("Job failure recording failed") : { status: "failed", error: "Invalid parsed result", failureKind: "job" };
     }
 
     const { data: finalized, error: finErr } = await admin
@@ -121,11 +138,12 @@ export async function processAnalysisJobStep(opts: {
       .eq("id", jobId).in("status", ["queued", "running"]).select("id").maybeSingle();
     if (finErr) {
       console.error("[analysis-job] finalize job update failed", { jobId, finErr });
-      return { status: "failed", error: finErr.message };
+      return infrastructureFailure(finErr.message, "failed");
     }
     if (!finalized) return { status: "done" };
 
-    await notifyCompletion(admin, { ...job, notification_protocol: "line_retry_v1" }, resultPayload);
+    try { await notifyCompletion(admin, { ...job, notification_protocol: "line_retry_v1" }, resultPayload); }
+    catch { return infrastructureFailure("Notification state unavailable", "done"); }
     return { status: "done" };
   }
 
@@ -134,6 +152,7 @@ export async function processAnalysisJobStep(opts: {
     const started = Date.now();
     const objectPath = memoObjectPath(img.url, process.env.NEXT_PUBLIC_SUPABASE_URL!);
     const { data: image, error: downloadError } = await admin.storage.from(MEMO_BUCKET).download(objectPath);
+    if (downloadError && ![400,404].includes(Number("statusCode" in downloadError ? downloadError.statusCode : undefined))) return infrastructureFailure("Image storage unavailable");
     if (downloadError || !image || !image.size || image.size > MAX_MEMO_BYTES) throw new Error("画像を読み込めませんでした。画像を選び直してください。");
     const parseRes = await (opts.parse ?? parseMemoBody)({
       base64Image: Buffer.from(await image.arrayBuffer()).toString("base64"), mimeType: image.type || "image/jpeg", context,
@@ -147,15 +166,16 @@ export async function processAnalysisJobStep(opts: {
     const { data: completed, error: completeError } = await admin.rpc("complete_analysis_image", {
       p_image_id: img.id, p_lease_token: img.lease_token, p_parsed: parseJson.data,
     });
-    if (completeError) return { status: "running", error: "解析結果の保存を確認できませんでした。再開時に状態を確認します。" };
+    if (completeError) return infrastructureFailure("解析結果の保存を確認できませんでした。再開時に状態を確認します。");
     // An expired worker never overwrites the result of a new lease holder.
     if (!completed) return { status: "running" };
     return processAnalysisJobStep({ ...opts, finalizeOnly: true });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "failed";
     console.error("[analysis-job] image failed", { jobId, imageId: img.id, msg });
-    const { data: failed } = await admin.rpc("fail_analysis_image", { p_image_id: img.id, p_lease_token: img.lease_token, p_error: msg });
-    return failed ? { status: "failed", error: msg } : { status: "running" };
+    const { data: failed, error: failError } = await admin.rpc("fail_analysis_image", { p_image_id: img.id, p_lease_token: img.lease_token, p_error: msg });
+    if (failError) return infrastructureFailure("Image failure recording failed");
+    return failed ? { status: "failed", error: msg, failureKind: "job" } : { status: "running" };
   }
 }
 

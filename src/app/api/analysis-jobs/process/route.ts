@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
 
     if (!(await analysisDataAccessSecure(admin))) return NextResponse.json({ error: "Private data access not secured" }, { status: 503 });
     const step = await processAnalysisJobStep({ admin, jobId: job_id });
+    if (step.failureKind === "infrastructure") return NextResponse.json({ success: false, status: step.status, error: step.error }, { status: 503 });
     if (step.status === "failed") {
       return NextResponse.json({ success: false, status: "failed", error: step.error || "failed" }, { status: 500 });
     }

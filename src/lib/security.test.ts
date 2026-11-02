@@ -152,8 +152,8 @@ test("scheduled HTTP response waits for its heartbeat; read-only health checks c
   const calls: string[] = [];
   global.fetch = async (input) => {
     const name = new URL(String(input)).pathname.split("/").pop()!; calls.push(name);
-    if (name === "analysis_worker_tick_finish") { enter(); await paused; }
-    return new Response(JSON.stringify(name === "analysis_background_ready" ? false : null), { headers: { "Content-Type": "application/json" } });
+    if (name === "analysis_worker_tick_complete") { enter(); await paused; }
+    return new Response(JSON.stringify(name === "analysis_background_ready" ? false : name === "analysis_worker_tick_begin" ? "synthetic-tick" : true), { headers: { "Content-Type": "application/json" } });
   };
   const request = (path: string) => new NextRequest(`${origin}${path}`, { headers: { authorization: "Bearer synthetic-cron-secret" } });
   try {
@@ -161,10 +161,30 @@ test("scheduled HTTP response waits for its heartbeat; read-only health checks c
     await entered; assert.equal(settled, false); release();
     const response = await pending;
     assert.equal(response.status, 200); assert.equal((await response.json()).processing_enabled, false);
-    assert.deepEqual(calls, ["analysis_worker_tick_start", "analysis_worker_tick_finish"]);
+    assert.deepEqual(calls, ["analysis_worker_tick_begin", "analysis_worker_tick_complete"]);
     process.env.ANALYSIS_BACKGROUND_MODE = "scheduled";
     assert.equal((await workerHealth(request("/api/analysis-jobs/worker-health"))).status, 503);
     assert.equal(calls[calls.length - 1], "analysis_background_ready");
-    assert.equal(calls.filter((name) => name === "analysis_worker_tick_start").length, 1);
+    assert.equal(calls.filter((name) => name === "analysis_worker_tick_begin").length, 1);
   } finally { release(); global.fetch = savedFetch; names.forEach((name,index) => { if (saved[index] === undefined) delete process.env[name]; else process.env[name] = saved[index]; }); }
+});
+
+test("scheduled HTTP reports 503 and a failed tick when the selected job cannot be read", async () => {
+  const savedFetch = global.fetch;
+  const names = ["ANALYSIS_BACKGROUND_MODE", "CRON_SECRET", "NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
+  const saved = names.map((name) => process.env[name]);
+  process.env.ANALYSIS_BACKGROUND_MODE = "scheduled"; process.env.CRON_SECRET = "synthetic-cron-secret";
+  process.env.NEXT_PUBLIC_SUPABASE_URL = "https://db.example.test"; process.env.SUPABASE_SERVICE_ROLE_KEY = "synthetic-key";
+  const completed: boolean[] = [];
+  global.fetch = async (input,init) => {
+    const url = new URL(String(input)), name = url.pathname.split("/").pop();
+    assert.equal(url.hostname,"db.example.test");
+    if (name === "analysis_worker_tick_complete") { const body=JSON.parse(String(init?.body)); assert.equal(body.p_tick_id,"synthetic-tick");completed.push(body.p_success); }
+    const data = name === "analysis_worker_tick_begin" ? "synthetic-tick" : name === "resumable_analysis_jobs" ? [{id:"synthetic-job"}] : name === "analysis_jobs" ? {message:"Synthetic DB job read failure"} : true;
+    return new Response(JSON.stringify(data),{status:name === "analysis_jobs" ? 400 : 200,headers:{"Content-Type":"application/json"}});
+  };
+  try {
+    const response=await recoverJobs(new NextRequest(`${origin}/api/analysis-jobs/process`,{headers:{authorization:"Bearer synthetic-cron-secret"}}));
+    assert.equal(response.status,503);assert.deepEqual(completed,[false]);
+  } finally { global.fetch=savedFetch;names.forEach((name,index)=>{if(saved[index]===undefined)delete process.env[name];else process.env[name]=saved[index];}); }
 });

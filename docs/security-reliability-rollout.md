@@ -36,7 +36,7 @@
 
 1. 独立したSupabase確認環境を用意し、本番スキーマの再現と合成データだけで以下を確認する。ステージングのLINEチャネル／redirect URI、サービスキーは本番と分離する。新しい資格情報の生成・登録・本番設定変更は必要な個別確認後に行う。
 2. 現在のユーザー・管理者・無制限一覧、ポリシー、バケット設定、ジョブ状態の安全なバックアップと復元方法を準備する。既存テーブルは公開書込み可能だったため、不審な既存登録がないか利用者・無制限一覧を所有者が確認する。招待履歴欠損だけを理由に既存ユーザーを削除しない。
-3. Phase 1 `supabase/migrations/20261102183016_session_api_expansion.sql` と `supabase/migrations/20261102190336_analysis_image_leases.sql`、`supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql` を順に確認環境に適用する。旧Phase 1適用済みの履歴は書き換えず追加分を適用する。既存ポリシーは原則維持し、登録／利用枠RPCと通知状態カラムを追加する。補正ログ表だけはサーバー専用にする。対応コードより先に必要なRPC／カラムを用意する。
+3. Phase 1 `supabase/migrations/20261102183016_session_api_expansion.sql` と `supabase/migrations/20261102190336_analysis_image_leases.sql`、`supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql`、`supabase/migrations/20261102203127_verified_worker_success_ticks.sql` を順に確認環境に適用する。旧Phase 1適用済みの履歴は書き換えず追加分を適用する。既存ポリシーは原則維持し、登録／利用枠RPCと通知状態カラムを追加する。補正ログ表と稼働確認表はサーバー専用にする。対応コードより先に必要なRPC／カラムを用意する。
 4. `SESSION_SECRET`（32バイト以上、環境別の専用値）を安全に設定する。既存のLINE・Supabase・管理者・内部ワーカー設定を維持し、.env.exampleの全必要項目の存在を値を表示せず確認する。本作業では実秘密を生成していない。
 5. 確認環境へ新API／クライアントを配備し、実LINEでの管理者／既存一般（招待履歴NULL含む）／無制限／新規招待／不正セッションの動線を確認する。通常アカウントから管理操作・他人の画像／ジョブにアクセスできないことを確認する。
 6. **公開許可の安全条件を満たした後**、本番にPhase 1と新API／クライアントをdisabledで配備する。切替時は旧版の新規受付・旧版の定期ワーカーを止め、旧関数の最大300秒＋余裕として6分以上のdrainを確認する。旧版を処理経路に残したまま新しい定期回復を有効にしない。その後、本人のID、管理者操作、無制限の設定、本人専用のジョブ読取、受付停止を確認する。アップロード・解析の実稼働確認はPhase 2とCron正常稼働確認の後に行う。この段階では旧匿名DB経路のリスクはまだ残るため、Phase 2までを一つの移行作業として扱う。
@@ -49,11 +49,12 @@
 | 確認 | 結果 |
 | --- | --- |
 | 変更前 npm test / lint | 21件成功 / 成功 |
-| 変更後 npm test | 50件成功。認証・OAuth state・既存NULL招待履歴・所有者・数量・JSON失敗・下書き・通知・ジョブ確定順序を合成データとモックで検証 |
+| 変更後 npm test | 54件成功。認証・OAuth state・既存NULL招待履歴・所有者・数量・JSON失敗・下書き・通知・ジョブ確定順序・基盤障害時のCron失敗を合成データとモックで検証 |
 | npx tsc --noEmit / npm run lint | 成功 |
-| ローカル実Postgres 17.6 | 20項目成功。私有Unixソケットと合成データで8接続の取得・確定・再取得・旧トークン拒否・行ロック・利用枠競合・管理者無制限を確認。Supabase実サービスとは別 |
+| ローカル実Postgres 17.6 | 32項目成功。私有Unixソケットと合成データで8接続の取得・確定・再取得・旧トークン拒否・行ロック・利用枠競合・管理者無制限・稼働判定の競合を確認。Supabase実サービスとは別 |
 | npm run build | 成功。既存由来のlibheif動的requireとBrowserslist古さの警告は残る。Google Fonts取得にはネットワーク許可が必要だった |
-| 隔離PostgreSQL (PGlite 0.5.14) | 79項目成功。稼働確認SQLを含め4本を実行し、匿名／authenticated拒否、サービス権限、招待の一回性とロールバック、上限、無制限、他バケット保全、リースの排他・期限回復・旧トークン拒否・再開回数上限、新旧ワーカー切替の猶予期間を確認。本番には接続しない |
+| 隔離PostgreSQL (PGlite 0.5.14) | 83項目成功。稼働確認SQLを含め5本を実行し、匿名／authenticated拒否、サービス権限、招待の一回性とロールバック、上限、無制限、他バケット保全、リースの排他・期限回復・旧トークン拒否・再開回数上限、新旧ワーカー切替の猶予期間を確認。本番には接続しない |
+| 定期処理の稼働判定 (PGlite) | 40項目成功。成功2回、失敗後・時間切れ後の再開、重複完了、順序逆転、旧呼出しの拒否、権限制御を確認 |
 | 通知アップグレード (PGlite) | 28項目成功。新規と旧Phase 1適用済みの両経路で、過去通知の隔離・監査、既定値、既存ID保持を確認 |
 | ブラウザ (一時Chrome、全外部通信を遮断) | 既存9項目＋独立レビュー再現11項目が成功。23m表示、負数拒否、下書き書出し・退避失敗時保全・退避後の解析再開も確認。合成破損画像の失敗表示、リピートON/OFF・再読込・幅数編集・原本復帰・発注下書きの保存／復元・ログインゲート・JS例外なし |
 
@@ -67,6 +68,7 @@ npm run build
 # optional harness packages are installed outside the repository; these paths are environment-specific
 PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/security-migrations.cjs
 PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/notification-upgrade.cjs
+PGLITE_MODULE=/tmp/sokupa-sql-harness/node_modules/@electric-sql/pglite/dist/index.cjs node scripts/verification/worker-health.cjs
 # start the local server first; fixtures block all non-localhost browser requests
 PLAYWRIGHT_MODULE=/tmp/sokupa-sql-harness/node_modules/playwright node scripts/verification/browser-regressions.cjs
 PLAYWRIGHT_MODULE=/tmp/sokupa-sql-harness/node_modules/playwright node scripts/verification/independent-review-browser.cjs
@@ -101,4 +103,14 @@ PLAYWRIGHT_MODULE=/tmp/sokupa-sql-harness/node_modules/playwright node scripts/v
 
 公開の包括許可は受領済み。ただし独立Supabase、実LINE、iOS等の重大な互換性確認、必要な資格情報・チームアクセスの個別確認、本番バックアップ／復元が未完了のため、公開条件は未充足。本番変更・公開はまだ実施していない。
 
-ローカル実Postgresの追加検証: `scripts/verification/postgres-concurrency.cjs` をPostgres 17.6で実行し、20項目成功。TCPを無効にした私有一時Unixソケットと合成データだけを使い、終了時にDBを削除した。実資格情報は使わず、OSユーザー・外部サービスも作成していない。接続プール／Data APIを含むSupabase実環境の検証は未実施。
+ローカル実Postgresの追加検証: `scripts/verification/postgres-concurrency.cjs` をPostgres 17.6で実行し、32項目成功。TCPを無効にした私有一時Unixソケットと合成データだけを使い、終了時にDBを削除した。実資格情報は使わず、OSユーザー・外部サービスも作成していない。接続プール／Data APIを含むSupabase実環境の検証は未実施。
+
+## 独立レビュー3回目の追補
+
+DBのジョブ取得・状態確認・確定・失敗記録、通知状態保存、Storageの基盤障害を、保存済みの画像解析失敗と区別する。前者はstatusがfailed/doneでもCronを503にし、失敗した呼出しとして記録する。読めない画像の失敗が正しく保存された場合はワーカー基盤の故障にはしない。LINE送信失敗は従来どおり解析完了とは別の通知状態に保持する。
+
+追加マイグレーション `20261102203127_verified_worker_success_ticks.sql` は呼出しUUIDごとの開始・完了・成否を専用の非公開表に記録する。異なる2件の成功完了と30秒以上の開始間隔が必要。基盤障害または2分超の呼出し停止後は世代を更新し、古い成功・遅れて届く完了を再利用しない。重複完了は一度だけ、成否は上書き不可。6分を超えた完了は成功にしない。履歴は1日保持し、利用者・ジョブ・通知・IDを変更しない。通常のサーバーレスのcold startではDBの履歴を保持し、定期実行が途切れた場合に再確認する。
+
+旧版の開始／完了RPCはservice_roleにも拒否する。アップグレード時はdisabled・旧ワーカーdrain後に追加SQLと対応コードを配備し、新しい呼出し2回の完了を確認する。適用後は旧f71f09fのワーカーへ単純に戻さず、この稼働判定に対応する修正版を使用する。
+
+ローカル実Postgresの32項目には、8接続での同時開始・同じ完了の重複・失敗と古い成功の競合・失敗後2回の回復・期限切れ再起動も含む。画面は今回変更していない。ブラウザ20項目は前回ビルドでの確認結果。
