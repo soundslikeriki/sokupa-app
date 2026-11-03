@@ -17,7 +17,7 @@ import {
   removeOrderDraftItem,
   updateOrderDraftItem,
 } from "@/lib/order-draft";
-import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, type WorkspaceDraft } from "@/lib/workspace-draft";
+import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, listWorkspaceArchives, switchWorkspaceDraft, type WorkspaceArchive, type WorkspaceDraft } from "@/lib/workspace-draft";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import { compressImageForUpload, convertAndResizeForPreview } from "@/lib/resizeImage";
 
@@ -33,6 +33,11 @@ import { cn } from "@/lib/utils";
 import type { OrderDraftItem, OrderDraftItemInput, ParsedMemoPayload } from "@/types";
 
 type CalculationMode = "dimensions" | "area" | "order-draft";
+
+function describeMemo(memo: ParsedMemoPayload | null): string {
+  if (!memo?.items.length) return "解析結果なし";
+  return memo.items.slice(0, 3).map((item) => `${item.product_code}: ${item.order_quantity}m`).join(" / ") + (memo.items.length > 3 ? " ほか" : "");
+}
 
 function createOrderDraftId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -152,6 +157,13 @@ export default function HomePageClient() {
   const [jobAccepted, setJobAccepted] = useState<{ jobId: string; backgroundReady: boolean } | null>(null);
   const appliedJobRef = useRef<string | null>(null);
   const restoredDraftRef = useRef<WorkspaceDraft | null>(null);
+  const currentWorkspaceRef = useRef<WorkspaceDraft | null>(null);
+  const persistedWorkspaceRef = useRef<string | null>(null);
+  const switchAttemptRef = useRef<{ snapshot: string; expected: string | null; next: string; suffix: string } | null>(null);
+  const [workspaceArchives, setWorkspaceArchives] = useState<WorkspaceArchive[]>([]);
+  const [pendingJobResult, setPendingJobResult] = useState<{ jobId: string; siteName: string | null; result: ParsedMemoPayload; backgroundReady: boolean } | null>(null);
+  const pendingJobResultRef = useRef<typeof pendingJobResult>(null);
+  const [resultChoiceDeferred, setResultChoiceDeferred] = useState(false);
   const [resultJobId, setResultJobId] = useState<string | null>(null);
   const [calculationMode, setCalculationMode] = useState<CalculationMode>("dimensions");
   const [areaCalculatorMounted, setAreaCalculatorMounted] = useState(false);
@@ -275,6 +287,8 @@ export default function HomePageClient() {
         if (!response.ok || !session.authenticated || cancelled) return;
         setLineUserId(session.line_user_id);
         const saved = localStorage.getItem(`sokupa:workspace:v1:${session.line_user_id}`);
+        persistedWorkspaceRef.current = saved;
+        setWorkspaceArchives(listWorkspaceArchives(localStorage, `sokupa:workspace:v1:${session.line_user_id}`));
         if (saved) {
           let draft;
           try { draft = readWorkspaceDraft(saved); }
@@ -294,15 +308,57 @@ export default function HomePageClient() {
   }, []);
 
   useEffect(() => {
+    if (draftReady) currentWorkspaceRef.current = { version: 1, siteName, parsed, originalParsed, orderDraftItems, resultJobId };
+  }, [draftReady, siteName, parsed, originalParsed, orderDraftItems, resultJobId]);
+
+  useEffect(() => {
     if (!draftReady || !lineUserId) return;
     try {
       const key = `sokupa:workspace:v1:${lineUserId}`;
+      if (localStorage.getItem(key) !== persistedWorkspaceRef.current) throw new Error("Workspace changed in another tab");
       const serialized = JSON.stringify({ version: 1, siteName, parsed, originalParsed, orderDraftItems, resultJobId });
       localStorage.setItem(key, serialized);
       if (localStorage.getItem(key) !== serialized) throw new Error("Draft persistence failed");
+      persistedWorkspaceRef.current = serialized;
       if (parsed && resultJobId) void fetch(`/api/analysis-jobs/${encodeURIComponent(resultJobId)}/seen`, { method: "POST" }).catch(() => undefined);
     } catch { setError("端末への下書き保存に失敗しました。必要な内容をコピーして保存してください。"); }
   }, [draftReady, lineUserId, siteName, parsed, originalParsed, orderDraftItems, resultJobId]);
+
+  const downloadWorkspace = (raw: string) => {
+    const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
+    const anchor = document.createElement("a"); anchor.href = url; anchor.download = "sokupa-workspace.json"; anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const safelySwitchWorkspace = (next: WorkspaceDraft) => {
+    if (!lineUserId || !currentWorkspaceRef.current) throw new Error("下書きの準備ができていません。");
+    const key = `sokupa:workspace:v1:${lineUserId}`, current = currentWorkspaceRef.current;
+    const snapshot = JSON.stringify(current), expected = persistedWorkspaceRef.current, nextRaw = JSON.stringify(next);
+    let attempt = switchAttemptRef.current;
+    if (!attempt || attempt.snapshot !== snapshot || attempt.expected !== expected || attempt.next !== nextRaw) {
+      attempt = { snapshot, expected, next: nextRaw, suffix: `${Date.now()}-${crypto.randomUUID()}` }; switchAttemptRef.current = attempt;
+    }
+    const switched = switchWorkspaceDraft(localStorage, key, expected, current, next, attempt.suffix);
+    persistedWorkspaceRef.current = switched.raw; currentWorkspaceRef.current = next;
+    appliedJobRef.current = next.parsed ? next.resultJobId ?? null : null; restoredDraftRef.current = next;
+    setSiteName(next.siteName); setParsed(next.parsed); setOriginalParsed(next.originalParsed ?? next.parsed);
+    setOrderDraftItems(next.orderDraftItems); setResultJobId(next.resultJobId ?? null);
+    setJobAccepted(null); setJobUi(null); setError(null);
+    try { setWorkspaceArchives(listWorkspaceArchives(localStorage, key)); }
+    catch { setWorkspaceArchives((previous) => [...switched.archives, ...previous.filter((entry) => !switched.archives.some((saved) => saved.key === entry.key))]); }
+  };
+
+  const openPendingJobResult = () => {
+    const pending = pendingJobResultRef.current, current = currentWorkspaceRef.current;
+    if (!pending || !current) return;
+    try {
+      safelySwitchWorkspace({ ...current, siteName: pending.siteName ?? "", parsed: pending.result, originalParsed: pending.result, resultJobId: pending.jobId });
+      appliedJobRef.current = pending.jobId; restoredDraftRef.current = null;
+      pendingJobResultRef.current = null; setPendingJobResult(null); setResultChoiceDeferred(false);
+      setJobAccepted({ jobId: pending.jobId, backgroundReady: pending.backgroundReady });
+      try { localStorage.setItem(`sokupa:lastJobId:${lineUserId}`, pending.jobId); } catch { /* The saved workspace and server discovery remain available. */ }
+    } catch (error) { setError(`今の下書きを保持しています。退避・切替できませんでした。 ${getErrorDetail(error)}`); }
+  };
 
   const imageCount = images.length;
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -461,13 +517,14 @@ export default function HomePageClient() {
         throw new Error(msg);
       }
 
-      if (parsed) {
-        try { localStorage.setItem(`sokupa:workspace:v1:${lineUserId}:previous`, JSON.stringify({ version: 1, siteName, parsed, originalParsed, orderDraftItems, resultJobId })); }
-        catch { setError("前回の結果を端末に保存できませんでした。必要な内容をコピーしてください。"); }
+      const current = currentWorkspaceRef.current;
+      if (current?.parsed || current?.originalParsed) {
+        try { safelySwitchWorkspace({ ...current, parsed: null, originalParsed: null, resultJobId: null }); }
+        catch { setError("前回の編集を退避できなかったため、下書きを残して解析を続けます。完了後に切替方法を選べます。"); }
+      } else {
+        setParsed(null); setOriginalParsed(null); setResultJobId(null);
+        appliedJobRef.current = null; restoredDraftRef.current = null;
       }
-      setParsed(null);
-      setOriginalParsed(null);
-      setResultJobId(null); appliedJobRef.current = null; restoredDraftRef.current = null;
       setJobAccepted({ jobId: String(createJson.job_id), backgroundReady: createJson.background_ready === true && ["scheduled", "scheduled-wake"].includes(createJson.execution_mode) });
       try {
         localStorage.setItem(`sokupa:lastJobId:${lineUserId}`, String(createJson.job_id));
@@ -521,11 +578,18 @@ export default function HomePageClient() {
       const done = Number(data.done_images) || 0, total = Math.max(1, Number(data.total_images) || 1);
       setJobUi({ status, done, total, percent: Math.min(100, Math.max(0, Math.round(done / total * 100))), notificationStatus: data.notification_status });
       if (status === "done" && data.result && appliedJobRef.current !== jobId) {
-        const retainEdits = workspaceContainsJobResult(restoredDraftRef.current, jobId, data.result as ParsedMemoPayload);
-        appliedJobRef.current = jobId; setResultJobId(jobId); restoredDraftRef.current = null;
-        if (!retainEdits) {
-          if (data.site_name) setSiteName(data.site_name);
-          setParsed(data.result as ParsedMemoPayload); setOriginalParsed(data.result as ParsedMemoPayload);
+        const current = currentWorkspaceRef.current;
+        if (workspaceWouldBeReplacedByResult(current, jobId, data.site_name ?? null)) {
+          if (pendingJobResultRef.current?.jobId !== jobId) setResultChoiceDeferred(false);
+          const pending = { jobId, siteName: data.site_name ?? null, result: data.result as ParsedMemoPayload, backgroundReady: data.background_ready === true };
+          pendingJobResultRef.current = pending; setPendingJobResult(pending);
+        } else {
+          const retainEdits = workspaceContainsJobResult(current ?? restoredDraftRef.current, jobId);
+          appliedJobRef.current = jobId; setResultJobId(jobId); restoredDraftRef.current = null;
+          if (!retainEdits) {
+            setSiteName(data.site_name ?? "");
+            setParsed(data.result as ParsedMemoPayload); setOriginalParsed(data.result as ParsedMemoPayload);
+          }
         }
       }
       if (data.can_resume && Date.now() >= nextResumeAt) {
@@ -541,7 +605,8 @@ export default function HomePageClient() {
       } else if (status === "done" && data.result && !["pending", "failed"].includes(data.notification_status)) {
         if (data.notification_status === "accepted") setError((current) => current === "解析は完了しました。LINE通知は通信の回復後に再確認します。" ? null : current);
         if (["uncertain", "legacy_unknown"].includes(data.notification_status)) setError("解析は完了しましたが、LINE通知の受付を確認できません。結果はこの画面で確認できます。");
-        setJobAccepted(null); setJobUi(null); forgetPointer();
+        setJobAccepted(null); setJobUi(null);
+        if (appliedJobRef.current === jobId) forgetPointer();
       } else if (status === "done" && !data.result) setError("解析結果を取得できませんでした。保存された仕事を再確認しています。");
     };
     const poll = () => {
@@ -779,6 +844,56 @@ export default function HomePageClient() {
         </p>
       </div>
 
+      {pendingJobResult ? (
+        <Card className="border-amber-500/50">
+          <CardHeader className="space-y-3">
+            <CardTitle className="text-base">別の解析結果があります</CardTitle>
+            <CardDescription>今の下書き「{siteName || "現場名なし"}」は保持しています。別の解析「{pendingJobResult.siteName || "現場名なし"}」はサーバーに保存されています。</CardDescription>
+            <p className="text-sm">今の編集: {describeMemo(parsed)}</p>
+            <p className="text-sm">別の解析: {describeMemo(pendingJobResult.result)}</p>
+            {resultChoiceDeferred ? (
+              <Button type="button" variant="outline" onClick={() => setResultChoiceDeferred(false)}>別の結果を確認する</Button>
+            ) : (
+              <>
+                <Button type="button" variant="outline" onClick={() => setResultChoiceDeferred(true)}>今の下書きを続ける</Button>
+                <Button type="button" className="h-auto min-h-10 max-w-full whitespace-normal py-2" onClick={openPendingJobResult}>今の下書きを退避して別の結果を開く</Button>
+              </>
+            )}
+            <Button type="button" variant="outline" onClick={() => { if (currentWorkspaceRef.current) downloadWorkspace(JSON.stringify(currentWorkspaceRef.current)); }}>今の下書きを書き出す</Button>
+          </CardHeader>
+        </Card>
+      ) : null}
+
+      {workspaceArchives.length ? (
+        <Card>
+          <CardHeader className="space-y-3">
+            <CardTitle className="text-base">退避した下書き</CardTitle>
+            <CardDescription>復元するときも今の下書きを先に退避します。書き出したデータは端末で保管できます。</CardDescription>
+            <details>
+              <summary className="cursor-pointer text-sm font-medium">退避した下書きを確認（{workspaceArchives.length}件）</summary>
+              <div className="mt-3 space-y-3">
+                {workspaceArchives.map((archive, index) => (
+                  <div key={archive.key} className="rounded border p-3 text-sm">
+                    <p>{index + 1}. {archive.draft?.siteName || "現場名なし"}（解析{archive.draft?.parsed?.items.length ?? 0}品番・発注下書き{archive.draft?.orderDraftItems.length ?? 0}件）</p>
+                    <p className="mt-1 text-muted-foreground">{describeMemo(archive.draft?.parsed ?? null)}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button type="button" variant="outline" aria-label={`退避${index + 1}「${archive.draft?.siteName || "現場名なし"}」を書き出す`} onClick={() => downloadWorkspace(archive.raw)}>書き出す</Button>
+                      <Button type="button" variant="outline" className="h-auto min-h-10 max-w-full whitespace-normal py-2" disabled={!archive.draft} aria-label={`退避${index + 1}「${archive.draft?.siteName || "現場名なし"}」を復元`} onClick={() => {
+                        if (!archive.draft) return;
+                        try {
+                          safelySwitchWorkspace(archive.draft); setResultChoiceDeferred(true);
+                          try { localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`); localStorage.removeItem("sokupa:lastJobId"); } catch { /* Server results remain retained. */ }
+                        } catch (error) { setError(`今の下書きを保持しています。復元できませんでした。 ${getErrorDetail(error)}`); }
+                      }}>今の下書きを退避して復元</Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          </CardHeader>
+        </Card>
+      ) : null}
+
       {draftRecovery ? (
         <Card className="border-amber-500/50">
           <CardHeader className="space-y-3">
@@ -794,6 +909,8 @@ export default function HomePageClient() {
                 archiveWorkspaceDraft(localStorage, draftRecovery.key, draftRecovery.raw, crypto.randomUUID());
                 setSiteName(""); setParsed(null); setOriginalParsed(null); setOrderDraftItems([]);
                 setResultJobId(null); appliedJobRef.current = null; restoredDraftRef.current = null;
+                persistedWorkspaceRef.current = draftRecovery.raw;
+                setWorkspaceArchives(listWorkspaceArchives(localStorage, draftRecovery.key));
                 setDraftRecovery(null); setError(null); setDraftReady(true);
               } catch (error) { setError(`元データを退避できませんでした。書き出して保管してください。 ${getErrorDetail(error)}`); }
             }}>元データを退避して新しく始める</Button>
@@ -815,7 +932,7 @@ export default function HomePageClient() {
           <CardHeader>
             <CardTitle className="text-base">{jobUi?.status === "done" ? "解析が完了しました" : "解析を受け付けました"}</CardTitle>
             <CardDescription>
-              {jobUi?.status === "done" ? "LINE通知を再確認しています。解析結果はこの画面で利用できます。" : jobAccepted.backgroundReady ? "サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。" : "解析は保存されています。サーバーの処理再開を待っています。画面を閉じてもデータは失われません。"}
+              {jobUi?.status === "done" ? pendingJobResult?.jobId === jobAccepted.jobId ? "別の解析結果は保存されています。切替方法を選べます。LINE通知も再確認しています。" : "LINE通知を再確認しています。解析結果はこの画面で利用できます。" : jobAccepted.backgroundReady ? "サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。" : "解析は保存されています。サーバーの処理再開を待っています。画面を閉じてもデータは失われません。"}
               {jobUi ? (
                 <span className="mt-2 block font-semibold text-emerald-800/90 dark:text-emerald-200">
                   {jobUi.percent}% 完了（{jobUi.done}/{jobUi.total}）

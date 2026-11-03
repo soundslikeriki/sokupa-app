@@ -35,14 +35,10 @@ export function readWorkspaceDraft(text: string): WorkspaceDraft {
   return value as WorkspaceDraft;
 }
 
-/** Preserve edits for their own job, including older drafts that saved the identical original result. */
-export function workspaceContainsJobResult(draft: WorkspaceDraft | null, jobId: string, result: ParsedMemoPayload): boolean {
+/** Only an explicit saved job ID proves association; identical OCR content does not. */
+export function workspaceContainsJobResult(draft: WorkspaceDraft | null, jobId: string): boolean {
   if (!draft?.parsed) return false;
-  if (draft.resultJobId) return draft.resultJobId === jobId;
-  if (!draft.originalParsed) return false;
-  const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
-    : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)])) : value;
-  return JSON.stringify(canonical(draft.originalParsed)) === JSON.stringify(canonical(result));
+  return Boolean(draft.resultJobId && draft.resultJobId.toLowerCase() === jobId.toLowerCase());
 }
 
 export function archiveWorkspaceDraft(storage: Pick<Storage, "getItem" | "setItem">, key: string, raw: string, suffix: string): string {
@@ -52,4 +48,60 @@ export function archiveWorkspaceDraft(storage: Pick<Storage, "getItem" | "setIte
   storage.setItem(archiveKey, raw);
   if (storage.getItem(archiveKey) !== raw) throw new Error("保存データの退避を確認できませんでした。");
   return archiveKey;
+}
+
+export type WorkspaceArchive = { key: string; raw: string; draft: WorkspaceDraft | null };
+
+export function workspaceHasContent(draft: WorkspaceDraft | null): boolean {
+  return Boolean(draft && (draft.parsed || draft.originalParsed || draft.orderDraftItems.length || draft.siteName.trim()));
+}
+
+export function workspaceWouldBeReplacedByResult(draft: WorkspaceDraft | null, jobId: string, siteName: string | null): boolean {
+  if (!draft || workspaceContainsJobResult(draft, jobId)) return false;
+  return Boolean(draft.parsed || draft.originalParsed || (draft.siteName.trim() && draft.siteName !== (siteName ?? "")));
+}
+
+export function listWorkspaceArchives(storage: Pick<Storage, "getItem" | "key" | "length">, key: string): WorkspaceArchive[] {
+  const archives: WorkspaceArchive[] = [];
+  for (let i = 0; i < storage.length; i++) {
+    const archiveKey = storage.key(i);
+    if (!archiveKey?.startsWith(`${key}:recovery:`)) continue;
+    const raw = storage.getItem(archiveKey);
+    if (raw === null) continue;
+    let draft = null;
+    try { draft = readWorkspaceDraft(raw); } catch { /* Preserve invalid legacy archives for download. */ }
+    archives.push({ key: archiveKey, raw, draft });
+  }
+  return archives.sort((a, b) => b.key.localeCompare(a.key));
+}
+
+/** Verified snapshots precede the one-key replacement. A failed archive never writes the main key. */
+export function switchWorkspaceDraft(
+  storage: Pick<Storage, "getItem" | "setItem">,
+  key: string,
+  expectedRaw: string | null,
+  current: WorkspaceDraft,
+  next: WorkspaceDraft,
+  suffix: string,
+): { raw: string; archives: WorkspaceArchive[] } {
+  if (storage.getItem(key) !== expectedRaw) throw new Error("別の画面で保存内容が変わりました。今の下書きを書き出してから再読込してください。");
+  const currentRaw = JSON.stringify(current), nextRaw = JSON.stringify(next);
+  readWorkspaceDraft(currentRaw); readWorkspaceDraft(nextRaw);
+  const snapshots = Array.from(new Set([...(expectedRaw === null ? [] : [expectedRaw]), currentRaw]));
+  const archives: WorkspaceArchive[] = [];
+  for (let index = 0; index < snapshots.length; index++) {
+    const raw = snapshots[index];
+    const archiveKey = `${key}:recovery:${suffix}:${index}`;
+    const existing = storage.getItem(archiveKey);
+    if (existing !== null && existing !== raw) throw new Error("退避先が更新されています。切替をやり直してください。");
+    if (existing === null) storage.setItem(archiveKey, raw);
+    if (storage.getItem(archiveKey) !== raw) throw new Error("下書きの退避を確認できませんでした。");
+    let draft = null;
+    try { draft = readWorkspaceDraft(raw); } catch { /* The exact original bytes are still preserved. */ }
+    archives.push({ key: archiveKey, raw, draft });
+  }
+  if (storage.getItem(key) !== expectedRaw) throw new Error("退避中に別の画面で保存内容が変わりました。上書きしていません。");
+  storage.setItem(key, nextRaw);
+  if (storage.getItem(key) !== nextRaw) throw new Error("切替後の保存を確認できませんでした。退避した下書きは保持しています。");
+  return { raw: nextRaw, archives };
 }
