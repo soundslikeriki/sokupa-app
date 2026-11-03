@@ -11,19 +11,21 @@
 - 環境変数は `decrypt=false` のメタデータだけ確認。LINE／Supabase／AIの既存値を取得していない。`SESSION_SECRET`、`ANALYSIS_DISPATCH_SECRET`、`ANALYSIS_DISPATCH_ORIGIN`、`ANALYSIS_BACKGROUND_MODE` は未登録。
 - 本番キーの多くがPreviewにも同じ環境変数レコードとして割り当てられている。現在の設定のままPreviewへ配備して本番から分離できたとは扱わない。ユーザーの最新方針どおり、別Preview URLを必須にはしない。
 
-## 先に解消する点
+## 今回の公開候補
 
-| 対象 | 具体的な不足 | 必要な最小の操作 |
+定期実行を必須にしない **interactive方式** を追加した。[実装と実測](./interactive-execution.md) を参照。旧方式のように受付時のwaitUntilと本人の画面から処理を進める。Cron・pg_net・Vaultの管理権限、定期処理用の秘密は今回の公開の前提から外せる。既存ID、NULL招待履歴、管理者無制限、非公開DB／Storage、provider障害時の受付制御は維持する。既定のdisabledのまま公開完了とは扱わない。
+
+一方、画面を閉じたまま長い複数枚の全処理が完了する保証はない。31秒×2枚は1枚目で待機し、同じLINEで開き直すと続きを処理することを実測した。画面を開いて待つ案内を出す。実LINE・実iPhone・Vercel寿命は未確認のため、「今までどおり」としてこの限界を隠して公開しない。
+
+| 対象 | 不足と最小の操作 | 状態 |
 | --- | --- | --- |
-| 署名セッション | `SESSION_SECRET` 未登録。現状で新コードを公開すると安全なログインを発行できない | 32バイト以上の専用値を生成し、Vercel ProductionのSecretへ登録する個別承認。既存LINE ID／admin値は変えない |
-| 定期処理の署名 | `ANALYSIS_DISPATCH_SECRET` 未登録 | 別の32バイト以上の専用値を生成し、Vercel Productionと対象Supabase Vaultへ同じ値を安全登録する個別承認。セッション鍵・LINE tokenを流用しない |
-| 定期処理の権限 | 本番net／Vault表の所有者はsupabase_admin。現在の接続はpostgresで、所有者のmemberではなく、net表・schemaのGRANT OPTIONもない。anon等にはnet表のSQL権限が残る | 現候補の厳しい権限ガードを満たす変更経路が未解決。Supabaseの正式な運用手段を確認するか、現有権限のままAPI非公開等を安全に検証する別設計をレビューする。ユーザーへsupabase_adminの秘密を求めない |
-| 本番バックアップ | 実本番のDB／Storageバックアップ未取得。Webダッシュボードへのログインだけではpg_dump用のDB接続にはならない | Connectで既存接続情報を安全に用意する。パスワードをチャットへ貼らない。未保持ならresetを無断実行しない。接続後は読取バックアップ・内容検査から行う |
-| 実動作 | 実LINE Login／通知到達とiOS/PWAは未確認 | 公開切替の中で本人の再ログイン・admin無制限・下書き・画像処理を確認。エージェントが課金AI／実LINE送信を試す場合は画像枚数・宛先・通知回数・費用範囲を個別確認する |
+| 署名セッション | 32バイト以上の本番専用SESSION_SECRET 1個を生成し、Vercel Productionへ安全登録。LINE／admin値は維持 | 個別承認待ち。生成未実施 |
+| 本番バックアップ | Connectの既存DB接続を安全に用意してDB／Storageを保護保存・検査。パスワードをチャットへ貼らない。未保持ならresetせず相談 | 接続準備待ち。本番export未実施 |
+| 実環境の互換性 | 対象Vercelの配備への300秒設定反映、署名OAuth・同一ID・admin、iPhone Safari/PWA・下書き・処理・通知を確認できる切替手順 | 実動作は未確認。read-only CLI APIでresourceConfig.fluid=trueを確認 |
+| 実サービスの試験 | エージェントがAIやLINEを試す場合、本人宛先・画像枚数・通知回数・費用上限を確認。本人がiPhoneから自ら使う経路も用意 | 実AI・LINE送信を実施していない |
+| 定期処理 | 旧signed候補はhosted net／Vault権限条件を満たせない。秘密を載せない別案は未実装・未レビュー | 今回は有効化しない。公開の必須条件にしない |
 
-上の権限問題はダッシュボードへのログインや、公開許可をもう一度もらうだけでは解決しない。ローカルではsupabase_adminを使えたが、ホスト版で同じ権限を利用できるとは限らない。本番ではメタデータを読んだだけで、REVOKE／SET ROLE／DDLを試していない。
-
-なお、SQLロールにnet権限があることだけで匿名HTTP経由の読取が可能と断定しない。ローカルではnetのData API指定は406だった。現候補の条件を満たさないという事実と、実際のHTTP公開範囲は区別して判断する。ガードを黙って弱めて公開しない。
+Supabaseはnet表のプロジェクト別grant／RLS変更をサポートしないと明記している。権限問題をダッシュボードへの再ログインで解決したとは扱わず、supabase_adminの秘密を求めない。[公式制約](https://supabase.com/kb/troubleshooting/database-roles-can-read-request-headers-queued-by-pg_net)
 
 ## バックアップと復旧の準備
 
@@ -37,18 +39,20 @@
 
 ## 条件が揃った後の切替順
 
-1. 権限方式の解決・独立レビュー完了、必要な専用秘密の承認と設定、本番バックアップの検査を先に行う。Hobbyを維持し、Pro化や有料環境作成は行わない。
-2. 管理者が既存の解析を止めた状態で、追加schema7本を順番に適用し、対応する新APIをdisabledで配備する。`--prod --skip-domain` なら本番設定でbuildしても、既存の公開ドメインは自動切替しない。新規資格情報の設定前に配備しない。
-3. reviewed commitと対象project／teamを照合して、段階的な切替を行う。公開ドメインを新しい署名APIへ切り替えて旧版の新規受付を止め、旧300秒処理が終わるまで6分以上drainする。旧版を公開したまま新旧workerを並行稼働させない。関連aliasも確認する。
-4. 本人のLINE再ログイン、同じID、admin無制限、招待履歴NULLの既存ユーザーの互換性を確認。旧端末の下書きを削除しない。LINEチャネルと既存callbackは保持する。callback追加や変更が必要なら個別確認する。[LINE callback仕様](https://developers.line.biz/en/docs/line-login/integrate-line-login/)
-5. API経路へ切替済み・旧worker終了を条件にPhase 2で匿名DB／Storageアクセスを閉じる。ownerの読取と匿名拒否を検査する。公開ALLを残したまま処理を有効化しない。
-6. 解決・承認済みのschedulerをdisabledの稼働確認から開始する。固定originは生成URLではなく `https://sokupa-app.vercel.app` を使う案。実入口のredirectとJSON／nonce／worker証明を検査する。広いVercel bypass秘密を渡さない。
-7. modeと期待する応答をscheduledへ合わせ、新世代の実呼出し2件を確認してから画像受付を開く。本人のiPhone Safariでログイン・写真選択・結果編集・保存／復元・画面を閉じた処理・通知を確認する。PWAはSafariのホーム画面追加から別の保存領域・再ログインも確認する。
+公開許可・Vercel接続・Mac内検証の許可は既にある。Hobbyを維持し、Pro化・有料プロジェクト作成をしない。以下の本番操作はまだ実施していない。
 
-解析受付が一時停止する切替になる。完了時刻はホスト権限方式の解決に依存するため、現時点で「すぐ公開可能」とは報告しない。
+1. 最新差分のレビュー、本番バックアップ検査、必要なSESSION_SECRET 1個の承認と設定を先に行う。interactiveの閉画面時の限界と、本人の実確認を含む切替・復旧手順を揃える。
+2. 追加migration8本を時刻順に適用し、新コードをdisabledで `deploy --prod --skip-domain` へ用意する。公開ドメインはこの段階で自動切替しない。Phase 2はまだ適用しない。変更前の利用者・無制限一覧と既存ジョブを保護する。
+3. 切替の短い保守時間内で新APIへドメインを切替し、旧受付を止めて6分以上drainする。旧worker／関連aliasを処理経路に残さない。本人の同じLINEへの再ログイン、admin、NULL招待履歴、既存下書き、本人専用読取を確認する。LINEチャネルとcallbackは保持する。[LINE callback仕様](https://developers.line.biz/en/docs/line-login/integrate-line-login/)
+4. 新API経路と旧worker終了を確認してPhase 2を適用し、匿名DB／Storageアクセスを閉じる。owner読取と匿名拒否、実ファイルの保全を確認する。公開ALLが残る状態で受付を開かない。
+5. rootで `select public.set_analysis_execution_mode('interactive');`、Vercel Productionの `ANALYSIS_BACKGROUND_MODE=interactive` を設定して再配備・有効化する。DB／アプリの一致とprivate／provider条件を確認する。Cron、Vault、net権限は変更しない。
+6. 本人のiPhoneで写真選択→解析→編集→保存／再読込→発注→通知状態を確認する。複数枚は画面を開いて進行し、閉じた後は開き直して再開することを確認する。PWAでは保存領域がSafariと異なる可能性も含め再ログイン・下書きを確認する。実サービスをエージェントが代行する場合は上表の個別範囲に従う。
+7. 認証、ID、管理者無制限、非公開アクセス、画像解析／発注／通知の重大な確認が通り、受付が使える状態になってから公開完了を報告する。disabledの503を残したまま完了扱いにしない。未充足なら保守状態を放置せず、安全な認証・RLSを維持した修正版へ進む／戻す。
+
+全画像の閉画面継続は別リリース。将来scheduledへ切り替える場合は、DB方式変更によって旧health世代が無効になるため、private worker成功2回と時刻・transportの検査を再度行う。今回のために旧signed候補の安全条件を弱めない。
 
 ## 障害時
 
-新規受付disabled、scheduler停止、drainを先に行う。旧919379d9の匿名DB版にそのまま戻したり、公開ALLを復活させたりしない。署名セッションとRLSを維持する修正版へ戻す／進める。データ復元が必要な場合はバックアップと通知監査を使い、旧通知を一括pendingへ戻さず、送信済みか不明な通知を再送しない。
+障害時は新規受付disabled、必要ならscheduler停止、drainを先に行う。旧919379d9の匿名DB版にそのまま戻したり、公開ALLを復活させたりしない。署名セッションとRLSを維持する修正版へ戻す／進める。データ復元が必要な場合はバックアップと通知監査を使い、旧通知を一括pendingへ戻さず、送信済みか不明な通知を再送しない。
 
-ユーザーの次の最小確認は、方式が確定した後の「専用秘密2個の生成・本番登録」と「既存DB接続を安全に使う準備」。公開許可・Vercel接続・Macローカル環境起動の許可は再度求めない。
+ユーザーの次の最小確認は「セッション専用秘密1個の生成・本番登録」と「既存DB接続を安全に使う準備」。公開許可は再度求めない。実サービスの代行試験を行う場合だけ、具体的な宛先・枚数・費用範囲も確認する。バックアップ接続の準備や実動作が未確認なので、現時点で直接公開できたとは報告しない。

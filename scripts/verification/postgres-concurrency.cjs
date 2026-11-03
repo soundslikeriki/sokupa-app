@@ -120,6 +120,7 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
   const coreChecks=checks;
   await admin.query(fs.readFileSync('supabase/migrations/20261102210736_signed_scheduler_dispatches.sql','utf8'));
   await admin.query(fs.readFileSync('supabase/migrations/20261102213147_scheduler_transport_health.sql','utf8'));
+  await admin.query(fs.readFileSync('supabase/migrations/20261103070253_interactive_execution_policy.sql','utf8'));
   const dispatchId=(await row('select gen_random_uuid() id')).id,now=(await row('select floor(extract(epoch from now()))::bigint n')).n;
   const consumed=(await Promise.all(Array.from({length:8},()=>service('select claim_analysis_dispatch($1,$2,$3) ok',[dispatchId,now,Number(now)+120])))).flat();
   check(consumed.filter(r=>r.ok).length===1,'8 signed request replays consume the nonce once');

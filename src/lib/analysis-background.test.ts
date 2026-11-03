@@ -12,7 +12,7 @@ test("disabled processing only observes health; stale workers close intake", asy
   let healthy = false;
   const admin = createClient("https://db.example.test", "synthetic-key", { auth: { persistSession: false }, global: { fetch: async (input) => {
     const name = new URL(String(input)).pathname.split("/").pop()!; calls.push(name);
-    return new Response(JSON.stringify(name === "analysis_background_ready" ? healthy : name === "analysis_worker_tick_begin" ? "synthetic-tick" : true), { headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify(name === "analysis_admission_ready" ? healthy : name === "analysis_worker_tick_begin" ? "synthetic-tick" : true), { headers: { "Content-Type": "application/json" } });
   } } });
   try {
     process.env.ANALYSIS_BACKGROUND_MODE = "disabled";
@@ -23,6 +23,9 @@ test("disabled processing only observes health; stale workers close intake", asy
     assert.equal(await analysisBackgroundReady(admin), false);
     healthy = true;
     assert.equal(await analysisBackgroundReady(admin), true);
+    process.env.ANALYSIS_BACKGROUND_MODE="interactive";
+    assert.equal(await analysisBackgroundReady(admin),true);
+    assert.deepEqual(await runScheduledAnalysisBatch(admin,async()=>{throw Error('interactive mode ran a scheduled batch');}),{processed:0,processing_enabled:false});
   } finally { if (saved === undefined) delete process.env.ANALYSIS_BACKGROUND_MODE; else process.env.ANALYSIS_BACKGROUND_MODE = saved; }
 });
 

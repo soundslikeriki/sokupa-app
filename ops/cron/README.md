@@ -1,5 +1,7 @@
 # 未有効化のバックグラウンド実行構成
 
+> 今回の段階公開にはCronを必須にしない。[interactive方式](../../docs/interactive-execution.md) は署名セッションと非公開アクセスを保ち、画面から処理を進める。閉画面で長い複数枚を終える保証はない。以下はscheduledを採用する場合の記録。hosted拡張の権限制約を受け入れた [秘密なしwake候補](./secret-free-wake-design.md) は未実装・未有効化。
+
 このフォルダは構成の雛形です。**Cronはまだ有効化していません。** ルートに `vercel.json` は置かず、`ANALYSIS_BACKGROUND_MODE` の既定値を `disabled` にしています。現在のコードをそのまま公開しても、新規画像保存・ジョブ受付は503になり、処理できない仕事を受け付けません。
 
 ここでの未有効化は外部・本番について。承認されたMac内の使い捨てstackでは実Cron／pg_net／VaultとREST／Storageを検証し、試験Cronを解除して一時停止した。[最新の実検証結果と未完了項目](../../docs/local-supabase-validation.md)を優先する。Hobby維持・本番未変更は継続。
@@ -30,7 +32,7 @@ Vercel Cronの配送はbest effortで、失敗時の即時再試行や全呼出�
 
 ユーザーはHobby維持・Proへ変更しない方針を明示済み。Supabase Cron等の低固定費候補を優先し、Vercel Cron毎分設定は有効化しない。残る個別確認は、別スケジューラの採用と費用上限、必要な専用秘密の生成・設定、独立検証環境の資格情報です。実値の生成・登録・課金プラン変更は行っていません。
 
-Supabase Cron案は[実現可能性調査](./supabase-feasibility.md)と[署名付き候補の実装・隔離試験](./signed-candidate.md)を参照。専用署名・再利用防止・通信障害時の受付ゲート・無効なSQL雛形を実装した。HTTP応答はnonceに結び付いた実ワーカー成功と照合し、通信障害の後も新しい2回を必要とする。実pg_net HTTP・Cron・Vaultは未検証／未有効化。[必要な最小手順・権限・費用](./isolated-pgnet-runbook.md)を具体化した。
+Supabase Cron案は[実現可能性調査](./supabase-feasibility.md)と[署名付き候補の実装・隔離試験](./signed-candidate.md)を参照。専用署名・再利用防止・通信障害時の受付ゲート・無効なSQL雛形を実装した。HTTP応答はnonceに結び付いた実ワーカー成功と照合し、通信障害の後も新しい2回を必要とする。実pg_net HTTP・Cron・VaultはMac内で検証済み、本番は未有効化。[必要な最小手順・権限・費用](./isolated-pgnet-runbook.md)を具体化した。
 
 ## 有効化手順（未実施）
 

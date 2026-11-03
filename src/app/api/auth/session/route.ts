@@ -9,5 +9,5 @@ export async function GET(req: NextRequest) {
   }
   const auth = await authorize(req);
   if (auth.error) return auth.error;
-  return NextResponse.json({ authenticated: true, line_user_id: auth.lineUserId, display_name: auth.user.display_name, admin: auth.owner }, { headers });
+  return NextResponse.json({ authenticated: true, line_user_id: auth.lineUserId, display_name: auth.user.display_name, admin: auth.owner, keep_open_for_progress: process.env.ANALYSIS_BACKGROUND_MODE === "interactive" }, { headers });
 }

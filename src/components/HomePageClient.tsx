@@ -150,6 +150,7 @@ export default function HomePageClient() {
   const [originalParsed, setOriginalParsed] = useState<ParsedMemoPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [jobAccepted, setJobAccepted] = useState<{ jobId: string } | null>(null);
+  const [keepOpenForProgress, setKeepOpenForProgress] = useState(false);
   const [calculationMode, setCalculationMode] = useState<CalculationMode>("dimensions");
   const [areaCalculatorMounted, setAreaCalculatorMounted] = useState(false);
   const [orderDraftItems, setOrderDraftItems] = useState<OrderDraftItem[]>([]);
@@ -270,6 +271,7 @@ export default function HomePageClient() {
         const session = await response.json();
         if (!response.ok || !session.authenticated || cancelled) return;
         setLineUserId(session.line_user_id);
+        setKeepOpenForProgress(session.keep_open_for_progress === true);
         const saved = localStorage.getItem(`sokupa:workspace:v1:${session.line_user_id}`);
         if (saved) {
           let draft;
@@ -858,7 +860,7 @@ export default function HomePageClient() {
           <CardHeader>
             <CardTitle className="text-base">解析を受け付けました</CardTitle>
             <CardDescription>
-              サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。
+              {keepOpenForProgress ? "解析中はこの画面を開いたままお待ちください。閉じた場合は、開き直すと続きから再開できます。完了後にLINEで通知します。" : "サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。"}
               {jobUi ? (
                 <span className="mt-2 block font-semibold text-emerald-800/90 dark:text-emerald-200">
                   {jobUi.percent}% 完了（{jobUi.done}/{jobUi.total}）

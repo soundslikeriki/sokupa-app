@@ -153,7 +153,7 @@ test("scheduled HTTP response waits for its heartbeat; read-only health checks c
   global.fetch = async (input) => {
     const name = new URL(String(input)).pathname.split("/").pop()!; calls.push(name);
     if (name === "analysis_worker_tick_complete") { enter(); await paused; }
-    return new Response(JSON.stringify(name === "analysis_background_ready" ? false : name === "analysis_worker_tick_begin" ? "synthetic-tick" : true), { headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify(name === "analysis_admission_ready" ? false : name === "analysis_worker_tick_begin" ? "synthetic-tick" : true), { headers: { "Content-Type": "application/json" } });
   };
   const request = (path: string) => new NextRequest(`${origin}${path}`, { headers: { authorization: "Bearer synthetic-cron-secret" } });
   try {
@@ -164,7 +164,7 @@ test("scheduled HTTP response waits for its heartbeat; read-only health checks c
     assert.deepEqual(calls, ["analysis_worker_tick_begin", "analysis_worker_tick_complete"]);
     process.env.ANALYSIS_BACKGROUND_MODE = "scheduled";
     assert.equal((await workerHealth(request("/api/analysis-jobs/worker-health"))).status, 503);
-    assert.equal(calls[calls.length - 1], "analysis_background_ready");
+    assert.equal(calls[calls.length - 1], "analysis_admission_ready");
     assert.equal(calls.filter((name) => name === "analysis_worker_tick_begin").length, 1);
   } finally { release(); global.fetch = savedFetch; names.forEach((name,index) => { if (saved[index] === undefined) delete process.env[name]; else process.env[name] = saved[index]; }); }
 });

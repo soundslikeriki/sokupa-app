@@ -1,5 +1,7 @@
 # ソクパ 認証・計算・データ保全の改善
 
+> 2026-11-03更新: 今回の公開候補は [interactive方式](./interactive-execution.md)。定期処理は必須ではなく、旧scheduledの説明はその方式を選ぶ場合に限る。追加migrationは8本（既存7本＋20261103070253）。最新の公開条件は [production-release-readiness.md](./production-release-readiness.md) を優先する。既定disabledのまま公開完了にはしない。本番は未変更。
+
 対象コミット: `919379d9e45e367a45d3b6f64b01724a528fe3f2`。
 作業場所: `/Users/rikiharada/Documents/Codex/2026-11-03/task/sokupa-app`、ブランチ `codex/security-reliability`。
 元チェックアウト `/Users/rikiharada/Documents/Codex/2026-10-13/task/sokupa-app` は未コミット変更なしを確認し、変更せずローカル複製。依存関係は既存 node_modules を読取り利用。package.json / lockfile は変更していない。

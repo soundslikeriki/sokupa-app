@@ -4,13 +4,13 @@ export function scheduledAnalysisEnabled(): boolean {
   return process.env.ANALYSIS_BACKGROUND_MODE === "scheduled";
 }
 
-/** Never accept work that depends on an unconfigured/stale caller. No quota is reserved here. */
+/** Require the configured app/DB mode and its readiness checks before reserving quota. */
 export async function analysisBackgroundReady(admin: SupabaseClient): Promise<boolean> {
-  if (!scheduledAnalysisEnabled()) return false;
-  const { data, error } = await admin.rpc("analysis_background_ready");
+  const mode = process.env.ANALYSIS_BACKGROUND_MODE;
+  if (mode !== "scheduled" && mode !== "interactive") return false;
+  const { data, error } = await admin.rpc("analysis_admission_ready", { p_mode: mode });
   return !error && data === true;
 }
-
 
 export async function analysisDataAccessSecure(admin: SupabaseClient): Promise<boolean> {
   const { data, error } = await admin.rpc("analysis_processing_secure");
