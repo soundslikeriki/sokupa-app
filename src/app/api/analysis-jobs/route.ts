@@ -1,7 +1,7 @@
 import { analysisBackgroundReady } from "@/lib/analysis-background";
 import { NextRequest, NextResponse } from "next/server";
 import { authorize } from "@/lib/server-auth";
-import { ownedMemoPath } from "@/lib/memo-storage";
+import { ownedMemoPath, UUID_PATTERN } from "@/lib/memo-storage";
 import { runAnalysisJob } from "@/lib/analysisJobProcessor";
 import { waitUntil } from "@vercel/functions";
 export const runtime = "nodejs";
@@ -9,6 +9,24 @@ export const maxDuration = 300;
 export async function GET(req: NextRequest) {
   const auth = await authorize(req);
   if (auth.error) return auth.error;
+  if (req.nextUrl.searchParams.get("history") === "1") {
+    const before = req.nextUrl.searchParams.get("before");
+    let cursor: { id: string; created_at: string } | null = null;
+    if (before) {
+      if (!UUID_PATTERN.test(before)) return NextResponse.json({ error: "Invalid cursor" }, { status: 400 });
+      const found = await auth.admin.from("analysis_jobs").select("id,created_at").eq("line_user_id", auth.lineUserId).eq("status", "done").eq("id", before).maybeSingle();
+      if (found.error) return NextResponse.json({ error: "解析履歴を取得できませんでした" }, { status: 503 });
+      if (!found.data) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      cursor = found.data;
+    }
+    let query = auth.admin.from("analysis_jobs").select("id,site_name,created_at,notification_status")
+      .eq("line_user_id", auth.lineUserId).eq("status", "done");
+    if (cursor) query = query.or(`created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`);
+    const { data, error } = await query.order("created_at", { ascending: false }).order("id", { ascending: false }).limit(21);
+    if (error) return NextResponse.json({ error: "解析履歴を取得できませんでした" }, { status: 503 });
+    const page = (data ?? []).slice(0, 20);
+    return NextResponse.json({ data: page, next_before: data && data.length > 20 ? page[page.length - 1].id : null }, { headers: { "Cache-Control": "no-store" } });
+  }
   const { data, error } = await auth.admin.from("analysis_jobs").select("id,status,client_result_seen_at,site_name,notification_status")
     .eq("line_user_id", auth.lineUserId)
     .or("status.in.(queued,running),client_result_seen_at.is.null,and(status.eq.done,notification_status.in.(pending,failed))")

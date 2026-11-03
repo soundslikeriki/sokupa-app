@@ -52,6 +52,29 @@ export function archiveWorkspaceDraft(storage: Pick<Storage, "getItem" | "setIte
 
 export type WorkspaceArchive = { key: string; raw: string; draft: WorkspaceDraft | null };
 
+/** A remote seen receipt cannot remove this device's explicitly postponed result. */
+export function retainDeferredJobResult(
+  storage: Pick<Storage, "getItem" | "setItem">,
+  key: string,
+  jobId: string,
+  siteName: string | null,
+  result: ParsedMemoPayload,
+): WorkspaceArchive {
+  const draft: WorkspaceDraft = { version: 1, siteName: siteName ?? "", parsed: result, originalParsed: result, orderDraftItems: [], resultJobId: jobId };
+  const raw = JSON.stringify(draft);
+  readWorkspaceDraft(raw);
+  const archiveKey = `${key}:recovery:result:${jobId}`;
+  const existing = storage.getItem(archiveKey);
+  if (existing !== null) {
+    const saved = readWorkspaceDraft(existing);
+    if (!workspaceContainsJobResult(saved, jobId)) throw new Error("保留結果の保存先が変わっています。書き出して保管してください。");
+    return { key: archiveKey, raw: existing, draft: saved };
+  }
+  storage.setItem(archiveKey, raw);
+  if (storage.getItem(archiveKey) !== raw) throw new Error("保留結果の保存を確認できませんでした。");
+  return { key: archiveKey, raw, draft };
+}
+
 export function workspaceHasContent(draft: WorkspaceDraft | null): boolean {
   return Boolean(draft && (draft.parsed || draft.originalParsed || draft.orderDraftItems.length || draft.siteName.trim()));
 }

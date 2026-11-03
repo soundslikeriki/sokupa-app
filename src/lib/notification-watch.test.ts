@@ -27,13 +27,12 @@ test("finishing notification A never removes the pointer for new analysis B", ()
   forgetJobPointerIfMatches(storage, "owner", "b"); assert.equal(values.has("sokupa:lastJobId:owner"), false);
 });
 
-test("notification-only backlog does not restore old results over the current workspace", () => {
-  assert.equal(needsAnalysisRestoration({ status: "done", client_result_seen_at: "stored" }, true), false);
-  assert.equal(needsAnalysisRestoration({ status: "done", client_result_seen_at: "stored" }, true, true), false);
-  assert.equal(needsAnalysisRestoration({ status: "done", client_result_seen_at: "stored" }, false, true), true);
-  assert.equal(needsAnalysisRestoration({ status: "done", client_result_seen_at: null }, true), true);
-  assert.equal(needsAnalysisRestoration({ status: "running", client_result_seen_at: "stored" }, true), true);
-  assert.equal(needsAnalysisRestoration({ status: "done" }, true), true);
+test("remote seen receipts never discard an explicit device pointer", () => {
+  assert.equal(needsAnalysisRestoration({ status: "done", client_result_seen_at: "stored" }), false);
+  assert.equal(needsAnalysisRestoration({ status: "done", client_result_seen_at: "stored" }, true), true);
+  assert.equal(needsAnalysisRestoration({ status: "done", client_result_seen_at: null }), true);
+  assert.equal(needsAnalysisRestoration({ status: "running", client_result_seen_at: "stored" }), true);
+  assert.equal(needsAnalysisRestoration({ status: "done" }), true);
 });
 
 test("only unfinished analysis blocks intake, regardless of notification waiting", () => {

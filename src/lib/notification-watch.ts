@@ -8,8 +8,9 @@ export function analysisBlocksIntake(job: { status?: string } | null): boolean {
   return Boolean(job && !["done", "failed"].includes(job.status ?? ""));
 }
 
-export function needsAnalysisRestoration(job: { status: string; client_result_seen_at?: string | null }, hasSavedMemo: boolean, fromPointer = false): boolean {
-  return ["queued", "running"].includes(job.status) || job.client_result_seen_at == null || (fromPointer && !hasSavedMemo);
+export function needsAnalysisRestoration(job: { status: string; client_result_seen_at?: string | null }, fromPointer = false): boolean {
+  // The seen receipt is per user, whereas the explicit pointer belongs to this device.
+  return fromPointer || ["queued", "running"].includes(job.status) || job.client_result_seen_at == null;
 }
 
 export function mergeNotificationWatch(current: NotificationWatch[], incoming: NotificationWatch): NotificationWatch[] {

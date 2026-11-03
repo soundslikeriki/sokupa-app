@@ -17,7 +17,7 @@ import {
   removeOrderDraftItem,
   updateOrderDraftItem,
 } from "@/lib/order-draft";
-import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, listWorkspaceArchives, switchWorkspaceDraft, type WorkspaceArchive, type WorkspaceDraft } from "@/lib/workspace-draft";
+import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, listWorkspaceArchives, switchWorkspaceDraft, retainDeferredJobResult, type WorkspaceArchive, type WorkspaceDraft } from "@/lib/workspace-draft";
 import { notificationRetryable, analysisBlocksIntake, mergeNotificationWatch, forgetJobPointerIfMatches, needsAnalysisRestoration, type NotificationWatch } from "@/lib/notification-watch";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import { compressImageForUpload, convertAndResizeForPreview } from "@/lib/resizeImage";
@@ -32,6 +32,8 @@ type ProcessedImage = {
 };
 import { cn } from "@/lib/utils";
 import type { OrderDraftItem, OrderDraftItemInput, ParsedMemoPayload } from "@/types";
+
+type HistoryJob = { id: string; site_name: string | null; created_at: string; notification_status: string };
 
 type CalculationMode = "dimensions" | "area" | "order-draft";
 
@@ -157,6 +159,7 @@ export default function HomePageClient() {
   const [error, setError] = useState<string | null>(null);
   const [jobAccepted, setJobAccepted] = useState<{ jobId: string; backgroundReady: boolean; status?: string } | null>(null);
   const analysisSelectionVersionRef = useRef(0);
+  const [analysisRecoveryEpoch, setAnalysisRecoveryEpoch] = useState(0);
   const appliedJobRef = useRef<string | null>(null);
   const [notificationWatches, setNotificationWatches] = useState<NotificationWatch[]>([]);
   const notificationWatchesRef = useRef<NotificationWatch[]>([]);
@@ -177,6 +180,11 @@ export default function HomePageClient() {
   const [pendingJobResult, setPendingJobResult] = useState<{ jobId: string; siteName: string | null; result: ParsedMemoPayload; backgroundReady: boolean } | null>(null);
   const pendingJobResultRef = useRef<typeof pendingJobResult>(null);
   const [resultChoiceDeferred, setResultChoiceDeferred] = useState(false);
+  const [historyJobs, setHistoryJobs] = useState<HistoryJob[] | null>(null);
+  const [historyNext, setHistoryNext] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [resultRetentionError, setResultRetentionError] = useState<string | null>(null);
   const [resultJobId, setResultJobId] = useState<string | null>(null);
   const [calculationMode, setCalculationMode] = useState<CalculationMode>("dimensions");
   const [areaCalculatorMounted, setAreaCalculatorMounted] = useState(false);
@@ -362,6 +370,33 @@ export default function HomePageClient() {
     catch { setWorkspaceArchives((previous) => [...switched.archives, ...previous.filter((entry) => !switched.archives.some((saved) => saved.key === entry.key))]); }
   };
 
+  const retainPendingResult = (pending: NonNullable<typeof pendingJobResult>) => {
+    if (!lineUserId) throw new Error("ログイン情報を確認できません。");
+    const key = `sokupa:workspace:v1:${lineUserId}`;
+    const archive = retainDeferredJobResult(localStorage, key, pending.jobId, pending.siteName, pending.result);
+    setWorkspaceArchives((previous) => [archive, ...previous.filter((entry) => entry.key !== archive.key)]);
+  };
+
+  const deferPendingJobResult = () => {
+    const pending = pendingJobResultRef.current;
+    if (!pending) return;
+    try { retainPendingResult(pending); setResultChoiceDeferred(true); }
+    catch (error) { setError(`後回しにする結果を端末へ保管できませんでした。まだこの画面に保持しています。結果を書き出すか、保存領域を確保して再度お試しください。 ${getErrorDetail(error)}`); }
+  };
+
+  const loadHistory = async (before?: string) => {
+    if (historyLoading) return;
+    setHistoryLoading(true); setHistoryError(null);
+    try {
+      const response = await fetch(`/api/analysis-jobs?history=1${before ? `&before=${encodeURIComponent(before)}` : ""}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok || !Array.isArray(payload.data)) throw new Error("保存済みの解析結果を取得できませんでした。再度お試しください。");
+      setHistoryJobs((current) => before ? [...(current ?? []), ...payload.data.filter((job: HistoryJob) => !current?.some((entry) => entry.id === job.id))] : payload.data);
+      setHistoryNext(payload.next_before ?? null);
+    } catch (error) { setHistoryError(getErrorDetail(error)); }
+    finally { setHistoryLoading(false); }
+  };
+
   const openPendingJobResult = () => {
     const pending = pendingJobResultRef.current, current = currentWorkspaceRef.current;
     if (!pending || !current) return;
@@ -458,7 +493,10 @@ export default function HomePageClient() {
     if (!draftReady || analysisBlocksIntake(jobAccepted)) return;
     if (isAnalyzing) return;
     if (readyImages.length === 0) return;
-    analysisSelectionVersionRef.current++;
+    try { if (pendingJobResultRef.current) retainPendingResult(pendingJobResultRef.current); }
+    catch { setResultRetentionError("別の解析結果を端末へ保管できませんでした。サーバーの「保存済みの解析結果」から開けます。"); }
+    const previousAnalysis = jobAccepted, previousUi = jobUi;
+    const admissionVersion = ++analysisSelectionVersionRef.current;
     setIsAnalyzing(true);
     setError(null);
     setProgress({ done: 0, total: readyImages.length });
@@ -549,6 +587,10 @@ export default function HomePageClient() {
     } catch (err) {
       console.error("[Sokupa] 画像アップロード・解析受付フロー失敗", err);
       setError(getErrorDetail(err) || "解析中にエラーが発生しました");
+      if (analysisSelectionVersionRef.current === admissionVersion) {
+        setJobAccepted(previousAnalysis); setJobUi(previousUi);
+        setAnalysisRecoveryEpoch((current) => current + 1);
+      }
     } finally {
       setIsAnalyzing(false);
       setProgress(null);
@@ -568,7 +610,7 @@ export default function HomePageClient() {
         if (last) {
           const { data } = await fetchAnalysisJob(last);
           if (data && !cancelled) {
-            pointedJob = needsAnalysisRestoration(data, Boolean(currentWorkspaceRef.current?.parsed), true);
+            pointedJob = needsAnalysisRestoration(data, true);
             if (pointedJob && selectionVersion === analysisSelectionVersionRef.current) setJobAccepted((current) => current ?? { jobId: last!, backgroundReady: data.background_ready === true, status: data.status });
             if (data.status === "done" && notificationRetryable(data.notification_status)) trackNotification({ jobId: last, siteName: data.site_name ?? null, status: data.notification_status });
           }
@@ -579,12 +621,12 @@ export default function HomePageClient() {
         const jobs = Array.isArray(payload.data) ? payload.data : [];
         if (cancelled) return;
         for (const job of jobs) if (job.status === "done" && notificationRetryable(job.notification_status)) trackNotification({ jobId: job.id, siteName: job.site_name ?? null, status: job.notification_status });
-        const found = jobs.find((job: { status: string; client_result_seen_at?: string | null }) => needsAnalysisRestoration(job, Boolean(currentWorkspaceRef.current?.parsed)));
+        const found = jobs.find((job: { status: string; client_result_seen_at?: string | null }) => needsAnalysisRestoration(job));
         if (!pointedJob && found?.id && selectionVersion === analysisSelectionVersionRef.current) setJobAccepted((current) => current ?? { jobId: found.id, backgroundReady: false, status: found.status });
       } catch { if (!cancelled && selectionVersion === analysisSelectionVersionRef.current) setError("前回の解析を確認できませんでした。通信の回復後に再読込してください。"); }
     })();
     return () => { cancelled = true; };
-  }, [draftReady, lineUserId, trackNotification]);
+  }, [draftReady, lineUserId, trackNotification, analysisRecoveryEpoch]);
 
   // Notification-only reads/retries never apply results, switch drafts or lock the next analysis.
   useEffect(() => {
@@ -605,7 +647,7 @@ export default function HomePageClient() {
             delete notificationRetryAtRef.current[watch.jobId];
             try {
               const saved = persistedWorkspaceRef.current ? readWorkspaceDraft(persistedWorkspaceRef.current) : null;
-              if (data.client_result_seen_at || (saved?.parsed && saved.resultJobId === watch.jobId)) forgetJobPointerIfMatches(localStorage, lineUserId, watch.jobId);
+              if (workspaceContainsJobResult(saved, watch.jobId)) forgetJobPointerIfMatches(localStorage, lineUserId, watch.jobId);
             } catch { /* Discovery and server notification state remain authoritative. */ }
           } else if (data.can_resume && Date.now() >= (notificationRetryAtRef.current[watch.jobId] ?? 0)) {
             notificationRetryAtRef.current[watch.jobId] = Date.now() + 30_000;
@@ -682,7 +724,7 @@ export default function HomePageClient() {
     };
     poll(); const timer = window.setInterval(poll, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [jobAccepted?.jobId, lineUserId, rememberNotification, trackNotification]);
+  }, [jobAccepted?.jobId, lineUserId, rememberNotification, trackNotification, analysisRecoveryEpoch]);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-2 py-8 sm:gap-8 sm:px-4 sm:py-10 md:px-6 lg:px-8">
@@ -937,20 +979,44 @@ export default function HomePageClient() {
               <Button type="button" variant="outline" onClick={() => setResultChoiceDeferred(false)}>別の結果を確認する</Button>
             ) : (
               <>
-                <Button type="button" variant="outline" onClick={() => setResultChoiceDeferred(true)}>今の下書きを続ける</Button>
+                <Button type="button" variant="outline" onClick={deferPendingJobResult}>今の下書きを続ける</Button>
                 <Button type="button" className="h-auto min-h-10 max-w-full whitespace-normal py-2" onClick={openPendingJobResult}>今の下書きを退避して別の結果を開く</Button>
               </>
             )}
             <Button type="button" variant="outline" onClick={() => { if (currentWorkspaceRef.current) downloadWorkspace(JSON.stringify(currentWorkspaceRef.current)); }}>今の下書きを書き出す</Button>
+            <Button type="button" variant="outline" onClick={() => downloadWorkspace(JSON.stringify({ version: 1, siteName: pendingJobResult.siteName ?? "", parsed: pendingJobResult.result, originalParsed: pendingJobResult.result, orderDraftItems: [], resultJobId: pendingJobResult.jobId }))}>別の解析結果を書き出す</Button>
+            {resultChoiceDeferred ? <p className="text-sm text-muted-foreground">後回しにした結果は「退避した下書き」からも開けます。</p> : null}
           </CardHeader>
         </Card>
       ) : null}
+
+      <Card>
+        <CardHeader className="space-y-3">
+          <CardTitle className="text-base">保存済みの解析結果</CardTitle>
+          <CardDescription>別の端末で確認済みの結果も開けます。今の下書きとの切替方法は、結果を確認してから選べます。</CardDescription>
+          {resultRetentionError ? <p className="text-sm" role="status">{resultRetentionError}</p> : null}
+          <Button type="button" variant="outline" disabled={!draftReady || historyLoading} onClick={() => void loadHistory()}>{historyLoading ? "履歴を取得中…" : "保存済みの解析結果を探す"}</Button>
+          {historyError ? <p className="text-sm" role="alert">{historyError}</p> : null}
+          {historyJobs?.length === 0 ? <p className="text-sm">保存済みの解析結果はありません。</p> : null}
+          {historyJobs?.map((job) => (
+            <div key={job.id} className="rounded border p-3 text-sm">
+              <p>{job.site_name || "現場名なし"}（{new Date(job.created_at).toLocaleString("ja-JP")}）</p>
+              <Button type="button" variant="outline" disabled={isAnalyzing || analysisBlocksIntake(jobAccepted)} aria-label={`保存済み「${job.site_name || "現場名なし"}」の結果を確認`} onClick={() => {
+                analysisSelectionVersionRef.current++; setJobUi(null); setError(null);
+                setJobAccepted({ jobId: job.id, backgroundReady: false, status: "done" });
+                setAnalysisRecoveryEpoch((current) => current + 1);
+              }}>結果を確認</Button>
+            </div>
+          ))}
+          {historyNext ? <Button type="button" variant="outline" disabled={historyLoading} onClick={() => void loadHistory(historyNext)}>さらに前の結果を探す</Button> : null}
+        </CardHeader>
+      </Card>
 
       {workspaceArchives.length ? (
         <Card>
           <CardHeader className="space-y-3">
             <CardTitle className="text-base">退避した下書き</CardTitle>
-            <CardDescription>復元するときも今の下書きを先に退避します。書き出したデータは端末で保管できます。</CardDescription>
+            <CardDescription>後回しにした解析結果もここから開けます。復元するときも今の下書きを先に退避します。書き出したデータは端末で保管できます。</CardDescription>
             <details>
               <summary className="cursor-pointer text-sm font-medium">退避した下書きを確認（{workspaceArchives.length}件）</summary>
               <div className="mt-3 space-y-3">

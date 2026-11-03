@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, switchWorkspaceDraft, listWorkspaceArchives, type WorkspaceDraft } from "./workspace-draft";
+import { retainDeferredJobResult, readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, switchWorkspaceDraft, listWorkspaceArchives, type WorkspaceDraft } from "./workspace-draft";
 
 test("workspace round-trip retains edits, original measurements, repeat settings and order draft", () => {
   const original = { product_code: "VS2067", manufacturer: "Test", total_m: 5.4, order_quantity: 7, entries: [{ original_formula: "2.7×2", length_m: 2.7, quantity: 2, subtotal_m: 5.4 }] };
@@ -106,4 +106,31 @@ test("a source change during archiving is kept and never overwritten", () => {
   const values = new Map([[key, raw]]), storage = storageFor(values);
   assert.throws(() => switchWorkspaceDraft({ ...storage, setItem: (name, value) => { storage.setItem(name, value); if (name.includes(":recovery:")) values.set(key, "concurrent source"); } }, key, raw, a, b, "changed-midway"), /別の画面/);
   assert.equal(values.get(key), "concurrent source"); assert.ok(Array.from(values.entries()).some(([name, value]) => name.includes(":recovery:") && value === raw));
+});
+
+
+test("postponed result is verified and retained independently of the edited workspace", () => {
+  const values = new Map([["draft", "exact edited workspace bytes"]]), storage = storageFor(values);
+  const job = "00000000-0000-4000-8000-00000000000a";
+  const result = { items: [{ product_code: "A", manufacturer: "Synthetic", entries: [], total_m: 20, order_quantity: 23 }] };
+  const retained = retainDeferredJobResult(storage, "draft", job, "Remote A", result);
+  assert.equal(values.get("draft"), "exact edited workspace bytes");
+  assert.equal(readWorkspaceDraft(retained.raw).resultJobId, job);
+  assert.deepEqual(readWorkspaceDraft(retained.raw).parsed, result);
+  assert.deepEqual(readWorkspaceDraft(retained.raw).orderDraftItems, []);
+  assert.equal(retainDeferredJobResult(storage, "draft", job, "Remote A", result).raw, retained.raw);
+  assert.equal(values.size, 2);
+  retainDeferredJobResult(storage, "other-owner", job, "Remote A", result);
+  assert.equal(values.size, 3);
+});
+
+test("postponed result failures preserve the workspace and existing archive bytes", () => {
+  const values = new Map([["draft", "exact edited workspace bytes"]]), storage = storageFor(values);
+  const job = "00000000-0000-4000-8000-00000000000a", result = { items: [] };
+  assert.throws(() => retainDeferredJobResult({ ...storage, setItem: () => { throw Error("quota"); } }, "draft", job, "A", result));
+  assert.throws(() => retainDeferredJobResult({ ...storage, getItem: (key) => key.includes(":recovery:") && values.has(key) ? "wrong readback" : storage.getItem(key) }, "draft", job, "A", result));
+  const archiveKey = `draft:recovery:result:${job}`; values.set(archiveKey, "invalid existing raw");
+  assert.throws(() => retainDeferredJobResult(storage, "draft", job, "A", result));
+  assert.equal(values.get(archiveKey), "invalid existing raw"); assert.equal(values.get("draft"), "exact edited workspace bytes");
+  assert.throws(() => retainDeferredJobResult(storage, "draft", "invalid-id", "A", result));
 });

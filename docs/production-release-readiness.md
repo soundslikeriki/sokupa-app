@@ -1,5 +1,7 @@
 # 既存URLへ公開するための最短の安全な手順
 
+> 保留結果の端末保管・本人履歴と受付失敗後の復元は [review12-deferred-result-recovery.md](./review12-deferred-result-recovery.md) を参照。別端末の確認済み情報で、この端末の保留結果を破棄しない。
+
 > 通知待ちと新規解析の分離は [review11-notification-analysis-separation.md](./review11-notification-analysis-separation.md) を参照。done後の通知failedは次の解析をロックしない。
 
 > 端末に別の編集がある場合の復元は [下書きの選択・退避・復元](./review10-cross-job-draft-protection.md) に従う。旧形式のOCR内容一致だけでジョブへ自動紐付けしない。
@@ -30,7 +32,7 @@
 | 本番バックアップ | 既存DB接続を安全に用意し、全アプリschema／役割／履歴とStorage metadata・全実byteを保護保存・検査 | 本番export未実施。[具体的保全計画](./production-backup-plan.md) |
 | 実環境の互換性 | 実Vercel入口・Function寿命、署名OAuth・同一ID・admin、本人iPhone/PWAの閉画面処理と通知を確認 | read-only CLI APIでFluid=true。Vercel上の新方式・実LINE・実機は未確認 |
 | 実サービスの試験 | エージェント代行なら本人宛先・画像枚数・通知回数・費用上限を確認。本人のiPhone操作も選べる | 実AI・LINE送信0。代行範囲は未承認 |
-| 独立レビュー | 最新wake・復元・通知修正の差分をレビュー | cdbf5c1の下書き保全は独立確認済み。今回の通知分離差分は再レビュー待ち |
+| 独立レビュー | 最新wake・復元・通知修正の差分をレビュー | 72b01ddの通知分離と従来の下書き保全は独立確認済み。今回の保留結果・履歴修正は再レビュー待ち |
 
 Supabaseはnet表のプロジェクト別grant／RLS変更をサポートしないと明記している。制約を受け入れ、ネットワークへcredentialを載せない設計にした。公開HTTP204だけではhealthyにならず、private worker完了2回を必要とする。[公式制約](https://supabase.com/kb/troubleshooting/database-roles-can-read-request-headers-queued-by-pg_net)
 

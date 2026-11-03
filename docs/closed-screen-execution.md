@@ -1,5 +1,7 @@
 # 画面を閉じたまま処理する方式
 
+> 保留結果の端末保管・本人履歴と受付失敗後の復元は [review12-deferred-result-recovery.md](./review12-deferred-result-recovery.md) を参照。別端末の確認済み情報で、この端末の保留結果を破棄しない。
+
 > 通知待ちと新規解析の分離は [review11-notification-analysis-separation.md](./review11-notification-analysis-separation.md) を参照。done後の通知failedは次の解析をロックしない。
 
 > 端末に別の編集がある場合の復元は [下書きの選択・退避・復元](./review10-cross-job-draft-protection.md) に従う。旧形式のOCR内容一致だけでジョブへ自動紐付けしない。
