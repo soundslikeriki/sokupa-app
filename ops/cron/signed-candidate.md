@@ -2,7 +2,7 @@
 
 **外部へは未設定・未公開。追加固定費やプラン変更は行っていない。** ユーザーの「Hobbyのまま、商用の予定なし」という意向を採用し、ProアップグレードやVercel Cron毎分実行は選択しない。これはローカルの実装と隔離試験の成果であり、実Supabase Cronの稼働保証ではない。
 
-追補: Mac内の実native Supabase起動と試験用資格情報作成が個別承認され、実Cron／pg_net／Vault／REST／Storageで主試験43項目が成功した。最新結果と未完了の450秒期限観測は [実検証の記録](../../docs/local-supabase-validation.md) を参照。以下の未検証記述・項目数はその前の段階の記録。今回、明示ポート、拡張権限検査、request ID再利用への対応を候補に追加し、Nodeは60件、Postgres候補SQLは205項目が成功している。
+追補: Mac内の実native Supabase起動と試験用資格情報作成が個別承認され、実Cron／pg_net／Vault／REST／Storageで主試験43項目が成功した。クラッシュ試験15項目と、停止・再開後の実450秒期限観測4項目も通過。最新結果は [実検証の記録](../../docs/local-supabase-validation.md) を参照。以下の未検証記述・項目数はその前の段階の記録。今回、明示ポート、拡張権限検査、request ID再利用への対応を候補に追加し、Nodeは60件、Postgres候補SQLは205項目が成功している。
 
 ## 実装した範囲
 
