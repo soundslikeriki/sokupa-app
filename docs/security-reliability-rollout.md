@@ -4,7 +4,7 @@
 作業場所: `/Users/rikiharada/Documents/Codex/2026-11-03/task/sokupa-app`、ブランチ `codex/security-reliability`。
 元チェックアウト `/Users/rikiharada/Documents/Codex/2026-10-13/task/sokupa-app` は未コミット変更なしを確認し、変更せずローカル複製。依存関係は既存 node_modules を読取り利用。package.json / lockfile は変更していない。
 
-**本番への書込み、秘密の生成・登録、LINE送信、実データ／課金AIによる試験、push、merge、デプロイは未実施。** Supabase本番ではスキーマ・ポリシーのメタデータだけを読取り、利用者データは取得していない。
+**本番への書込み、外部・本番用秘密の生成・登録、実LINE送信、実データ／課金AIによる試験、push、merge、デプロイは未実施。** Supabase本番ではスキーマ・ポリシーのメタデータだけを読取り、利用者データは取得していない。ユーザー個別承認後、Mac内だけの試験資格情報を作り実native Supabaseを検証した。最新の結果と停止状態は [local-supabase-validation.md](./local-supabase-validation.md) を優先する。
 
 ## 実装
 

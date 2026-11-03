@@ -1,6 +1,6 @@
 # 実pg_net／Vaultの隔離確認に必要な最小手順
 
-2026-11-02調査。**以下は未実行の手順。** 現在の確認済み範囲は実PostgresのSQL／pgcryptoまでで、HTTP関数とVaultビューは合成fixture。クラウドの設定変更・鍵生成・課金変更はしていない。Vercel Hobbyを維持する。
+2026-11-02の準備手順。**追補: ユーザー承認後、Mac内の実native Supabaseを起動して検証した。最新の実施結果・未確認・停止状態は [local-supabase-validation.md](../../docs/local-supabase-validation.md) を優先する。** 以下の未実行・承認待ち記述は準備時点の記録。外部・本番設定や課金は変更していない。Vercel Hobbyを維持する。
 
 ## 先に必要な最小の選択
 

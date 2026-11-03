@@ -2,6 +2,8 @@
 
 このフォルダは構成の雛形です。**Cronはまだ有効化していません。** ルートに `vercel.json` は置かず、`ANALYSIS_BACKGROUND_MODE` の既定値を `disabled` にしています。現在のコードをそのまま公開しても、新規画像保存・ジョブ受付は503になり、処理できない仕事を受け付けません。
 
+ここでの未有効化は外部・本番について。承認されたMac内の使い捨てstackでは実Cron／pg_net／VaultとREST／Storageを検証し、試験Cronを解除して一時停止した。[最新の実検証結果と未完了項目](../../docs/local-supabase-validation.md)を優先する。Hobby維持・本番未変更は継続。
+
 ## 構成と確認できたこと
 
 `DBの永続ジョブ → 承認された毎分scheduler → 認証付きGET /api/analysis-jobs/process → 期限付き画像リース → OCR → DB確定 → LINE`。現在はHobbyを維持するSupabase Cron候補を隔離検証中。Vercel Cron案は保管用とする。

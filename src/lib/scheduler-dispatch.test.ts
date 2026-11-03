@@ -39,3 +39,15 @@ test("signed dispatch claims its nonce before processing and rejects a replay be
   assert.equal((await GET(request(now-121))).status,403);assert.equal(calls.length,4);
  }finally{global.fetch=savedFetch;names.forEach((name,i)=>{if(saved[i]===undefined)delete process.env[name];else process.env[name]=saved[i];});}
 });
+test("an explicit HTTPS port is part of the fixed signed origin",()=>{
+ const saved=[process.env.ANALYSIS_DISPATCH_SECRET,process.env.ANALYSIS_DISPATCH_ORIGIN];
+ const portOrigin='https://worker.example.test:18443',now=1793650000;
+ process.env.ANALYSIS_DISPATCH_SECRET=key;process.env.ANALYSIS_DISPATCH_ORIGIN=portOrigin;
+ try{
+  const signature=createHmac('sha256',key).update(['SOKUPA-DISPATCH-V1','GET',portOrigin,'/api/analysis-jobs/process',id,String(now),String(now+120)].join('\n')).digest('hex');
+  const headers={'x-sokupa-dispatch-id':id,'x-sokupa-issued-at':String(now),'x-sokupa-expires-at':String(now+120),'x-sokupa-signature':signature};
+  assert.equal(verifySchedulerDispatch(new Request(portOrigin+'/api/analysis-jobs/process',{headers}),now)?.id,id);
+  assert.equal(verifySchedulerDispatch(new Request('https://worker.example.test:18444/api/analysis-jobs/process',{headers}),now),null);
+  assert.equal(verifySchedulerDispatch(new Request(origin+'/api/analysis-jobs/process',{headers}),now),null);
+ }finally{['ANALYSIS_DISPATCH_SECRET','ANALYSIS_DISPATCH_ORIGIN'].forEach((name,i)=>{if(saved[i]===undefined)delete process.env[name];else process.env[name]=saved[i];});}
+});

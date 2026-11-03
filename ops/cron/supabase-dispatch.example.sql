@@ -5,18 +5,40 @@ create schema if not exists sokupa_ops;
 revoke all on schema sokupa_ops from public,anon,authenticated,service_role;
 create table if not exists sokupa_ops.scheduler_config(
   singleton boolean primary key default true check(singleton), enabled boolean not null default false,
-  origin text check(origin ~ '^https://[a-z0-9][a-z0-9.-]*[a-z0-9]$'), secret_id uuid,
+  origin text, secret_id uuid,
   expect_processing boolean not null default false
+);
+-- Explicit ports allow an isolated non-root TLS worker. The full origin remains signed and fixed.
+alter table sokupa_ops.scheduler_config drop constraint if exists scheduler_config_origin_check;
+alter table sokupa_ops.scheduler_config add constraint scheduler_config_origin_check check(
+  origin ~ '^https://[a-z0-9][a-z0-9.-]*[a-z0-9](:[1-9][0-9]{0,4})?$'
+  and coalesce(substring(origin from ':([0-9]+)$')::numeric,443) between 1 and 65535
 );
 insert into sokupa_ops.scheduler_config(singleton) values(true) on conflict(singleton) do nothing;
 create table if not exists sokupa_ops.dispatches(
-  id uuid primary key,slot timestamptz not null unique,request_id bigint unique,
+  id uuid primary key,slot timestamptz not null unique,request_id bigint,
   expires_at timestamptz not null,response_deadline timestamptz not null,
   status text not null default 'pending',http_status integer,checked_at timestamptz
 );
+-- pg_net's UNLOGGED sequence can restart after a crash. A request ID is not globally unique.
+alter table sokupa_ops.dispatches drop constraint if exists dispatches_request_id_key;
+create index if not exists dispatches_request_lookup on sokupa_ops.dispatches(request_id);
 alter table sokupa_ops.scheduler_config enable row level security;
 alter table sokupa_ops.dispatches enable row level security;
 revoke all on all tables in schema sokupa_ops from public,anon,authenticated,service_role;
+
+-- pg_net ships broad default table grants. This candidate must not activate on those defaults.
+-- Do not revoke a shared production extension here; its owner must review other consumers first.
+create or replace function sokupa_ops.extensions_private()
+returns boolean language sql stable security invoker set search_path='' as $$
+  select not exists(
+    select 1 from unnest(array['anon','authenticated','service_role']) r
+    cross join unnest(array['net.http_request_queue','net._http_response','vault.secrets','vault.decrypted_secrets']) t
+    where to_regclass(t) is null
+      or coalesce(has_table_privilege(r,to_regclass(t),'SELECT,INSERT,UPDATE,DELETE,TRUNCATE'),true)
+      or coalesce(has_any_column_privilege(r,to_regclass(t),'SELECT,INSERT,UPDATE'),true)
+  );
+$$;
 
 -- The scheduled DB owner invokes this fixed wrapper. No URL/key/header parameters or general proxy.
 create or replace function sokupa_ops.enqueue_dispatch()
@@ -25,6 +47,7 @@ declare c sokupa_ops.scheduler_config%rowtype;v_id uuid:=gen_random_uuid();v_slo
 begin
   select * into c from sokupa_ops.scheduler_config where singleton for update;
   if not c.enabled then return null; end if;
+  if not sokupa_ops.extensions_private() then raise exception 'scheduler_extension_permissions_open'; end if;
   if c.origin is null or c.secret_id is null then raise exception 'scheduler_not_configured'; end if;
   if (select count(*) from sokupa_ops.dispatches where status='pending')>=8 then perform public.fail_analysis_transport('queue_saturated');return null; end if;
   v_slot:=date_trunc('minute',clock_timestamp());
@@ -82,10 +105,14 @@ end $$;
 
 create or replace function sokupa_ops.scheduler_config_changed()
 returns trigger language plpgsql security invoker set search_path='' as $$
-begin perform public.configure_analysis_transport(new.enabled);return new;end $$;
+begin
+  if new.enabled and not sokupa_ops.extensions_private() then raise exception 'scheduler_extension_permissions_open'; end if;
+  perform public.configure_analysis_transport(new.enabled);return new;
+end $$;
 drop trigger if exists scheduler_config_changed on sokupa_ops.scheduler_config;
 create trigger scheduler_config_changed after update of enabled,origin,secret_id,expect_processing on sokupa_ops.scheduler_config for each row execute function sokupa_ops.scheduler_config_changed();
 -- Reapplying upgrades the older template without copying keys or accepting its previous successes.
+update sokupa_ops.scheduler_config set enabled=false where enabled and not sokupa_ops.extensions_private();
 select public.configure_analysis_transport(enabled) from sokupa_ops.scheduler_config where singleton;
 revoke all on all functions in schema sokupa_ops from public,anon,authenticated,service_role;
 commit;

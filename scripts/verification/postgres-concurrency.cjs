@@ -125,12 +125,23 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
   check(consumed.filter(r=>r.ok).length===1,'8 signed request replays consume the nonce once');
   check((await service('select claim_analysis_dispatch(gen_random_uuid(),$1,$2) ok',[Number(now)-121,Number(now)-1]))[0].ok===false,'expired signed requests cannot be consumed');
   await admin.query(`create schema extensions;create extension pgcrypto with schema extensions;
-    create schema vault;create table vault.test_keys(id uuid primary key,value text);create view vault.decrypted_secrets as select id,value decrypted_secret from vault.test_keys;
+    create schema vault;create table vault.test_keys(id uuid primary key,value text);create view vault.decrypted_secrets as select id,value decrypted_secret from vault.test_keys;create table vault.secrets(id uuid);
     create schema net;create table net.fixture_requests(id bigserial primary key,url text,headers jsonb,timeout_milliseconds integer);
+    create table net.http_request_queue(id bigint);
     create table net._http_response(id bigint,status_code integer,content_type text,headers jsonb,content text,timed_out boolean,error_msg text,created timestamptz default now());
     create function net.http_get(url text,params jsonb default '{}',headers jsonb default '{}',timeout_milliseconds integer default 5000) returns bigint language sql as $$insert into net.fixture_requests(url,headers,timeout_milliseconds) values($1,$3,$4) returning id$$;`);
   await admin.query(fs.readFileSync('ops/cron/supabase-dispatch.example.sql','utf8'));
+  for(const origin of ['http://worker.example.test','https://worker.example.test/path','https://worker.example.test?query=1','https://worker.example.test:0','https://worker.example.test:65536']){
+    await assert.rejects(admin.query('update sokupa_ops.scheduler_config set origin=$1',[origin]),/scheduler_config_origin_check/);checks++;
+  }
+  await admin.query('begin');await admin.query("update sokupa_ops.scheduler_config set origin='https://worker.example.test:18443'");
+  check((await row('select origin from sokupa_ops.scheduler_config')).origin==='https://worker.example.test:18443','fixed HTTPS origin accepts an explicit valid non-root test port');
+  await admin.query('rollback');
   check((await row('select sokupa_ops.enqueue_dispatch() id')).id===null,'candidate scheduler starts disabled');
+  check((await row('select sokupa_ops.extensions_private() ok')).ok,'candidate checks private extension tables before activation');
+  await admin.query('grant select on net.http_request_queue to public');
+  await assert.rejects(admin.query('update sokupa_ops.scheduler_config set enabled=true'),/scheduler_extension_permissions_open/);checks++;
+  await admin.query('revoke select on net.http_request_queue from public');
   await service('select clear_analysis_provider_block()');await primeWorkerHealth(admin.query.bind(admin));
   check((await row('select analysis_background_ready() ready')).ready,'control: fresh worker health is ready before selecting transport');
   const fixtureKey='synthetic-fixture-only-key-00000000000000',keyId=(await row('insert into vault.test_keys values(gen_random_uuid(),$1) returning id',[fixtureKey])).id;
@@ -167,6 +178,15 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
     await prove((await row('select sokupa_ops.enqueue_dispatch() id')).id);
     check((await row('select analysis_background_ready() ready')).ready,'two fresh verified transport responses restore intake');
   };
+  await warm();
+  const reused=(await row('select request_id from sokupa_ops.dispatches order by slot desc limit 1')).request_id;
+  await admin.query("update sokupa_ops.dispatches set slot=slot-interval '2 minutes';delete from net.fixture_requests;delete from net._http_response");
+  await admin.query("select setval(pg_get_serial_sequence('net.fixture_requests','id'),$1,false)",[reused]);
+  const reusedRequest=(await row('select sokupa_ops.enqueue_dispatch() id')).id;
+  check(reusedRequest===reused,'a restarted pg_net sequence may reuse an old request ID');
+  check((await row('select count(*)::int n from sokupa_ops.dispatches where request_id=$1',[reused])).n===2,'durable dispatch UUIDs permit request-ID reuse without enqueue failure');
+  await prove(reusedRequest);
+  check((await row('select status from sokupa_ops.dispatches order by slot desc limit 1')).status==='succeeded','matching nonce and actual tick select the new dispatch after request-ID reuse');
   for(const [status,type,content,timeout,error,expected] of [
     [200,'text/html','<html>Login</html>',false,null,'invalid_response'],
     [200,'application/json','{bad JSON',false,null,'invalid_response'],
