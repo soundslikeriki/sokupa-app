@@ -9,7 +9,7 @@ export const maxDuration = 300;
 export async function GET(req: NextRequest) {
   const auth = await authorize(req);
   if (auth.error) return auth.error;
-  const { data, error } = await auth.admin.from("analysis_jobs").select("id,status,client_result_seen_at")
+  const { data, error } = await auth.admin.from("analysis_jobs").select("id,status,client_result_seen_at,site_name,notification_status")
     .eq("line_user_id", auth.lineUserId)
     .or("status.in.(queued,running),client_result_seen_at.is.null,and(status.eq.done,notification_status.in.(pending,failed))")
     .order("client_result_seen_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false }).limit(10);

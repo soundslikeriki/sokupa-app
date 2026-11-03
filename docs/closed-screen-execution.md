@@ -1,5 +1,7 @@
 # 画面を閉じたまま処理する方式
 
+> 通知待ちと新規解析の分離は [review11-notification-analysis-separation.md](./review11-notification-analysis-separation.md) を参照。done後の通知failedは次の解析をロックしない。
+
 > 端末に別の編集がある場合の復元は [下書きの選択・退避・復元](./review10-cross-job-draft-protection.md) に従う。旧形式のOCR内容一致だけでジョブへ自動紐付けしない。
 
 > 最新の4件修正と公開wakeのRPC消費評価は [review9-locks-drafts-and-abuse.md](./review9-locks-drafts-and-abuse.md)。追加migrationでロック順・待機後の時計・2回復帰を修正し、下書きにjob対応を保存する。

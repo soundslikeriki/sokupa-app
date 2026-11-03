@@ -18,6 +18,7 @@ import {
   updateOrderDraftItem,
 } from "@/lib/order-draft";
 import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, listWorkspaceArchives, switchWorkspaceDraft, type WorkspaceArchive, type WorkspaceDraft } from "@/lib/workspace-draft";
+import { notificationRetryable, analysisBlocksIntake, mergeNotificationWatch, forgetJobPointerIfMatches, needsAnalysisRestoration, type NotificationWatch } from "@/lib/notification-watch";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import { compressImageForUpload, convertAndResizeForPreview } from "@/lib/resizeImage";
 
@@ -154,8 +155,20 @@ export default function HomePageClient() {
   const [parsed, setParsed] = useState<ParsedMemoPayload | null>(null);
   const [originalParsed, setOriginalParsed] = useState<ParsedMemoPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [jobAccepted, setJobAccepted] = useState<{ jobId: string; backgroundReady: boolean } | null>(null);
+  const [jobAccepted, setJobAccepted] = useState<{ jobId: string; backgroundReady: boolean; status?: string } | null>(null);
+  const analysisSelectionVersionRef = useRef(0);
   const appliedJobRef = useRef<string | null>(null);
+  const [notificationWatches, setNotificationWatches] = useState<NotificationWatch[]>([]);
+  const notificationWatchesRef = useRef<NotificationWatch[]>([]);
+  const notificationRetryAtRef = useRef<Record<string, number>>({});
+  const kickNotificationPollRef = useRef<(() => void) | null>(null);
+  const rememberNotification = useCallback((watch: NotificationWatch) => {
+    const next = mergeNotificationWatch(notificationWatchesRef.current, watch);
+    notificationWatchesRef.current = next; setNotificationWatches(next);
+  }, []);
+  const trackNotification = useCallback((watch: NotificationWatch) => {
+    rememberNotification(watch); kickNotificationPollRef.current?.();
+  }, [rememberNotification]);
   const restoredDraftRef = useRef<WorkspaceDraft | null>(null);
   const currentWorkspaceRef = useRef<WorkspaceDraft | null>(null);
   const persistedWorkspaceRef = useRef<string | null>(null);
@@ -339,6 +352,7 @@ export default function HomePageClient() {
       attempt = { snapshot, expected, next: nextRaw, suffix: `${Date.now()}-${crypto.randomUUID()}` }; switchAttemptRef.current = attempt;
     }
     const switched = switchWorkspaceDraft(localStorage, key, expected, current, next, attempt.suffix);
+    analysisSelectionVersionRef.current++;
     persistedWorkspaceRef.current = switched.raw; currentWorkspaceRef.current = next;
     appliedJobRef.current = next.parsed ? next.resultJobId ?? null : null; restoredDraftRef.current = next;
     setSiteName(next.siteName); setParsed(next.parsed); setOriginalParsed(next.originalParsed ?? next.parsed);
@@ -355,7 +369,7 @@ export default function HomePageClient() {
       safelySwitchWorkspace({ ...current, siteName: pending.siteName ?? "", parsed: pending.result, originalParsed: pending.result, resultJobId: pending.jobId });
       appliedJobRef.current = pending.jobId; restoredDraftRef.current = null;
       pendingJobResultRef.current = null; setPendingJobResult(null); setResultChoiceDeferred(false);
-      setJobAccepted({ jobId: pending.jobId, backgroundReady: pending.backgroundReady });
+      setJobAccepted({ jobId: pending.jobId, backgroundReady: pending.backgroundReady, status: "done" });
       try { localStorage.setItem(`sokupa:lastJobId:${lineUserId}`, pending.jobId); } catch { /* The saved workspace and server discovery remain available. */ }
     } catch (error) { setError(`今の下書きを保持しています。退避・切替できませんでした。 ${getErrorDetail(error)}`); }
   };
@@ -441,9 +455,10 @@ export default function HomePageClient() {
   }, []);
 
   const handleAnalyze = async () => {
-    if (!draftReady || jobAccepted) return;
+    if (!draftReady || analysisBlocksIntake(jobAccepted)) return;
     if (isAnalyzing) return;
     if (readyImages.length === 0) return;
+    analysisSelectionVersionRef.current++;
     setIsAnalyzing(true);
     setError(null);
     setProgress({ done: 0, total: readyImages.length });
@@ -525,7 +540,7 @@ export default function HomePageClient() {
         setParsed(null); setOriginalParsed(null); setResultJobId(null);
         appliedJobRef.current = null; restoredDraftRef.current = null;
       }
-      setJobAccepted({ jobId: String(createJson.job_id), backgroundReady: createJson.background_ready === true && ["scheduled", "scheduled-wake"].includes(createJson.execution_mode) });
+      setJobAccepted({ jobId: String(createJson.job_id), backgroundReady: createJson.background_ready === true && ["scheduled", "scheduled-wake"].includes(createJson.execution_mode), status: "queued" });
       try {
         localStorage.setItem(`sokupa:lastJobId:${lineUserId}`, String(createJson.job_id));
       } catch {
@@ -543,37 +558,85 @@ export default function HomePageClient() {
   // The server remains authoritative when localStorage is blocked, full or cleared.
   useEffect(() => {
     if (!draftReady || !lineUserId) return;
+    const selectionVersion = analysisSelectionVersionRef.current;
     let cancelled = false;
     void (async () => {
       let last: string | null = null;
       try { last = localStorage.getItem(`sokupa:lastJobId:${lineUserId}`) || localStorage.getItem("sokupa:lastJobId"); } catch { /* Recover from the server. */ }
       try {
+        let pointedJob = false;
         if (last) {
           const { data } = await fetchAnalysisJob(last);
-          if (data && !cancelled) { setJobAccepted({ jobId: last, backgroundReady: data.background_ready === true }); return; }
+          if (data && !cancelled) {
+            pointedJob = needsAnalysisRestoration(data, Boolean(currentWorkspaceRef.current?.parsed), true);
+            if (pointedJob && selectionVersion === analysisSelectionVersionRef.current) setJobAccepted((current) => current ?? { jobId: last!, backgroundReady: data.background_ready === true, status: data.status });
+            if (data.status === "done" && notificationRetryable(data.notification_status)) trackNotification({ jobId: last, siteName: data.site_name ?? null, status: data.notification_status });
+          }
         }
         const response = await fetch("/api/analysis-jobs", { cache: "no-store" });
         const payload = await response.json();
         if (!response.ok) throw new Error("前回の解析を確認できませんでした。通信の回復後に再読込してください。");
-        const found = Array.isArray(payload.data) ? payload.data[0] : null;
-        if (found?.id && !cancelled) setJobAccepted({ jobId: found.id, backgroundReady: false });
-      } catch { if (!cancelled) setError("前回の解析を確認できませんでした。通信の回復後に再読込してください。"); }
+        const jobs = Array.isArray(payload.data) ? payload.data : [];
+        if (cancelled) return;
+        for (const job of jobs) if (job.status === "done" && notificationRetryable(job.notification_status)) trackNotification({ jobId: job.id, siteName: job.site_name ?? null, status: job.notification_status });
+        const found = jobs.find((job: { status: string; client_result_seen_at?: string | null }) => needsAnalysisRestoration(job, Boolean(currentWorkspaceRef.current?.parsed)));
+        if (!pointedJob && found?.id && selectionVersion === analysisSelectionVersionRef.current) setJobAccepted((current) => current ?? { jobId: found.id, backgroundReady: false, status: found.status });
+      } catch { if (!cancelled && selectionVersion === analysisSelectionVersionRef.current) setError("前回の解析を確認できませんでした。通信の回復後に再読込してください。"); }
     })();
     return () => { cancelled = true; };
-  }, [draftReady, lineUserId]);
+  }, [draftReady, lineUserId, trackNotification]);
 
-  // Results remain usable while notification retries are monitored independently.
+  // Notification-only reads/retries never apply results, switch drafts or lock the next analysis.
+  useEffect(() => {
+    if (!draftReady || !lineUserId) return;
+    let cancelled = false, polling = false;
+    const pollOnce = async () => {
+      const pending = notificationWatchesRef.current.filter((watch) => notificationRetryable(watch.status));
+      for (const watch of pending) {
+        try {
+          const { data, error: fetchError } = await fetchAnalysisJob(watch.jobId);
+          if (cancelled) return;
+          if (fetchError || !data || data.status !== "done") {
+            rememberNotification({ ...watch, error: "通知状態を取得できません。通信の回復後に再確認します。" }); continue;
+          }
+          const status = data.notification_status ?? watch.status;
+          rememberNotification({ jobId: watch.jobId, siteName: data.site_name ?? watch.siteName, status, error: null });
+          if (!notificationRetryable(status)) {
+            delete notificationRetryAtRef.current[watch.jobId];
+            try {
+              const saved = persistedWorkspaceRef.current ? readWorkspaceDraft(persistedWorkspaceRef.current) : null;
+              if (data.client_result_seen_at || (saved?.parsed && saved.resultJobId === watch.jobId)) forgetJobPointerIfMatches(localStorage, lineUserId, watch.jobId);
+            } catch { /* Discovery and server notification state remain authoritative. */ }
+          } else if (data.can_resume && Date.now() >= (notificationRetryAtRef.current[watch.jobId] ?? 0)) {
+            notificationRetryAtRef.current[watch.jobId] = Date.now() + 30_000;
+            const response = await fetch(`/api/analysis-jobs/${encodeURIComponent(watch.jobId)}/resume`, { method: "POST" });
+            if (cancelled) return;
+            if (!response.ok) rememberNotification({ jobId: watch.jobId, siteName: data.site_name ?? watch.siteName, status, error: "LINE通知は通信の回復後に再確認します。" });
+          }
+        } catch { if (!cancelled) rememberNotification({ ...watch, error: "LINE通知は通信の回復後に再確認します。" }); }
+      }
+    };
+    const poll = () => {
+      if (polling) return; polling = true;
+      void pollOnce().finally(() => { polling = false; });
+    };
+    kickNotificationPollRef.current = poll; poll();
+    const timer = window.setInterval(poll, 5000);
+    return () => { cancelled = true; window.clearInterval(timer); if (kickNotificationPollRef.current === poll) kickNotificationPollRef.current = null; };
+  }, [draftReady, lineUserId, rememberNotification]);
+
+  // Restore the selected result; completed work hands notifications to the watcher above.
   useEffect(() => {
     if (!jobAccepted?.jobId) return;
-    const jobId = jobAccepted.jobId;
+    const jobId = jobAccepted.jobId, selectionVersion = analysisSelectionVersionRef.current;
     let cancelled = false, polling = false, nextResumeAt = 0;
     const forgetPointer = () => {
-      try { localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`); localStorage.removeItem("sokupa:lastJobId"); } catch { /* Server discovery survives this failure. */ }
+      try { if (lineUserId) forgetJobPointerIfMatches(localStorage, lineUserId, jobId); } catch { /* Server discovery survives this failure. */ }
     };
     const pollOnce = async () => {
       const { data, error: qErr } = await fetchAnalysisJob(jobId);
-      if (cancelled || qErr || !data) return;
-      setJobAccepted((current) => current?.jobId === jobId ? { ...current, backgroundReady: data.background_ready === true } : current);
+      if (cancelled || qErr || !data || selectionVersion !== analysisSelectionVersionRef.current) return;
+      setJobAccepted((current) => current?.jobId === jobId ? { ...current, backgroundReady: data.background_ready === true, status: data.status } : current);
       const status = (data.status as "queued" | "running" | "done" | "failed") || "queued";
       const done = Number(data.done_images) || 0, total = Math.max(1, Number(data.total_images) || 1);
       setJobUi({ status, done, total, percent: Math.min(100, Math.max(0, Math.round(done / total * 100))), notificationStatus: data.notification_status });
@@ -592,30 +655,34 @@ export default function HomePageClient() {
           }
         }
       }
-      if (data.can_resume && Date.now() >= nextResumeAt) {
+      if (status === "done" && data.result) {
+        if (notificationRetryable(data.notification_status)) trackNotification({ jobId, siteName: data.site_name ?? null, status: data.notification_status });
+        else {
+          if (["uncertain", "legacy_unknown"].includes(data.notification_status)) rememberNotification({ jobId, siteName: data.site_name ?? null, status: data.notification_status });
+          if (appliedJobRef.current === jobId) forgetPointer();
+        }
+        setJobAccepted((current) => current?.jobId === jobId ? null : current); setJobUi(null);
+        return;
+      }
+      if (data.can_resume && status !== "done" && Date.now() >= nextResumeAt) {
         nextResumeAt = Date.now() + 30_000;
         const resumed = await fetch(`/api/analysis-jobs/${encodeURIComponent(jobId)}/resume`, { method: "POST" });
-        if (cancelled) return;
-        if (!resumed.ok) setError(status === "done" ? "解析は完了しました。LINE通知は通信の回復後に再確認します。" : "解析を再開できませんでした。通信の回復後に再度確認します。");
+        if (cancelled || selectionVersion !== analysisSelectionVersionRef.current) return;
+        if (!resumed.ok) setError("解析を再開できませんでした。通信の回復後に再度確認します。");
       }
       if (status === "failed") {
         setError(String(data.error || "解析に失敗しました"));
         void fetch(`/api/analysis-jobs/${encodeURIComponent(jobId)}/seen`, { method: "POST" }).catch(() => undefined);
-        setJobAccepted(null); setJobUi(null); forgetPointer();
-      } else if (status === "done" && data.result && !["pending", "failed"].includes(data.notification_status)) {
-        if (data.notification_status === "accepted") setError((current) => current === "解析は完了しました。LINE通知は通信の回復後に再確認します。" ? null : current);
-        if (["uncertain", "legacy_unknown"].includes(data.notification_status)) setError("解析は完了しましたが、LINE通知の受付を確認できません。結果はこの画面で確認できます。");
-        setJobAccepted(null); setJobUi(null);
-        if (appliedJobRef.current === jobId) forgetPointer();
+        setJobAccepted((current) => current?.jobId === jobId ? null : current); setJobUi(null); forgetPointer();
       } else if (status === "done" && !data.result) setError("解析結果を取得できませんでした。保存された仕事を再確認しています。");
     };
     const poll = () => {
       if (polling) return; polling = true;
-      void pollOnce().catch(() => { if (!cancelled) setError("結果を取得できません。通信の回復後に再確認します。"); }).finally(() => { polling = false; });
+      void pollOnce().catch(() => { if (!cancelled && selectionVersion === analysisSelectionVersionRef.current) setError("結果を取得できません。通信の回復後に再確認します。"); }).finally(() => { polling = false; });
     };
     poll(); const timer = window.setInterval(poll, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [jobAccepted?.jobId, lineUserId]);
+  }, [jobAccepted?.jobId, lineUserId, rememberNotification, trackNotification]);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-2 py-8 sm:gap-8 sm:px-4 sm:py-10 md:px-6 lg:px-8">
@@ -817,7 +884,7 @@ export default function HomePageClient() {
         <Button
           type="button"
           onClick={() => void handleAnalyze()}
-          disabled={!draftReady || Boolean(jobAccepted) || images.length === 0 || images.some((i) => i.status !== "ready") || isAnalyzing}
+          disabled={!draftReady || analysisBlocksIntake(jobAccepted) || images.length === 0 || images.some((i) => i.status !== "ready") || isAnalyzing}
           className="w-full py-6 text-base sm:text-lg"
         >
           {isAnalyzing ? (
@@ -843,6 +910,21 @@ export default function HomePageClient() {
           </a>
         </p>
       </div>
+
+      {notificationWatches.length ? (
+        <Card>
+          <CardHeader className="space-y-3">
+            <CardTitle className="text-base">LINE通知</CardTitle>
+            {notificationWatches.some((watch) => notificationRetryable(watch.status)) ? <CardDescription>LINE通知を再確認しています。解析結果は利用でき、新しい解析も開始できます。</CardDescription> : null}
+            {notificationWatches.map((watch) => (
+              <div key={watch.jobId} className="rounded border p-3 text-sm" aria-label={`${watch.siteName || "現場名なし"}の通知状態`}>
+                <p className="font-medium">{watch.siteName || "現場名なし"}: {notificationRetryable(watch.status) ? "通知を再確認中" : watch.status === "accepted" ? "LINE受付済み" : "通知状況は要確認"}</p>
+                {watch.error ? <p className="mt-1 text-muted-foreground">{watch.error}</p> : null}
+              </div>
+            ))}
+          </CardHeader>
+        </Card>
+      ) : null}
 
       {pendingJobResult ? (
         <Card className="border-amber-500/50">
@@ -930,9 +1012,9 @@ export default function HomePageClient() {
       {jobAccepted ? (
         <Card className="border-emerald-500/30 bg-emerald-500/10">
           <CardHeader>
-            <CardTitle className="text-base">{jobUi?.status === "done" ? "解析が完了しました" : "解析を受け付けました"}</CardTitle>
+            <CardTitle className="text-base">{jobAccepted.status === "done" || jobUi?.status === "done" ? "解析が完了しました" : "解析を受け付けました"}</CardTitle>
             <CardDescription>
-              {jobUi?.status === "done" ? pendingJobResult?.jobId === jobAccepted.jobId ? "別の解析結果は保存されています。切替方法を選べます。LINE通知も再確認しています。" : "LINE通知を再確認しています。解析結果はこの画面で利用できます。" : jobAccepted.backgroundReady ? "サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。" : "解析は保存されています。サーバーの処理再開を待っています。画面を閉じてもデータは失われません。"}
+              {jobAccepted.status === "done" && !jobUi ? "結果を確認しています。新しい解析も開始できます。" : jobUi?.status === "done" ? pendingJobResult?.jobId === jobAccepted.jobId ? "別の解析結果は保存されています。切替方法を選べます。LINE通知も再確認しています。" : "LINE通知を再確認しています。解析結果はこの画面で利用できます。" : jobAccepted.backgroundReady ? "サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。" : "解析は保存されています。サーバーの処理再開を待っています。画面を閉じてもデータは失われません。"}
               {jobUi ? (
                 <span className="mt-2 block font-semibold text-emerald-800/90 dark:text-emerald-200">
                   {jobUi.percent}% 完了（{jobUi.done}/{jobUi.total}）

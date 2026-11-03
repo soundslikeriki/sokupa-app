@@ -25,6 +25,7 @@ test("discovery and receipt are owner-scoped; a job uses its own mode and curren
     }
     if (url.searchParams.has("id")) return json({ id, status: "running", execution_mode: jobMode, analysis_job_images: [] });
     assert.equal(url.searchParams.get("limit"), "10"); assert.ok(url.searchParams.get("or")?.includes("client_result_seen_at.is.null"));
+    assert.ok(url.searchParams.get("select")?.includes("notification_status")); assert.ok(url.searchParams.get("select")?.includes("site_name"));
     return listFailure ? json({ message: "Synthetic outage" }, 503) : json([{ id, status: "running", client_result_seen_at: null }]);
   };
   try {

@@ -1,5 +1,7 @@
 # 既存URLへ公開するための最短の安全な手順
 
+> 通知待ちと新規解析の分離は [review11-notification-analysis-separation.md](./review11-notification-analysis-separation.md) を参照。done後の通知failedは次の解析をロックしない。
+
 > 端末に別の編集がある場合の復元は [下書きの選択・退避・復元](./review10-cross-job-draft-protection.md) に従う。旧形式のOCR内容一致だけでジョブへ自動紐付けしない。
 
 > 5219a43の独立レビュー4件への追加修正は [時刻・ロック・下書き・公開入口の評価](./review9-locks-drafts-and-abuse.md) を参照。適用済みwake版からの移行は旧制御処理をdrainする。
@@ -28,13 +30,13 @@
 | 本番バックアップ | 既存DB接続を安全に用意し、全アプリschema／役割／履歴とStorage metadata・全実byteを保護保存・検査 | 本番export未実施。[具体的保全計画](./production-backup-plan.md) |
 | 実環境の互換性 | 実Vercel入口・Function寿命、署名OAuth・同一ID・admin、本人iPhone/PWAの閉画面処理と通知を確認 | read-only CLI APIでFluid=true。Vercel上の新方式・実LINE・実機は未確認 |
 | 実サービスの試験 | エージェント代行なら本人宛先・画像枚数・通知回数・費用上限を確認。本人のiPhone操作も選べる | 実AI・LINE送信0。代行範囲は未承認 |
-| 独立レビュー | 最新wake・復元・通知修正の差分をレビュー | 5a3140a以後の差分は未レビュー |
+| 独立レビュー | 最新wake・復元・通知修正の差分をレビュー | cdbf5c1の下書き保全は独立確認済み。今回の通知分離差分は再レビュー待ち |
 
 Supabaseはnet表のプロジェクト別grant／RLS変更をサポートしないと明記している。制約を受け入れ、ネットワークへcredentialを載せない設計にした。公開HTTP204だけではhealthyにならず、private worker完了2回を必要とする。[公式制約](https://supabase.com/kb/troubleshooting/database-roles-can-read-request-headers-queued-by-pg_net)
 
 ## バックアップと復旧の準備
 
-最新の合成予行は全アプリ／運用21表＋Storage 11ファイルを対象とし、実pg_dump・別DBへの実pg_restore、全byteの別private bucket復元が成功した。14項目で行・ID・通知・方針・関数・RLS・table／column ACL・SHA256を検査した。試験コピー・DB・bucketを削除し、Cron定義0とstack停止を確認した。
+最新の合成予行は全アプリ／運用21表＋Storage 13ファイルを対象とし、実pg_dump・別DBへの実pg_restore、全byteの別private bucket復元が成功した。14項目で行・ID・通知・方針・関数・RLS・table／column ACL・SHA256を検査した。試験コピー・DB・bucketを削除し、Cron定義0とstack停止を確認した。
 
 本番のAuth／Vault／platform全体やStorage IDの別project完全移植までは実証していない。現本番のバックアップは未取得。[対象の棚卸し、取得・検査・復旧の具体手順](./production-backup-plan.md) に従う。passwordをチャット・引数へ載せず、パスワードresetや有料接続add-onを無断追加しない。
 
