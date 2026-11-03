@@ -160,6 +160,7 @@ export default function HomePageClient() {
   const [jobAccepted, setJobAccepted] = useState<{ jobId: string; backgroundReady: boolean; status?: string } | null>(null);
   const analysisSelectionVersionRef = useRef(0);
   const [analysisRecoveryEpoch, setAnalysisRecoveryEpoch] = useState(0);
+  const [explicitSelectionEpoch, setExplicitSelectionEpoch] = useState(0);
   const appliedJobRef = useRef<string | null>(null);
   const [notificationWatches, setNotificationWatches] = useState<NotificationWatch[]>([]);
   const notificationWatchesRef = useRef<NotificationWatch[]>([]);
@@ -724,7 +725,7 @@ export default function HomePageClient() {
     };
     poll(); const timer = window.setInterval(poll, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [jobAccepted?.jobId, lineUserId, rememberNotification, trackNotification, analysisRecoveryEpoch]);
+  }, [jobAccepted?.jobId, lineUserId, rememberNotification, trackNotification, analysisRecoveryEpoch, explicitSelectionEpoch]);
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-2 py-8 sm:gap-8 sm:px-4 sm:py-10 md:px-6 lg:px-8">
@@ -1004,7 +1005,7 @@ export default function HomePageClient() {
               <Button type="button" variant="outline" disabled={isAnalyzing || analysisBlocksIntake(jobAccepted)} aria-label={`保存済み「${job.site_name || "現場名なし"}」の結果を確認`} onClick={() => {
                 analysisSelectionVersionRef.current++; setJobUi(null); setError(null);
                 setJobAccepted({ jobId: job.id, backgroundReady: false, status: "done" });
-                setAnalysisRecoveryEpoch((current) => current + 1);
+                setExplicitSelectionEpoch((current) => current + 1);
               }}>結果を確認</Button>
             </div>
           ))}
