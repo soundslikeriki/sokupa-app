@@ -6,6 +6,7 @@ export type WorkspaceDraft = {
   parsed: ParsedMemoPayload | null;
   originalParsed?: ParsedMemoPayload | null;
   orderDraftItems: OrderDraftItem[];
+  resultJobId?: string | null;
 };
 const object = (value: unknown): value is Record<string, any> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const number = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -26,11 +27,22 @@ export function readWorkspaceDraft(text: string): WorkspaceDraft {
   if (text.length > 4_000_000) throw new Error("保存した下書きが大きすぎます。端末内のデータは保持しています。");
   const value: unknown = JSON.parse(text);
   if (!object(value) || value.version !== 1 || typeof value.siteName !== "string" || !memo(value.parsed) ||
+      (value.resultJobId != null && (typeof value.resultJobId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.resultJobId))) ||
       (value.originalParsed !== undefined && !memo(value.originalParsed)) || !Array.isArray(value.orderDraftItems) || value.orderDraftItems.length > 1000 ||
       value.orderDraftItems.some((item: unknown) => !object(item) || typeof item.id !== "string" || typeof item.productCode !== "string" || !number(item.quantity) || typeof item.unit !== "string" || typeof item.sourceLabel !== "string" || !["manual", "area", "dimension"].includes(item.sourceType))) {
     throw new Error("保存した下書きを復元できません。端末内のデータは保持しています。");
   }
   return value as WorkspaceDraft;
+}
+
+/** Preserve edits for their own job, including older drafts that saved the identical original result. */
+export function workspaceContainsJobResult(draft: WorkspaceDraft | null, jobId: string, result: ParsedMemoPayload): boolean {
+  if (!draft?.parsed) return false;
+  if (draft.resultJobId) return draft.resultJobId === jobId;
+  if (!draft.originalParsed) return false;
+  const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical)
+    : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, canonical(v)])) : value;
+  return JSON.stringify(canonical(draft.originalParsed)) === JSON.stringify(canonical(result));
 }
 
 export function archiveWorkspaceDraft(storage: Pick<Storage, "getItem" | "setItem">, key: string, raw: string, suffix: string): string {

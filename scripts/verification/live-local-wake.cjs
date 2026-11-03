@@ -26,6 +26,7 @@ const eventRows=()=>fs.existsSync(events)?fs.readFileSync(events,'utf8').trim().
  check((await row("select count(*)::int n from cron.job where jobname like 'sokupa-local-%'")).n===0,'no prior verification Cron is active');
  const userIds=(await db.query('select line_user_id from users order by line_user_id')).rows;
  if(!(await row("select to_regclass('analysis_wake_state') present")).present)await db.query(fs.readFileSync('supabase/migrations/20261103073534_secret_free_wake_permits.sql','utf8'));
+ if(!(await row("select to_regprocedure('public.lock_analysis_wake_state()') present")).present)await db.query(fs.readFileSync('supabase/migrations/20261103083839_wake_lock_and_clock_order.sql','utf8'));
  await db.query('update sokupa_ops.scheduler_config set enabled=false where enabled');
  await db.query(fs.readFileSync('ops/cron/supabase-wake.example.sql','utf8'));
  fs.writeFileSync(mode,'healthy',{mode:0o600});fs.writeFileSync(events,'',{mode:0o600});

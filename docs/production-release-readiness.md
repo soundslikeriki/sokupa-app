@@ -1,5 +1,7 @@
 # 既存URLへ公開するための最短の安全な手順
 
+> 5219a43の独立レビュー4件への追加修正は [時刻・ロック・下書き・公開入口の評価](./review9-locks-drafts-and-abuse.md) を参照。適用済みwake版からの移行は旧制御処理をdrainする。
+
 ユーザー最新方針は「問題なさそうなら、テスト用URLを必須にせず公開する」。公開の包括許可は受領済み。以下は2026-11-03の読取確認と準備結果であり、本番へ変更・配備・秘密生成はしていない。
 
 ## 現在の本番と接続
@@ -39,7 +41,7 @@ Supabaseはnet表のプロジェクト別grant／RLS変更をサポートしな�
 公開許可・Vercel接続・Mac内検証の許可は既にある。Hobbyを維持し、Pro化・有料プロジェクト作成をしない。以下の本番操作はまだ実施していない。
 
 1. 最新差分のレビュー、本番バックアップ検査、必要なSESSION_SECRET 1個の承認と設定を先に行う。固定本番originへの毎分wake設定を個別確認し、本人の閉画面実確認を含む切替・復旧手順を揃える。
-2. 追加migration10本を時刻順に適用し、新コードをdisabledで `deploy --prod --skip-domain` へ用意する。公開ドメインはこの段階で自動切替しない。Phase 2はまだ適用しない。変更前の利用者・無制限一覧と既存ジョブを保護する。
+2. 追加migration11本を時刻順に適用し、新コードをdisabledで `deploy --prod --skip-domain` へ用意する。公開ドメインはこの段階で自動切替しない。Phase 2はまだ適用しない。変更前の利用者・無制限一覧と既存ジョブを保護する。
 3. 切替の短い保守時間内で新APIへドメインを切替し、旧受付を止めて6分以上drainする。旧worker／関連aliasを処理経路に残さない。本人の同じLINEへの再ログイン、admin、NULL招待履歴、既存下書き、本人専用読取を確認する。LINEチャネルとcallbackは保持する。[LINE callback仕様](https://developers.line.biz/en/docs/line-login/integrate-line-login/)
 4. 新API経路と旧worker終了を確認してPhase 2を適用し、匿名DB／Storageアクセスを閉じる。owner読取と匿名拒否、実ファイルの保全を確認する。公開ALLが残る状態で受付を開かない。
 5. 承認後、pg_cron有効化とreview済みwake雛形を適用する。rootの方式をscheduled-wake、originを `https://sokupa-app.vercel.app` に固定。ANALYSIS_WAKE_ENABLED=true、app mode=disabled／expect_processing=falseで空のwarmupを実入口から確認する。root設定・app modeをscheduled-wake／expect_processing=trueへ揃え、reset後の独立したprivate成功2回＋HTTP確認で受付を開く。Cronは毎分1件のreconcile→enqueueだけにする。net／Vault権限やVercel保護bypassを追加しない。

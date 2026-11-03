@@ -1,6 +1,8 @@
 # ソクパ 認証・計算・データ保全の改善
 
-> 2026-11-03最新: 閉画面完了を必須とし、interactive受付を無効化した。[秘密なしwake方式](./closed-screen-execution.md) が現在の候補。追加migrationは10本。以下の旧方式の説明より [本番手順](./production-release-readiness.md) と [保全計画](./production-backup-plan.md) を優先する。本番は未変更。
+> 5219a43の独立レビュー4件への追加修正は [時刻・ロック・下書き・公開入口の評価](./review9-locks-drafts-and-abuse.md) を参照。適用済みwake版からの移行は旧制御処理をdrainする。
+
+> 2026-11-03最新: 閉画面完了を必須とし、interactive受付を無効化した。[秘密なしwake方式](./closed-screen-execution.md) が現在の候補。追加migrationは11本。以下の旧方式の説明より [本番手順](./production-release-readiness.md) と [保全計画](./production-backup-plan.md) を優先する。本番は未変更。
 
 対象コミット: `919379d9e45e367a45d3b6f64b01724a528fe3f2`。
 作業場所: `/Users/rikiharada/Documents/Codex/2026-11-03/task/sokupa-app`、ブランチ `codex/security-reliability`。

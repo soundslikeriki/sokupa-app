@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { NextRequest } from "next/server";
 import { POST } from "../app/api/analysis-jobs/wake/route";
 
-test("public wake responses reveal nothing; only private permits start a batch", async () => {
+test("public wake responses reveal nothing; only private permits start a batch", async (t) => {
+  let now = 0;
+  t.mock.method(performance, "now", () => now);
   const names = ["ANALYSIS_WAKE_ENABLED", "ANALYSIS_BACKGROUND_MODE", "NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
   const saved = names.map((n) => process.env[n]), savedFetch = global.fetch;
   const symbol = Symbol.for("@vercel/request-context"), context = globalThis as unknown as Record<symbol, unknown>, savedContext = context[symbol];
@@ -22,6 +24,7 @@ test("public wake responses reveal nothing; only private permits start a batch",
       return new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
     };
     const signal = async (suffix = "") => {
+      now += 5_001;
       const response = await POST(new NextRequest("https://worker.example.test/api/analysis-jobs/wake" + suffix, { method: "POST", headers: { "x-sokupa-dispatch-id": "attacker-id" }, body: JSON.stringify({ job_id: "other-user-job", permit_id: "forged", claim_token: "forged" }) }));
       assert.equal(response.status, 204); assert.equal(await response.text(), ""); assert.equal(response.headers.get("cache-control"), "no-store");
     };
@@ -41,6 +44,10 @@ test("public wake responses reveal nothing; only private permits start a batch",
     assert.equal(calls.some((x) => x.name === "analysis_worker_tick_complete" && x.body.p_success === false), true);
     calls.length = 0; claimFailure = true;
     await signal(); assert.equal(tasks.length, 0); assert.deepEqual(calls.map((x) => x.name), ["claim_analysis_wake"]);
+    calls.length = 0; claimFailure = false; permitted = false;
+    now += 5_001;
+    await Promise.all(Array.from({ length: 100 }, () => POST(new NextRequest("https://worker.example.test/api/analysis-jobs/wake", { method: "POST" }))));
+    assert.deepEqual(calls.map((x) => x.name), ["claim_analysis_wake"]);
   } finally {
     await Promise.allSettled(tasks); global.fetch = savedFetch; context[symbol] = savedContext;
     names.forEach((n, i) => { if (saved[i] === undefined) delete process.env[n]; else process.env[n] = saved[i]; });

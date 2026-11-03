@@ -30,6 +30,7 @@ for(const version of ['fresh','previous_phase1_applied']){
  await sql(readFileSync('supabase/migrations/20261103070253_interactive_execution_policy.sql','utf8'));
  await sql(readFileSync('supabase/migrations/20261103073534_secret_free_wake_permits.sql','utf8'));
  await sql(readFileSync('supabase/migrations/20261103074834_durable_job_recovery_metadata.sql','utf8'));
+ await sql(readFileSync('supabase/migrations/20261103083839_wake_lock_and_clock_order.sql','utf8'));
  check(JSON.stringify((await db.query('select id from analysis_jobs order by id')).rows)===JSON.stringify(before),'all historic IDs retained');
  for(const id of [old,failed]) check((await row('select notification_status from analysis_jobs where id=$1',[id])).notification_status==='legacy_unknown','unproven old completion quarantined');
  check((await row('select notification_status from analysis_jobs where id=$1',[accepted])).notification_status==='accepted','accepted stays accepted');

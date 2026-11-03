@@ -44,6 +44,7 @@ const {elapseHealthClock,primeWorkerHealth}=require('./worker-health-fixture.cjs
   await sql(readFileSync(resolve('supabase/migrations/20261103070253_interactive_execution_policy.sql'), 'utf8'));
   await sql(readFileSync(resolve('supabase/migrations/20261103073534_secret_free_wake_permits.sql'), 'utf8'));
   await sql(readFileSync(resolve('supabase/migrations/20261103074834_durable_job_recovery_metadata.sql'), 'utf8'));
+  await sql(readFileSync(resolve('supabase/migrations/20261103083839_wake_lock_and_clock_order.sql'), 'utf8'));
   check((await scalar('select public.analysis_processing_secure() as ok')).ok===false,'processing stays disabled while anonymous access is open');
   // Check additive browser compatibility, then close access before testing scheduled intake.
   await sql('set role anon; select * from public.users; reset role'); checks++;

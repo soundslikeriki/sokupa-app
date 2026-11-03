@@ -123,6 +123,7 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
   await admin.query(fs.readFileSync('supabase/migrations/20261103070253_interactive_execution_policy.sql','utf8'));
   await admin.query(fs.readFileSync('supabase/migrations/20261103073534_secret_free_wake_permits.sql','utf8'));
   await admin.query(fs.readFileSync('supabase/migrations/20261103074834_durable_job_recovery_metadata.sql','utf8'));
+  await admin.query(fs.readFileSync('supabase/migrations/20261103083839_wake_lock_and_clock_order.sql','utf8'));
   const dispatchId=(await row('select gen_random_uuid() id')).id,now=(await row('select floor(extract(epoch from now()))::bigint n')).n;
   const consumed=(await Promise.all(Array.from({length:8},()=>service('select claim_analysis_dispatch($1,$2,$3) ok',[dispatchId,now,Number(now)+120])))).flat();
   check(consumed.filter(r=>r.ok).length===1,'8 signed request replays consume the nonce once');
@@ -247,6 +248,7 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
   for(const role of ['anon','authenticated','service_role']){
     await admin.query(`set role ${role}`);await assert.rejects(admin.query('select sokupa_ops.enqueue_dispatch()'),/permission denied/);checks++;await admin.query('reset role');
   }
+  await require('./wake-concurrency-checks.cjs')({admin,pool,service,elapseHealthClock});
   console.log(`PASS: ${coreChecks} real PostgreSQL 17.6 core concurrency checks; Unix socket only; synthetic data.`);
   console.log(`PASS: ${checks-coreChecks} isolated scheduler SQL/crypto checks; pg_net HTTP and Vault are synthetic fixtures, not real services.`);
  }finally{

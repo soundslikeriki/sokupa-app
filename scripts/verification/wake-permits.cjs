@@ -54,7 +54,7 @@ const{setupAnalysisFixture}=require('./analysis-fixture.cjs');const{elapseHealth
   for(const role of ['anon','authenticated','service_role']){
     await db.exec('set role '+role);
     for(const sql of ["select configure_analysis_wake(true,'https://attacker.example.test',true)",'select issue_analysis_wake_permit()',"select observe_analysis_wake(gen_random_uuid(),'accepted')",'insert into analysis_wake_permits(id)values(gen_random_uuid())',"update analysis_wake_state set enabled=true",'delete from analysis_wake_permits']){await assert.rejects(query(sql),/permission denied/);checks++;}
-    if(role!=='service_role')for(const sql of ['select * from analysis_wake_permits','select * from analysis_wake_state',"select * from claim_analysis_wake('https://worker.example.test',true)","select fail_analysis_wake('worker_failed')"]){await assert.rejects(query(sql),/permission denied/);checks++;}
+    if(role!=='service_role')for(const sql of ['select * from analysis_wake_permits','select * from analysis_wake_state',"select * from claim_analysis_wake('https://worker.example.test',true)","select fail_analysis_wake('worker_failed')",'select lock_analysis_wake_state()']){await assert.rejects(query(sql),/permission denied/);checks++;}
     await db.exec('reset role');
   }
   check((await row("select count(*)::int n from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname like '%wake%' and p.prosecdef")).n===0,'no security-definer privilege elevation');

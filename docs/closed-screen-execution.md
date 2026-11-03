@@ -1,5 +1,7 @@
 # 画面を閉じたまま処理する方式
 
+> 最新の4件修正と公開wakeのRPC消費評価は [review9-locks-drafts-and-abuse.md](./review9-locks-drafts-and-abuse.md)。追加migrationでロック順・待機後の時計・2回復帰を修正し、下書きにjob対応を保存する。
+
 2026-11-03。ユーザーの「放置して他の仕事ができる」を必須条件とし、開き直し依存のinteractive方式を公開対象から外した。後続migrationでinteractiveの受付も無効にした。既存LINE ID、招待、NULL招待履歴の既存ユーザー、管理者無制限、端末下書きは維持する。本番は未変更。
 
 ## 実装
