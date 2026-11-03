@@ -1,5 +1,7 @@
 # 既存URLへ公開するための最短の安全な手順
 
+> **更新**: 以下の接続・承認待ち一覧は公開準備の初期記録。後にSESSION_SECRET登録と毎分wakeが個別承認され、DB全体・Storage実ファイルの保全／復元と12本のmigration予行が完了した。現行の切替・復旧手順と互換性の限界は [本番切替と復旧](./release-cutover.md) を優先する。実際の配備結果はリリース記録で確認する。
+
 > 履歴選択の優先順位に関する軽微修正は [review13-explicit-history-priority.md](./review13-explicit-history-priority.md) を参照。
 
 > 保留結果の端末保管・本人履歴と受付失敗後の復元は [review12-deferred-result-recovery.md](./review12-deferred-result-recovery.md) を参照。別端末の確認済み情報で、この端末の保留結果を破棄しない。

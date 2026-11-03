@@ -611,7 +611,9 @@ export default function HomePageClient() {
         if (last) {
           const { data } = await fetchAnalysisJob(last);
           if (data && !cancelled) {
-            pointedJob = needsAnalysisRestoration(data, true);
+            if (data.requires_manual_restart || (data.execution_mode === "legacy" && ["queued", "running"].includes(data.status))) {
+              if (selectionVersion === analysisSelectionVersionRef.current) setError("以前の未完了解析は保存されています。必要な画像を選んで新しく解析してください。");
+            } else pointedJob = needsAnalysisRestoration(data, true);
             if (pointedJob && selectionVersion === analysisSelectionVersionRef.current) setJobAccepted((current) => current ?? { jobId: last!, backgroundReady: data.background_ready === true, status: data.status });
             if (data.status === "done" && notificationRetryable(data.notification_status)) trackNotification({ jobId: last, siteName: data.site_name ?? null, status: data.notification_status });
           }

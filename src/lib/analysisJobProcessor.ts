@@ -70,12 +70,15 @@ export async function processAnalysisJobStep(opts: {
 
   const { data: job, error: jobErr } = await admin
     .from("analysis_jobs")
-    .select("id,status,site_name,line_user_id,context,total_images,done_images,notification_status,notification_protocol,notification_attempted_at,result,failure_kind,error")
+    .select("id,status,execution_mode,site_name,line_user_id,context,total_images,done_images,notification_status,notification_protocol,notification_attempted_at,result,failure_kind,error")
     .eq("id", jobId)
     .maybeSingle();
   if (jobErr || !job) {
     console.error("[analysis-job] job fetch failed", { jobId, jobErr });
     return infrastructureFailure(jobErr?.message || "job not found", "failed");
+  }
+  if (job.execution_mode === "legacy") {
+    return job.status === "done" ? { status: "done" } : { status: "failed", failureKind: "job", error: "旧版の未完了解析は保存しています。必要な画像を選んで新しく解析してください。" };
   }
   if (job.status === "done") {
     try {

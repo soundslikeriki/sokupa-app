@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ data: page, next_before: data && data.length > 20 ? page[page.length - 1].id : null }, { headers: { "Cache-Control": "no-store" } });
   }
   const { data, error } = await auth.admin.from("analysis_jobs").select("id,status,client_result_seen_at,site_name,notification_status")
-    .eq("line_user_id", auth.lineUserId)
+    .eq("line_user_id", auth.lineUserId).neq("execution_mode", "legacy")
     .or("status.in.(queued,running),client_result_seen_at.is.null,and(status.eq.done,notification_status.in.(pending,failed))")
     .order("client_result_seen_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false }).limit(10);
   if (error) return NextResponse.json({ error: "前回の解析を確認できませんでした" }, { status: 503 });

@@ -51,11 +51,11 @@ test("job API uses signed session ownership and hides other users' jobs", async 
     return new Response(JSON.stringify(url.pathname.endsWith("/users") ? { line_user_id: "owner", display_name: "Test" } : null), { status: 200, headers: { "Content-Type": "application/json" } });
   };
   try {
-    const response = await getJob(new NextRequest(`${origin}/api/analysis-jobs/00000000-0000-4000-8000-000000000000`, { headers: { cookie: `${SESSION_COOKIE}=${signToken("session", "owner", 30)}` } }), { params: { id: "00000000-0000-4000-8000-000000000000" } });
+    const response = await getJob(new NextRequest(`${origin}/api/analysis-jobs/00000000-0000-4000-8000-000000000000`, { headers: { cookie: `${SESSION_COOKIE}=${signToken("session", "owner", 30)}` } }), { params: Promise.resolve({ id: "00000000-0000-4000-8000-000000000000" }) });
     assert.equal(response.status, 404);
     assert.equal(calls.length, 2);
     assert.equal(calls[1].searchParams.get("line_user_id"), "eq.owner");
-    const resumed = await resumeJob(new NextRequest(`${origin}/api/analysis-jobs/00000000-0000-4000-8000-000000000000/resume`, { method: "POST", headers: { origin, cookie: `${SESSION_COOKIE}=${signToken("session", "owner", 30)}` } }), { params: { id: "00000000-0000-4000-8000-000000000000" } });
+    const resumed = await resumeJob(new NextRequest(`${origin}/api/analysis-jobs/00000000-0000-4000-8000-000000000000/resume`, { method: "POST", headers: { origin, cookie: `${SESSION_COOKIE}=${signToken("session", "owner", 30)}` } }), { params: Promise.resolve({ id: "00000000-0000-4000-8000-000000000000" }) });
     assert.equal(resumed.status, 404);
     assert.equal(calls[3].searchParams.get("line_user_id"), "eq.owner");
   } finally {

@@ -9,5 +9,7 @@ async function setupAnalysisFixture(db,{skipTransport=false,skipWake=false,skipR
  for(const file of ['supabase/migrations/20261102183016_session_api_expansion.sql','supabase/migrations/20261102190336_analysis_image_leases.sql','supabase/migrations/20261102193554_notification_upgrade_and_worker_health.sql','supabase/migrations/20261102203127_verified_worker_success_ticks.sql','supabase/migrations/20261102205248_provider_failure_recovery.sql','supabase/migrations/20261102210736_signed_scheduler_dispatches.sql',...(skipTransport?[]:['supabase/migrations/20261102213147_scheduler_transport_health.sql','supabase/migrations/20261103070253_interactive_execution_policy.sql',...(skipWake?[]:['supabase/migrations/20261103073534_secret_free_wake_permits.sql'])]),'supabase/rollout/20261102183142_restrict_private_data_access.sql'])await db.exec(readFileSync(file,'utf8'));
  if(!skipTransport&&!skipRecovery)await db.exec(readFileSync('supabase/migrations/20261103074834_durable_job_recovery_metadata.sql','utf8'));
  if(!skipTransport&&!skipWake)await db.exec(readFileSync('supabase/migrations/20261103083839_wake_lock_and_clock_order.sql','utf8'));
+ if(!skipTransport&&!skipRecovery)await db.exec(readFileSync('supabase/migrations/20261103131038_require_explicit_restart_for_legacy_jobs.sql','utf8'));
+ if(!skipTransport&&!skipRecovery)await db.exec("select set_analysis_execution_mode('disabled');select seal_legacy_analysis_jobs();select set_analysis_execution_mode('scheduled');");
 }
 module.exports={setupAnalysisFixture};

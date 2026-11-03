@@ -6,8 +6,8 @@ import { AdminClient } from "./AdminClient";
 
 export const dynamic = "force-dynamic";
 
-export default function AdminPage() {
-  const claims = verifyToken(cookies().get(SESSION_COOKIE)?.value, "session");
+export default async function AdminPage() {
+  const claims = verifyToken((await cookies()).get(SESSION_COOKIE)?.value, "session");
   if (!claims || !isAdmin(claims.subject)) redirect("/api/auth/line");
   return <AdminClient />;
 }

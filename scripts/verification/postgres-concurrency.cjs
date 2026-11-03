@@ -249,6 +249,7 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
     await admin.query(`set role ${role}`);await assert.rejects(admin.query('select sokupa_ops.enqueue_dispatch()'),/permission denied/);checks++;await admin.query('reset role');
   }
   await require('./wake-concurrency-checks.cjs')({admin,pool,service,elapseHealthClock});
+  await require('./legacy-cutover-concurrency.cjs')({admin,pool});
   console.log(`PASS: ${coreChecks} real PostgreSQL 17.6 core concurrency checks; Unix socket only; synthetic data.`);
   console.log(`PASS: ${checks-coreChecks} isolated scheduler SQL/crypto checks; pg_net HTTP and Vault are synthetic fixtures, not real services.`);
  }finally{

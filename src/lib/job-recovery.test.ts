@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { NextRequest } from "next/server";
 import { GET as discover } from "../app/api/analysis-jobs/route";
 import { GET as getJob } from "../app/api/analysis-jobs/[id]/route";
+import { POST as resume } from "../app/api/analysis-jobs/[id]/resume/route";
 import { POST as seen } from "../app/api/analysis-jobs/[id]/seen/route";
 import { signToken, SESSION_COOKIE } from "./session-token";
 
@@ -10,7 +11,7 @@ test("discovery and receipt are owner-scoped; a job uses its own mode and curren
   const names = ["SESSION_SECRET", "NEXT_PUBLIC_SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "ANALYSIS_BACKGROUND_MODE"];
   const saved = names.map((n) => process.env[n]), savedFetch = global.fetch;
   Object.assign(process.env, { SESSION_SECRET: "synthetic-session-only-0000000000000000", NEXT_PUBLIC_SUPABASE_URL: "https://db.example.test", SUPABASE_SERVICE_ROLE_KEY: "synthetic", ANALYSIS_BACKGROUND_MODE: "scheduled-wake" });
-  const id = "00000000-0000-4000-8000-000000000001", params = { params: { id } }, owner = "synthetic-owner";
+  const id = "00000000-0000-4000-8000-000000000001", params = { params: Promise.resolve({ id }) }, owner = "synthetic-owner";
   let listFailure = false, jobMode = "scheduled-wake", healthy = true;
   const req = (path: string, method = "GET") => new NextRequest("https://app.example.test" + path, { method, headers: { origin: "https://app.example.test", cookie: `${SESSION_COOKIE}=${signToken("session", owner, 3600)}` } });
   global.fetch = async (input, init) => {
@@ -25,6 +26,7 @@ test("discovery and receipt are owner-scoped; a job uses its own mode and curren
     }
     if (url.searchParams.has("id")) return json({ id, status: "running", execution_mode: jobMode, analysis_job_images: [] });
     assert.equal(url.searchParams.get("limit"), "10"); assert.ok(url.searchParams.get("or")?.includes("client_result_seen_at.is.null"));
+    assert.equal(url.searchParams.get("execution_mode"), "neq.legacy");
     assert.ok(url.searchParams.get("select")?.includes("notification_status")); assert.ok(url.searchParams.get("select")?.includes("site_name"));
     return listFailure ? json({ message: "Synthetic outage" }, 503) : json([{ id, status: "running", client_result_seen_at: null }]);
   };
@@ -33,6 +35,10 @@ test("discovery and receipt are owner-scoped; a job uses its own mode and curren
     response = await getJob(req("/api/analysis-jobs/" + id), params); assert.equal((await response.json()).data.background_ready, true);
     jobMode = "interactive"; response = await getJob(req("/api/analysis-jobs/" + id), params); assert.equal((await response.json()).data.background_ready, false);
     jobMode = "scheduled-wake"; healthy = false; response = await getJob(req("/api/analysis-jobs/" + id), params); assert.equal((await response.json()).data.background_ready, false);
+    jobMode = "legacy"; response = await getJob(req("/api/analysis-jobs/" + id), params);
+    const legacy = (await response.json()).data; assert.equal(legacy.requires_manual_restart, true); assert.equal(legacy.can_resume, false);
+    assert.equal((await resume(req("/api/analysis-jobs/" + id + "/resume", "POST"), params)).status, 409);
+    jobMode = "scheduled-wake";
     assert.equal((await seen(req("/api/analysis-jobs/" + id + "/seen", "POST"), params)).status, 200);
     listFailure = true; assert.equal((await discover(req("/api/analysis-jobs"))).status, 503);
     assert.equal((await discover(new NextRequest("https://app.example.test/api/analysis-jobs"))).status, 401);

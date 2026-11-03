@@ -1,6 +1,13 @@
 -- Phase 2: APPROVAL REQUIRED. Only after the authenticated client/worker is deployed and verified.
 -- Keeps all rows and LINE IDs. Custom signed sessions use API ownership checks, not Supabase JWTs.
 begin;
+-- Acquire worker/wake/policy before table locks when upgrading a wake-capable installation.
+do $$ begin
+  if to_regprocedure('public.lock_analysis_wake_state()') is not null then
+    perform public.lock_analysis_wake_state();
+    perform 1 from public.analysis_execution_policy where singleton for update;
+  end if;
+end $$;
 do $$
 declare t text; policy record;
 begin
@@ -22,4 +29,8 @@ drop policy if exists "Allow public select from memo_uploads" on storage.objects
 drop policy if exists "Public insert memo_uploads" on storage.objects;
 drop policy if exists "Public update memo_uploads" on storage.objects;
 update storage.buckets set public = false, file_size_limit = 4194304, allowed_mime_types = array['image/jpeg','image/png','image/webp'] where id='memo_uploads';
+-- Idempotent seal runs only after all legacy anonymous ingress above is closed.
+do $$ begin
+  if to_regprocedure('public.seal_legacy_analysis_jobs()') is not null then perform public.seal_legacy_analysis_jobs(); end if;
+end $$;
 commit;
