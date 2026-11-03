@@ -7,7 +7,7 @@ export function verifySchedulerDispatch(req:Request,now=Math.floor(Date.now()/10
   const key=process.env.ANALYSIS_DISPATCH_SECRET,configured=process.env.ANALYSIS_DISPATCH_ORIGIN;
   if(!key||Buffer.byteLength(key)<32||!configured)return null;
   let origin:string,url:URL;
-  try{const target=new URL(configured);if(target.protocol!=="https:"||target.origin!==configured)return null;origin=target.origin;url=new URL(req.url);}catch{return null;}
+  try{const canonical=configured.replace(/:443$/,"");const target=new URL(canonical);if(target.protocol!=="https:"||target.origin!==canonical)return null;origin=target.origin;url=new URL(req.url);}catch{return null;}
   if(req.method!=="GET"||url.origin!==origin||url.pathname!=="/api/analysis-jobs/process"||url.search)return null;
   const id=req.headers.get("x-sokupa-dispatch-id")??"",issued=req.headers.get("x-sokupa-issued-at")??"",expires=req.headers.get("x-sokupa-expires-at")??"",signature=req.headers.get("x-sokupa-signature")??"";
   if(!UUID_PATTERN.test(id)||!/^\d{10}$/.test(issued)||!/^\d{10}$/.test(expires)||!/^[0-9a-f]{64}$/.test(signature))return null;

@@ -51,3 +51,13 @@ test("an explicit HTTPS port is part of the fixed signed origin",()=>{
   assert.equal(verifySchedulerDispatch(new Request(origin+'/api/analysis-jobs/process',{headers}),now),null);
  }finally{['ANALYSIS_DISPATCH_SECRET','ANALYSIS_DISPATCH_ORIGIN'].forEach((name,i)=>{if(saved[i]===undefined)delete process.env[name];else process.env[name]=saved[i];});}
 });
+test("explicit default HTTPS port uses the same canonical origin as SQL",()=>{
+ const saved=[process.env.ANALYSIS_DISPATCH_SECRET,process.env.ANALYSIS_DISPATCH_ORIGIN],now=1793650000;
+ process.env.ANALYSIS_DISPATCH_SECRET=key;process.env.ANALYSIS_DISPATCH_ORIGIN=origin+':443';
+ try{
+  assert.equal(verifySchedulerDispatch(request(now),now)?.id,id);
+  const noncanonical=request(now);noncanonical.headers.set('x-sokupa-signature',createHmac('sha256',key).update(['SOKUPA-DISPATCH-V1','GET',origin+':443','/api/analysis-jobs/process',id,String(now),String(now+120)].join('\n')).digest('hex'));
+  assert.equal(verifySchedulerDispatch(noncanonical,now),null);
+  process.env.ANALYSIS_DISPATCH_ORIGIN=origin+':443/path';assert.equal(verifySchedulerDispatch(request(now),now),null);
+ }finally{['ANALYSIS_DISPATCH_SECRET','ANALYSIS_DISPATCH_ORIGIN'].forEach((name,i)=>{if(saved[i]===undefined)delete process.env[name];else process.env[name]=saved[i];});}
+});

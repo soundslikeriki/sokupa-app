@@ -43,7 +43,7 @@ $$;
 -- The scheduled DB owner invokes this fixed wrapper. No URL/key/header parameters or general proxy.
 create or replace function sokupa_ops.enqueue_dispatch()
 returns bigint language plpgsql security invoker set search_path='' as $$
-declare c sokupa_ops.scheduler_config%rowtype;v_id uuid:=gen_random_uuid();v_slot timestamptz;v_iat bigint;v_exp bigint;v_key text;v_message text;v_headers jsonb;v_request bigint;
+declare c sokupa_ops.scheduler_config%rowtype;v_id uuid:=gen_random_uuid();v_slot timestamptz;v_iat bigint;v_exp bigint;v_key text;v_origin text;v_message text;v_headers jsonb;v_request bigint;
 begin
   select * into c from sokupa_ops.scheduler_config where singleton for update;
   if not c.enabled then return null; end if;
@@ -55,11 +55,12 @@ begin
   select decrypted_secret into v_key from vault.decrypted_secrets where id=c.secret_id;
   if v_key is null or octet_length(v_key)<32 then raise exception 'scheduler_key_unavailable'; end if;
   v_iat:=floor(extract(epoch from clock_timestamp()));v_exp:=v_iat+120;
-  v_message:=concat_ws(E'\n','SOKUPA-DISPATCH-V1','GET',c.origin,'/api/analysis-jobs/process',v_id::text,v_iat::text,v_exp::text);
+  v_origin:=regexp_replace(c.origin,':443$','');
+  v_message:=concat_ws(E'\n','SOKUPA-DISPATCH-V1','GET',v_origin,'/api/analysis-jobs/process',v_id::text,v_iat::text,v_exp::text);
   v_headers:=jsonb_build_object('x-sokupa-dispatch-id',v_id::text,'x-sokupa-issued-at',v_iat::text,'x-sokupa-expires-at',v_exp::text,'x-sokupa-signature',encode(extensions.hmac(v_message,v_key,'sha256'),'hex'));
   perform public.begin_analysis_transport_dispatch(v_id,v_iat,v_exp);
   insert into sokupa_ops.dispatches(id,slot,expires_at,response_deadline) values(v_id,v_slot,to_timestamp(v_exp),clock_timestamp()+interval '450 seconds');
-  v_request:=net.http_get(url:=c.origin||'/api/analysis-jobs/process',headers:=v_headers,timeout_milliseconds:=310000);
+  v_request:=net.http_get(url:=v_origin||'/api/analysis-jobs/process',headers:=v_headers,timeout_milliseconds:=310000);
   update sokupa_ops.dispatches set request_id=v_request where id=v_id;
   return v_request;
 exception when others then

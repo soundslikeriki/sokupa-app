@@ -145,12 +145,13 @@ if(!bin)throw new Error('PG_TEST_BIN must point to an isolated PostgreSQL binary
   await service('select clear_analysis_provider_block()');await primeWorkerHealth(admin.query.bind(admin));
   check((await row('select analysis_background_ready() ready')).ready,'control: fresh worker health is ready before selecting transport');
   const fixtureKey='synthetic-fixture-only-key-00000000000000',keyId=(await row('insert into vault.test_keys values(gen_random_uuid(),$1) returning id',[fixtureKey])).id;
-  await admin.query("update sokupa_ops.scheduler_config set enabled=true,origin='https://worker.example.test',secret_id=$1",[keyId]);
+  await admin.query("update sokupa_ops.scheduler_config set enabled=true,origin='https://worker.example.test:443',secret_id=$1",[keyId]);
   check(!(await row('select analysis_background_ready() ready')).ready,'selecting transport closes intake until proved HTTP successes');
   let requestId=(await row('select sokupa_ops.enqueue_dispatch() id')).id;
   const sent=await row('select * from net.fixture_requests where id=$1',[requestId]),headers=sent.headers;
   const canonical=['SOKUPA-DISPATCH-V1','GET','https://worker.example.test','/api/analysis-jobs/process',headers['x-sokupa-dispatch-id'],headers['x-sokupa-issued-at'],headers['x-sokupa-expires-at']].join('\n');
   check(headers['x-sokupa-signature']===createHmac('sha256',fixtureKey).update(canonical).digest('hex'),'Postgres HMAC matches independent Node verification');
+  check(sent.url==='https://worker.example.test/api/analysis-jobs/process','SQL normalizes the explicit default port in both the signed origin and request URL');
   check(!JSON.stringify(headers).includes(fixtureKey),'only a scoped short-lived signature enters the HTTP queue');
   check(sent.timeout_milliseconds===310000,'candidate explicitly bounds the HTTP timeout');
   const enqueue=(await Promise.all(Array.from({length:8},()=>pool.query('select sokupa_ops.enqueue_dispatch() id')))).flatMap(r=>r.rows);
