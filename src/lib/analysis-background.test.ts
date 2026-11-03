@@ -24,8 +24,10 @@ test("disabled processing only observes health; stale workers close intake", asy
     healthy = true;
     assert.equal(await analysisBackgroundReady(admin), true);
     process.env.ANALYSIS_BACKGROUND_MODE="interactive";
-    assert.equal(await analysisBackgroundReady(admin),true);
+    assert.equal(await analysisBackgroundReady(admin),false);
     assert.deepEqual(await runScheduledAnalysisBatch(admin,async()=>{throw Error('interactive mode ran a scheduled batch');}),{processed:0,processing_enabled:false});
+    process.env.ANALYSIS_BACKGROUND_MODE="scheduled-wake";
+    assert.equal(await analysisBackgroundReady(admin),true);
   } finally { if (saved === undefined) delete process.env.ANALYSIS_BACKGROUND_MODE; else process.env.ANALYSIS_BACKGROUND_MODE = saved; }
 });
 

@@ -149,8 +149,8 @@ export default function HomePageClient() {
   const [parsed, setParsed] = useState<ParsedMemoPayload | null>(null);
   const [originalParsed, setOriginalParsed] = useState<ParsedMemoPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [jobAccepted, setJobAccepted] = useState<{ jobId: string } | null>(null);
-  const [keepOpenForProgress, setKeepOpenForProgress] = useState(false);
+  const [jobAccepted, setJobAccepted] = useState<{ jobId: string; backgroundReady: boolean } | null>(null);
+  const appliedJobRef = useRef<string | null>(null);
   const [calculationMode, setCalculationMode] = useState<CalculationMode>("dimensions");
   const [areaCalculatorMounted, setAreaCalculatorMounted] = useState(false);
   const [orderDraftItems, setOrderDraftItems] = useState<OrderDraftItem[]>([]);
@@ -164,6 +164,7 @@ export default function HomePageClient() {
     done: number;
     total: number;
     percent: number;
+    notificationStatus?: string;
   } | null>(null);
 
   const readyImages = useMemo(
@@ -271,7 +272,6 @@ export default function HomePageClient() {
         const session = await response.json();
         if (!response.ok || !session.authenticated || cancelled) return;
         setLineUserId(session.line_user_id);
-        setKeepOpenForProgress(session.keep_open_for_progress === true);
         const saved = localStorage.getItem(`sokupa:workspace:v1:${session.line_user_id}`);
         if (saved) {
           let draft;
@@ -291,7 +291,11 @@ export default function HomePageClient() {
   useEffect(() => {
     if (!draftReady || !lineUserId) return;
     try {
-      localStorage.setItem(`sokupa:workspace:v1:${lineUserId}`, JSON.stringify({ version: 1, siteName, parsed, originalParsed, orderDraftItems }));
+      const key = `sokupa:workspace:v1:${lineUserId}`;
+      const serialized = JSON.stringify({ version: 1, siteName, parsed, originalParsed, orderDraftItems });
+      localStorage.setItem(key, serialized);
+      if (localStorage.getItem(key) !== serialized) throw new Error("Draft persistence failed");
+      if (parsed && appliedJobRef.current) void fetch(`/api/analysis-jobs/${encodeURIComponent(appliedJobRef.current)}/seen`, { method: "POST" }).catch(() => undefined);
     } catch { setError("端末への下書き保存に失敗しました。必要な内容をコピーして保存してください。"); }
   }, [draftReady, lineUserId, siteName, parsed, originalParsed, orderDraftItems]);
 
@@ -458,7 +462,7 @@ export default function HomePageClient() {
       }
       setParsed(null);
       setOriginalParsed(null);
-      setJobAccepted({ jobId: String(createJson.job_id) });
+      setJobAccepted({ jobId: String(createJson.job_id), backgroundReady: createJson.background_ready === true && ["scheduled", "scheduled-wake"].includes(createJson.execution_mode) });
       try {
         localStorage.setItem(`sokupa:lastJobId:${lineUserId}`, String(createJson.job_id));
       } catch {
@@ -473,129 +477,70 @@ export default function HomePageClient() {
     }
   };
 
-  // Restore last job on reload (so closing browser continues UX)
+  // The server remains authoritative when localStorage is blocked, full or cleared.
   useEffect(() => {
-    if (!draftReady) return;
+    if (!draftReady || !lineUserId) return;
     let cancelled = false;
-    (async () => {
+    void (async () => {
+      let last: string | null = null;
+      try { last = localStorage.getItem(`sokupa:lastJobId:${lineUserId}`) || localStorage.getItem("sokupa:lastJobId"); } catch { /* Recover from the server. */ }
       try {
-        const last = localStorage.getItem(`sokupa:lastJobId:${lineUserId}`) || localStorage.getItem("sokupa:lastJobId");
-        if (!last) return;
-        const { data, error } = await fetchAnalysisJob(last);
-        if (cancelled) return;
-        if (error || !data) {
-          if (data === null && error === "Not found") {
-            localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`);
-            localStorage.removeItem("sokupa:lastJobId");
-          }
-          return;
+        if (last) {
+          const { data } = await fetchAnalysisJob(last);
+          if (data && !cancelled) { setJobAccepted({ jobId: last, backgroundReady: data.background_ready === true }); return; }
         }
-        if (data.status === "done" && data.can_resume) {
-          await fetch(`/api/analysis-jobs/${encodeURIComponent(last)}/resume`, { method: "POST" });
-        }
-        if (data.status === "done" && data.result) {
-          if (data.site_name) setSiteName(data.site_name);
-          setParsed(data.result as ParsedMemoPayload);
-          setOriginalParsed(data.result as ParsedMemoPayload);
-          localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`);
-          localStorage.removeItem("sokupa:lastJobId");
-          return;
-        }
-        if (data.status === "failed") {
-          try {
-            alert(`前回の解析が失敗しています\n${String(data.error || "unknown")}`);
-          } catch {
-            // ignore
-          }
-          localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`);
-          localStorage.removeItem("sokupa:lastJobId");
-          return;
-        }
-        // queued/running: resume polling
-        setJobAccepted({ jobId: last });
-      } catch {
-        // ignore
-      }
+        const response = await fetch("/api/analysis-jobs", { cache: "no-store" });
+        const payload = await response.json();
+        if (!response.ok) throw new Error("前回の解析を確認できませんでした。通信の回復後に再読込してください。");
+        const found = Array.isArray(payload.data) ? payload.data[0] : null;
+        if (found?.id && !cancelled) setJobAccepted({ jobId: found.id, backgroundReady: false });
+      } catch { if (!cancelled) setError("前回の解析を確認できませんでした。通信の回復後に再読込してください。"); }
     })();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [draftReady, lineUserId]);
 
-  // Poll job status every ~3s and auto-show results when done
+  // Results remain usable while notification retries are monitored independently.
   useEffect(() => {
     if (!jobAccepted?.jobId) return;
-    let cancelled = false;
-
-    let polling = false;
-    const pollOnce = async () => {
-      const { data, error: qErr } = await fetchAnalysisJob(jobAccepted.jobId);
-      if (cancelled) return;
-      if (qErr || !data) return;
-
-      if (data.can_resume) {
-        const resumed = await fetch(`/api/analysis-jobs/${encodeURIComponent(jobAccepted.jobId)}/resume`, { method: "POST" });
-        if (!resumed.ok) setError("解析を再開できませんでした。通信の回復後に再度確認します。");
-      }
-      const status = (data.status as any) || "queued";
-      const done = Number(data.done_images) || 0;
-      const total = Math.max(1, Number(data.total_images) || 1);
-      const percent = Math.min(100, Math.max(0, Math.round((done / total) * 100)));
-      setJobUi({ status, done, total, percent });
-
-      if (status === "failed") {
-        const msg = String(data.error || "解析に失敗しました");
-        try {
-          alert(`解析に失敗しました\n${msg}`);
-        } catch {
-          // ignore
-        }
-        setError(msg);
-        setJobAccepted(null);
-        setJobUi(null);
-        try {
-          localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`);
-          localStorage.removeItem("sokupa:lastJobId");
-        } catch {
-          // ignore
-        }
-      }
-
-      if (status === "done") {
-        if (data.result) {
-          if (data.site_name) setSiteName(data.site_name);
-          setParsed(data.result as ParsedMemoPayload);
-          setOriginalParsed(data.result as ParsedMemoPayload);
-          setJobAccepted(null);
-          setJobUi(null);
-          try {
-            localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`);
-          localStorage.removeItem("sokupa:lastJobId");
-          } catch {
-            // ignore
-          }
-        } else {
-          // DB上は done だが result が無い（不整合）
-          try {
-            alert("解析は完了扱いですが、結果データが見つかりません（DBの result が空）");
-          } catch {
-            // ignore
-          }
-        }
-      }
+    const jobId = jobAccepted.jobId;
+    let cancelled = false, polling = false, nextResumeAt = 0;
+    const forgetPointer = () => {
+      try { localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`); localStorage.removeItem("sokupa:lastJobId"); } catch { /* Server discovery survives this failure. */ }
     };
-
+    const pollOnce = async () => {
+      const { data, error: qErr } = await fetchAnalysisJob(jobId);
+      if (cancelled || qErr || !data) return;
+      setJobAccepted((current) => current?.jobId === jobId ? { ...current, backgroundReady: data.background_ready === true } : current);
+      const status = (data.status as "queued" | "running" | "done" | "failed") || "queued";
+      const done = Number(data.done_images) || 0, total = Math.max(1, Number(data.total_images) || 1);
+      setJobUi({ status, done, total, percent: Math.min(100, Math.max(0, Math.round(done / total * 100))), notificationStatus: data.notification_status });
+      if (status === "done" && data.result && appliedJobRef.current !== jobId) {
+        appliedJobRef.current = jobId;
+        if (data.site_name) setSiteName(data.site_name);
+        setParsed(data.result as ParsedMemoPayload); setOriginalParsed(data.result as ParsedMemoPayload);
+      }
+      if (data.can_resume && Date.now() >= nextResumeAt) {
+        nextResumeAt = Date.now() + 30_000;
+        const resumed = await fetch(`/api/analysis-jobs/${encodeURIComponent(jobId)}/resume`, { method: "POST" });
+        if (cancelled) return;
+        if (!resumed.ok) setError(status === "done" ? "解析は完了しました。LINE通知は通信の回復後に再確認します。" : "解析を再開できませんでした。通信の回復後に再度確認します。");
+      }
+      if (status === "failed") {
+        setError(String(data.error || "解析に失敗しました"));
+        void fetch(`/api/analysis-jobs/${encodeURIComponent(jobId)}/seen`, { method: "POST" }).catch(() => undefined);
+        setJobAccepted(null); setJobUi(null); forgetPointer();
+      } else if (status === "done" && data.result && !["pending", "failed"].includes(data.notification_status)) {
+        if (data.notification_status === "accepted") setError((current) => current === "解析は完了しました。LINE通知は通信の回復後に再確認します。" ? null : current);
+        if (["uncertain", "legacy_unknown"].includes(data.notification_status)) setError("解析は完了しましたが、LINE通知の受付を確認できません。結果はこの画面で確認できます。");
+        setJobAccepted(null); setJobUi(null); forgetPointer();
+      } else if (status === "done" && !data.result) setError("解析結果を取得できませんでした。保存された仕事を再確認しています。");
+    };
     const poll = () => {
-      if (polling) return;
-      polling = true;
+      if (polling) return; polling = true;
       void pollOnce().catch(() => { if (!cancelled) setError("結果を取得できません。通信の回復後に再確認します。"); }).finally(() => { polling = false; });
     };
-    poll();
-    const t = window.setInterval(poll, 3000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(t);
-    };
+    poll(); const timer = window.setInterval(poll, 3000);
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [jobAccepted?.jobId, lineUserId]);
 
   return (
@@ -858,9 +803,9 @@ export default function HomePageClient() {
       {jobAccepted ? (
         <Card className="border-emerald-500/30 bg-emerald-500/10">
           <CardHeader>
-            <CardTitle className="text-base">解析を受け付けました</CardTitle>
+            <CardTitle className="text-base">{jobUi?.status === "done" ? "解析が完了しました" : "解析を受け付けました"}</CardTitle>
             <CardDescription>
-              {keepOpenForProgress ? "解析中はこの画面を開いたままお待ちください。閉じた場合は、開き直すと続きから再開できます。完了後にLINEで通知します。" : "サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。"}
+              {jobUi?.status === "done" ? "LINE通知を再確認しています。解析結果はこの画面で利用できます。" : jobAccepted.backgroundReady ? "サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。" : "解析は保存されています。サーバーの処理再開を待っています。画面を閉じてもデータは失われません。"}
               {jobUi ? (
                 <span className="mt-2 block font-semibold text-emerald-800/90 dark:text-emerald-200">
                   {jobUi.percent}% 完了（{jobUi.done}/{jobUi.total}）

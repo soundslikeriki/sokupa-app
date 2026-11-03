@@ -6,7 +6,7 @@ const{setupAnalysisFixture}=require('./analysis-fixture.cjs');const{primeWorkerH
  const check=(v,m)=>{assert.ok(v,m);checks++;};const ready=async(mode='interactive')=>(await row('select analysis_admission_ready($1) ready',[mode])).ready;
  const create=async(user='limited',owner=false)=>(await row('select create_analysis_job($1,$2,$3,$4) id',[user,[`${user}/0.jpg`],'Synthetic',owner])).id;
  try{
-  await setupAnalysisFixture(db);
+  await setupAnalysisFixture(db,{skipWake:true}); // Historical option, deliberately disabled by the subsequent wake migration.
   check((await row('select mode from analysis_execution_policy')).mode==='scheduled','default preserves verified scheduled mode');
   check(!(await ready()),'environment cannot select interactive mode by itself');
   check(!(await ready('scheduled')),'scheduled mode still needs real successful ticks');

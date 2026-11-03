@@ -19,8 +19,8 @@ const draft = {version:1,siteName:'Synthetic',parsed:{items:[original]},original
    if(url.origin!==base)return route.abort();
    if(url.pathname==='/api/auth/session')return route.fulfill({json:{authenticated:true,line_user_id:'synthetic-user',keep_open_for_progress:true}});
    if(url.pathname==='/api/memo-images'){uploads++;return route.fulfill({json:{object_path:'synthetic-user/00000000-0000-4000-8000-000000000000.jpg'}});}
-   if(url.pathname==='/api/analysis-jobs'){jobs++;return route.fulfill({json:{success:true,job_id:'00000000-0000-4000-8000-000000000000'}});}
-   if(url.pathname.startsWith('/api/'))return route.fulfill({json:{data:{status:'queued',total_images:1,done_images:0,can_resume:false}}});
+   if(url.pathname==='/api/analysis-jobs'){if(route.request().method()==='GET')return route.fulfill({json:{data:[]}});jobs++;return route.fulfill({json:{success:true,job_id:'00000000-0000-4000-8000-000000000000',execution_mode:'scheduled-wake',background_ready:true}});}
+   if(url.pathname.startsWith('/api/'))return route.fulfill({json:{data:{status:'queued',total_images:1,done_images:0,can_resume:false,execution_mode:'scheduled-wake',background_ready:true}}});
    return route.continue();
   });
   await page.goto(base);return {context,page};
@@ -64,8 +64,8 @@ const draft = {version:1,siteName:'Synthetic',parsed:{items:[original]},original
   await p.getByRole('button',{name:'1枚の画像を解析する',exact:true}).click();
   await p.waitForFunction(()=>document.body.innerText.includes('解析を受け付けました'));
   assert.equal(uploads,1);assert.equal(jobs,1);checks++;
-  await p.getByText('解析中はこの画面を開いたままお待ちください。閉じた場合は、開き直すと続きから再開できます。完了後にLINEで通知します。').waitFor();checks++;
-  assert.equal(await p.getByText('スマホを閉じても').count(),0);checks++;
+  await p.getByText('サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。').waitFor();checks++;
+  assert.equal(await p.getByText('解析中はこの画面を開いたまま').count(),0);checks++;
   await recovered.context.close();
   console.log(`PASS: ${checks} independent-review browser checks; no external requests.`);
  }finally{await browser.close();}

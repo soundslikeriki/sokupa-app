@@ -1,6 +1,6 @@
 # 未有効化のバックグラウンド実行構成
 
-> 今回の段階公開にはCronを必須にしない。[interactive方式](../../docs/interactive-execution.md) は署名セッションと非公開アクセスを保ち、画面から処理を進める。閉画面で長い複数枚を終える保証はない。以下はscheduledを採用する場合の記録。hosted拡張の権限制約を受け入れた [秘密なしwake候補](./secret-free-wake-design.md) は未実装・未有効化。
+> 最新要件では閉画面継続が必須。[秘密なしwake方式](../../docs/closed-screen-execution.md) を実装し、実Cron・pg_net・Nextでブラウザ再開なしの完了を確認した。interactive版は不採用・受付無効。以下は従来scheduledの記録で、現在の公開条件は [最新手順](../../docs/production-release-readiness.md) を優先する。
 
 このフォルダは構成の雛形です。**Cronはまだ有効化していません。** ルートに `vercel.json` は置かず、`ANALYSIS_BACKGROUND_MODE` の既定値を `disabled` にしています。現在のコードをそのまま公開しても、新規画像保存・ジョブ受付は503になり、処理できない仕事を受け付けません。
 

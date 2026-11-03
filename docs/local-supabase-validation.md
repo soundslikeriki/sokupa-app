@@ -58,3 +58,10 @@ PostgresはUnixソケットだけで待受し、CLIのプロキシと各試験HT
 - 本番の既存ユーザー／管理者無制限／IDを保つ段階移行と公開条件は引き続き適用する。ローカル通過だけで公開しない。
 
 再実行には専用stackの起動記録と一時TLSが必要。実値を引数やチャットに置かず、保護されたrootを `SOKUPA_LOCAL_STACK_ROOT` で指定する。クラッシュ試験は追加で `SOKUPA_ALLOW_LOCAL_CRASH=1` を要求し、今回の使い捨てDB以外では実行しない。
+
+
+## 最新の秘密なしwake・結果復元・保全の追補
+
+ユーザーの閉画面完了要件に合わせ、[closed-screen-execution.md](./closed-screen-execution.md) の新方式を実装。実Cron／pg_net→実Next HTTPS→REST／Storage→実ワーカーの25項目、実Next／RESTで再発見・確認済み記録の10項目が成功。31秒×2枚はブラウザ取得・resumeなしで完了し、合成LINE受付1回。実AI／実LINEは0。
+
+後始末のCron定義が残ったため、正確なjobnameでの型付き削除・件数確認へharnessを修正。別途、残存1件→0を確認した。最新の保全予行は21表・11ファイルを対象とし、実dump／restoreと別bucketへの全byte復元14項目が成功。元ID・所有権・metadataを保持し、試験コピーを削除。詳細と未検証範囲は [production-backup-plan.md](./production-backup-plan.md)。本番バックアップやhosted Auth／Vaultの完全復元ではない。全stack／Next／Cronは停止・解除済み。

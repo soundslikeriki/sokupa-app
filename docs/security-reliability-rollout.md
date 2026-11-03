@@ -1,6 +1,6 @@
 # ソクパ 認証・計算・データ保全の改善
 
-> 2026-11-03更新: 今回の公開候補は [interactive方式](./interactive-execution.md)。定期処理は必須ではなく、旧scheduledの説明はその方式を選ぶ場合に限る。追加migrationは8本（既存7本＋20261103070253）。最新の公開条件は [production-release-readiness.md](./production-release-readiness.md) を優先する。既定disabledのまま公開完了にはしない。本番は未変更。
+> 2026-11-03最新: 閉画面完了を必須とし、interactive受付を無効化した。[秘密なしwake方式](./closed-screen-execution.md) が現在の候補。追加migrationは10本。以下の旧方式の説明より [本番手順](./production-release-readiness.md) と [保全計画](./production-backup-plan.md) を優先する。本番は未変更。
 
 対象コミット: `919379d9e45e367a45d3b6f64b01724a528fe3f2`。
 作業場所: `/Users/rikiharada/Documents/Codex/2026-11-03/task/sokupa-app`、ブランチ `codex/security-reliability`。

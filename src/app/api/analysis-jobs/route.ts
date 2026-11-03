@@ -6,6 +6,16 @@ import { runAnalysisJob } from "@/lib/analysisJobProcessor";
 import { waitUntil } from "@vercel/functions";
 export const runtime = "nodejs";
 export const maxDuration = 300;
+export async function GET(req: NextRequest) {
+  const auth = await authorize(req);
+  if (auth.error) return auth.error;
+  const { data, error } = await auth.admin.from("analysis_jobs").select("id,status,client_result_seen_at")
+    .eq("line_user_id", auth.lineUserId)
+    .or("status.in.(queued,running),client_result_seen_at.is.null,and(status.eq.done,notification_status.in.(pending,failed))")
+    .order("client_result_seen_at", { ascending: true, nullsFirst: true }).order("updated_at", { ascending: false }).limit(10);
+  if (error) return NextResponse.json({ error: "前回の解析を確認できませんでした" }, { status: 503 });
+  return NextResponse.json({ data: data ?? [] }, { headers: { "Cache-Control": "no-store" } });
+}
 export async function POST(req: NextRequest) {
   try {
     const auth = await authorize(req);
@@ -27,7 +37,7 @@ export async function POST(req: NextRequest) {
     }
     // Each image has an exclusive lease; longer jobs resume in separate invocations.
     waitUntil(runAnalysisJob({ admin: auth.admin, jobId }));
-    return NextResponse.json({ success: true, job_id: jobId });
+    return NextResponse.json({ success: true, job_id: jobId, execution_mode: process.env.ANALYSIS_BACKGROUND_MODE, background_ready: true });
   } catch {
     return NextResponse.json({ error: "解析の受付に失敗しました" }, { status: 500 });
   }
