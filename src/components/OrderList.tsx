@@ -20,7 +20,7 @@ import { buildOrderRequestText } from "@/lib/order-text";
 import { dimensionItemToOrderDraftInput } from "@/lib/order-draft";
 import { dedupeSlashDelimited } from "@/lib/dedupeSlashList";
 import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
-import type { MemoProductItem, OrderDraftItemInput } from "@/types";
+import type { MemoProductItem, MemoReadingReview, OrderDraftItemInput } from "@/types";
 
 const MFG_ORDER = ["サンゲツ", "リリカラ", "ルノン", "トキワ", "シンコール", "東リ", "エービーシー商会", "不明", "その他"] as const;
 const DEFAULT_WALLPAPER_WIDTH_M = 0.92;
@@ -56,6 +56,7 @@ type OrderListProps = {
   items: MemoProductItem[];
   sourceItems?: MemoProductItem[];
   sourceJobId?: string | null;
+  readingReviewSourceJobId?: string | null;
   notes?: string;
   siteName?: string;
   needs_review_any?: boolean;
@@ -71,6 +72,7 @@ type ItemOverride = {
   measurementBasis?: MemoProductItem["measurement_basis"];
   patternMatch?: MemoProductItem["pattern_match"];
   quantityConfirmation?: string;
+  readingReviewConfirmation?: string;
   repeatCm?: number | string;
   heightM?: number | string;
   entryQtys?: Record<number, number | string>;
@@ -113,16 +115,24 @@ function orderCheckColor(ready: boolean, basicView: boolean): string {
   return ready ? basicView ? "text-muted-foreground" : "text-emerald-700 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300";
 }
 
+function readingReviewImageIndexes(item: { readingReviews: MemoReadingReview[]; entries: MemoProductItem["entries"] }): number[] {
+  const valid = (index: number | undefined): index is number => index !== undefined && Number.isSafeInteger(index) && index >= 0;
+  const fallback = item.entries.map(entry => entry.source_image_index).filter(valid);
+  return [...new Set(item.readingReviews.flatMap(review => valid(review.source_image_index) ? [review.source_image_index] : fallback))];
+}
+
 function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
   return {
     ...item,
     entries: (item.entries ?? []).map((entry) => ({ ...entry })),
     repeat_info: item.repeat_info ? { ...item.repeat_info } : undefined,
     tags: item.tags ? [...item.tags] : undefined,
+    reading_reviews: item.reading_reviews?.map(review => ({ ...review, candidate_formulas: [...review.candidate_formulas] })),
   };
 }
 
-export function OrderList({ basicView = false, items, sourceItems, sourceJobId, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft }: OrderListProps) {
+export function OrderList({ basicView = false, items, sourceItems, sourceJobId, readingReviewSourceJobId, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft }: OrderListProps) {
+  const privatePhotoJobId = sourceJobId ?? readingReviewSourceJobId;
   const [photoIndex, setPhotoIndex] = useState<number | null>(null);
   const [photoError, setPhotoError] = useState(false);
   const [rowResetError, setRowResetError] = useState<string | null>(null);
@@ -170,7 +180,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const canonicalizeDerivedItem = (item: any): MemoProductItem => {
-    const { derivedEntries, override_active, rActive, total_quantity, comparison, comparisonConfirmed, quantityAssessment, incompleteMeasurements, incompleteSettings, orderReady, confirmationFingerprint, canConfirm, automaticQuantity, manualQuantityActive, allowanceIncluded, ...base } = item;
+    const { derivedEntries, override_active, rActive, total_quantity, comparison, comparisonConfirmed, quantityAssessment, incompleteMeasurements, incompleteSettings, orderReady, confirmationFingerprint, canConfirm, automaticQuantity, manualQuantityActive, allowanceIncluded, readingReviews, readingReviewFingerprint, readingReviewConfirmed, canConfirmReadingReview, ...base } = item;
     return {
       ...base,
       entries: (derivedEntries ?? item.entries ?? []).map((entry: any) => {
@@ -196,7 +206,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const invalidateConfirmation = (productCode: string) => {
-    setOverrides(previous => ({ ...previous, [productCode]: { ...previous[productCode], quantityConfirmation: "" } }));
+    setOverrides(previous => ({ ...previous, [productCode]: { ...previous[productCode], quantityConfirmation: "", readingReviewConfirmation: "" } }));
   };
 
   const clearManualOrderQuantity = (productCode: string) => {
@@ -248,7 +258,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
     const before = items.find((i) => i.product_code === fromCode);
     const updatedItems = items.map((i) =>
-      i.product_code === fromCode ? { ...i, product_code: toCode } : i,
+      i.product_code === fromCode ? { ...i, product_code: toCode, quantity_confirmation: "", reading_review_confirmation: "" } : i,
     );
     onItemsChange(updatedItems);
 
@@ -295,7 +305,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         ...prev,
         [productCode]: {
           ...prevOvr,
-          quantityConfirmation: "",
+          quantityConfirmation: "", readingReviewConfirmation: "",
           [field]: {
             ...prevFieldVals,
             [entryIndex]: val
@@ -456,7 +466,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     setOverrides(previous => {
       const current = previous[product.product_code] ?? {};
       const configured = current.patternRowsConfigured ?? product.pattern_rows_configured ?? product.entries.some((entry, index) => current.entryRepeatActive?.[index] ?? entry.repeat_enabled);
-      return { ...previous, [product.product_code]: { ...current, orderMode: mode, quantityConfirmation: "",
+      return { ...previous, [product.product_code]: { ...current, orderMode: mode, quantityConfirmation: "", readingReviewConfirmation: "",
         patternRowsConfigured: configured || mode === "pattern",
         ...(mode === "pattern" && !configured ? { entryRepeatActive: Object.fromEntries(product.entries.map((_, index) => [index, true])) } : {}) } };
     });
@@ -534,7 +544,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     setOrderQuantityInputs(previous => ({ ...previous, [productCode]: undefined }));
 
     onItemsChange(
-      items.map((item) => (item.product_code === productCode ? cloneMemoProductItem(original) : item)),
+      items.map((item) => (item.product_code === productCode ? { ...cloneMemoProductItem(original), quantity_confirmation: "", reading_review_confirmation: "" } : item)),
     );
   };
 
@@ -607,8 +617,9 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       });
       const manualOrderQuantity = Object.prototype.hasOwnProperty.call(manualOrderQuantities, item.product_code) ? manualOrderQuantities[item.product_code] : item.manual_order_quantity;
       const confirmation = ovr.quantityConfirmation ?? item.quantity_confirmation;
+      const readingReviewConfirmation = ovr.readingReviewConfirmation ?? item.reading_review_confirmation;
       const rawOrder = Object.prototype.hasOwnProperty.call(orderQuantityInputs, item.product_code) ? orderQuantityInputs[item.product_code] : item.order_quantity_input;
-      const plan = planMemoOrder({ item: planningItem, rows, repeatCm: r, basis, match, lossRate, manualQuantity: manualOrderQuantity, rawOrder, confirmation });
+      const plan = planMemoOrder({ item: planningItem, rows, repeatCm: r, basis, match, lossRate, manualQuantity: manualOrderQuantity, rawOrder, confirmation, readingReviewConfirmation, globalNotes: notes });
       const { comparison } = plan;
       const derivedEntries = (item.entries || []).map((e: any, idx: number) => {
         const row = rows[idx], base = typeof elengths[idx] === "number" ? elengths[idx] as number : e.length_m;
@@ -633,6 +644,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       return {
         ...planningItem,
         measurement_basis: basis, pattern_match: match, quantity_confirmation: confirmation, order_quantity_input: rawOrder,
+        reading_reviews: plan.readingReviews.length || item.reading_reviews ? plan.readingReviews : undefined, reading_review_confirmation: readingReviewConfirmation,
+        readingReviews: plan.readingReviews, readingReviewFingerprint: plan.readingReviewFingerprint, readingReviewConfirmed: plan.readingReviewConfirmed, canConfirmReadingReview: plan.canConfirmReadingReview,
         comparison, comparisonConfirmed: plan.confirmed, quantityAssessment: plan.assessment,
         incompleteMeasurements: plan.incompleteMeasurements, incompleteSettings: plan.incompleteSettings,
         orderReady: plan.ready, canConfirm: plan.canConfirm, confirmationFingerprint: plan.fingerprint,
@@ -649,7 +662,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         derivedEntries
       };
     });
-  }, [items, overrides, lossRates, manualOrderQuantities, orderQuantityInputs]);
+  }, [items, notes, overrides, lossRates, manualOrderQuantities, orderQuantityInputs]);
 
   const groups = useMemo(() => groupByManufacturer(derivedItems), [derivedItems]);
   const productCodes = useMemo(() => derivedItems.map((item) => item.product_code), [derivedItems]);
@@ -678,6 +691,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     const signature = JSON.stringify(
       canonicalItems.map((item) => ({
         product_code: item.product_code,
+        reading_reviews: item.reading_reviews, reading_review_confirmation: item.reading_review_confirmation,
         order_mode: item.order_mode, pattern_rows_configured: item.pattern_rows_configured, memo_allowance: item.memo_allowance, loss_rate_input: item.loss_rate_input, repeat_cm_input: item.repeat_cm_input, repeat_height_input: item.repeat_height_input,
         total_m: item.total_m,
         order_quantity: item.order_quantity,
@@ -777,13 +791,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         </CardContent>
       </Card>
 
-      {sourceJobId && photoIndex !== null ? (
+      {privatePhotoJobId && photoIndex !== null ? (
         <Card><CardContent className="space-y-3 p-4">
           <p className="font-semibold">照合する元写真 {photoIndex + 1}</p>
           <Button type="button" variant="outline" onClick={() => setPhotoIndex(null)}>写真を閉じる</Button>
           {photoError ? <p role="status">写真を取得できませんでした。通信とログイン状態を確認してください。</p> : (
             // eslint-disable-next-line @next/next/no-img-element
-            <img className="max-h-[70vh] w-full object-contain" alt={`解析元の写真 ${photoIndex + 1}`} src={`/api/analysis-jobs/${encodeURIComponent(sourceJobId)}/images/${photoIndex}`} onError={() => setPhotoError(true)} />
+            <img className="max-h-[70vh] w-full object-contain" alt={`解析元の写真 ${photoIndex + 1}`} src={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex}`} onError={() => setPhotoError(true)} />
           )}
         </CardContent></Card>
       ) : null}
@@ -923,6 +937,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           <span aria-hidden>／</span>
                           <span>{product.orderReady ? "発注" : "参考"} <strong className="text-lg text-indigo-600 dark:text-indigo-400">{product.order_quantity}m</strong></span>
                         </div>
+                        {product.readingReviews.length && !product.readingReviewConfirmed ? <p className="mt-2 text-xs font-semibold text-amber-800 dark:text-amber-300">訂正・取消の確認が必要です。詳細を開いて原画像と照合してください。</p> : null}
                       </div>
                       {onAddToOrderDraft ? (
                         <Button
@@ -1042,6 +1057,21 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         <ChevronUp className="h-5 w-5" />
                       </Button>
                     </div>
+                  {product.readingReviews.length ? <section aria-label={`${product.product_code} の訂正・取消の確認`} className="mb-4 w-full space-y-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
+                    <p className="flex items-center gap-2 font-bold"><AlertTriangle className="h-4 w-4 shrink-0" />訂正・取消の候補を原画像で確認してください</p>
+                    {product.readingReviews.map((review: MemoReadingReview, reviewIndex: number) => <div key={reviewIndex} className="space-y-1 break-words">
+                      <p>{review.reason}</p>
+                      {review.candidate_formulas.length ? <ul className="list-inside list-disc font-semibold tabular-nums">{review.candidate_formulas.map((formula, formulaIndex) => <li key={formulaIndex}>{formula}</li>)}</ul> : <p>候補式を特定できませんでした。原画像の訂正・取消を確認してください。</p>}
+                    </div>)}
+                    <p>候補は数量に自動加算していません。有効な訂正値は下の明細を編集・追加し、取消の場合は除外が正しいか確認してください。</p>
+                    {privatePhotoJobId && readingReviewImageIndexes(product).length ? <div className="flex flex-wrap gap-2">{readingReviewImageIndexes(product).map(index => <Button key={index} type="button" variant="outline" className="min-h-11 bg-background" aria-label={`${product.product_code} の訂正候補の写真 ${index + 1}を確認`} onClick={() => { setPhotoError(false); setPhotoIndex(index); }}>原画像 {index + 1}を確認</Button>)}</div> : <p className="text-xs">この結果に対応する原画像をアプリで開けません。お手元の元メモ・写真と照合してください。</p>}
+                    <label className="flex min-h-11 items-start gap-2 py-2">
+                      <input type="checkbox" className="mt-1" aria-label={`${product.product_code} の訂正・取消を確認済みにする`} checked={product.readingReviewConfirmed} disabled={!product.canConfirmReadingReview} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], readingReviewConfirmation: event.target.checked ? product.readingReviewFingerprint : "", quantityConfirmation: "" } }))} />
+                      候補を原画像と照合し、有効な訂正値を明細に反映しました。取消なら除外を確認しました（明細・数量を変えると再確認）
+                    </label>
+                    <p role="status" className={product.readingReviewConfirmed ? "text-xs text-muted-foreground" : "text-xs font-semibold"}>{product.readingReviewConfirmed ? "照合確認済み。候補は確認の記録として残します。" : "この確認が済むまで、発注用のコピー・追加は利用できません。"}</p>
+                  </section> : null}
+
                   <fieldset className="mb-4 w-full space-y-2 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-800 dark:bg-indigo-950/30">
                     <legend className="px-1 text-sm font-bold">{product.product_code} の数量の使い方</legend>
                     {([ ["memo", "メモの数量を使う（予備分を確認）"], ["pattern", "柄合わせを考慮して計算する"] ] as const).map(([mode, label]) => (
@@ -1051,7 +1081,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                       </label>
                     ))}
                     {product.order_mode === "memo" ? <label className="block pt-2 text-sm">予備分の扱い
-                      <select aria-label={`${product.product_code} の予備分の扱い`} className="mt-1 min-h-11 w-full rounded border bg-background p-2" value={product.memo_allowance} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], memoAllowance: event.target.value as MemoProductItem["memo_allowance"], quantityConfirmation: "" } }))}>
+                      <select aria-label={`${product.product_code} の予備分の扱い`} className="mt-1 min-h-11 w-full rounded border bg-background p-2" value={product.memo_allowance} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], memoAllowance: event.target.value as MemoProductItem["memo_allowance"], quantityConfirmation: "", readingReviewConfirmation: "" } }))}>
                         <option value="add">メモの数量に予備分を加える</option>
                         <option value="included">メモは発注量まで調整済み（上乗せしない）</option>
                       </select>
@@ -1208,12 +1238,12 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     
                     {!basicView ? <><div className="mb-3 grid gap-3 sm:grid-cols-2">
                       <label className="text-xs">寸法の前提
-                        <select aria-label={`${product.product_code} の寸法区分`} className="mt-1 block w-full rounded border bg-background p-2" value={product.measurement_basis} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: "", measurementBasis: event.target.value as MemoProductItem["measurement_basis"] } }))}>
+                        <select aria-label={`${product.product_code} の寸法区分`} className="mt-1 block w-full rounded border bg-background p-2" value={product.measurement_basis} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: "", readingReviewConfirmation: "", measurementBasis: event.target.value as MemoProductItem["measurement_basis"] } }))}>
                           <option value="unconfirmed">未確認</option><option value="trim-included">切り代込みの裁断長</option><option value="repeat-adjusted">既に柄調整済み（再計算しない）</option>
                         </select>
                       </label>
                       <label className="text-xs">柄合わせ方式
-                        <select aria-label={`${product.product_code} の柄合わせ方式`} className="mt-1 block w-full rounded border bg-background p-2" value={product.pattern_match} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: "", patternMatch: event.target.value as MemoProductItem["pattern_match"] } }))}>
+                        <select aria-label={`${product.product_code} の柄合わせ方式`} className="mt-1 block w-full rounded border bg-background p-2" value={product.pattern_match} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: "", readingReviewConfirmation: "", patternMatch: event.target.value as MemoProductItem["pattern_match"] } }))}>
                           <option value="unconfirmed">未確認</option><option value="straight">ストレートリピート</option><option value="other">半落ち・その他（職人さんに確認）</option>
                         </select>
                       </label>
@@ -1409,6 +1439,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                             step="0.01"
                             placeholder="2.7"
                             className="h-9 bg-white text-sm font-bold tabular-nums dark:bg-black"
+                            aria-label={`${product.product_code} に追加する長さ (m)`}
                             value={newEntryInputs[product.product_code]?.length ?? ""}
                             onChange={(e) => handleNewEntryChange(product.product_code, "length", e.target.value)}
                           />
@@ -1422,6 +1453,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                             step="1"
                             placeholder="1"
                             className="h-9 bg-white text-sm font-bold tabular-nums dark:bg-black"
+                            aria-label={`${product.product_code} に追加する幅数`}
                             value={newEntryInputs[product.product_code]?.quantity ?? ""}
                             onChange={(e) => handleNewEntryChange(product.product_code, "quantity", e.target.value)}
                           />

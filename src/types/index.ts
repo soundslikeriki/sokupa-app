@@ -27,8 +27,17 @@ export type MemoEntry = {
   repeat_enabled?: boolean;
 };
 
+/** OCR ambiguity about a correction, cancellation or excluded formula; never auto-add it. */
+export type MemoReadingReview = {
+  reason: string;
+  candidate_formulas: string[];
+  source_image_index?: number;
+};
+
 /** 品番単位で集約された1ブロック（AI出力スキーマ） */
 export type MemoProductItem = {
+  reading_reviews?: MemoReadingReview[];
+  reading_review_confirmation?: string;
   /** Simple memo use is the default; legacy active repeat drafts reopen the pattern editor. */
   order_mode?: "memo" | "pattern";
   /** Remember an intentional all-rows-OFF setting when the pattern editor is hidden. */

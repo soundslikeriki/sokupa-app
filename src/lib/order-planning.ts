@@ -1,6 +1,7 @@
 import { calculateOrderQuantity } from "./calc-logic";
 import { roundMeters } from "./memo-calculation";
 import { assessProductOrder, compareProduct, type ComparisonRow } from "./product-comparison";
+import { readingReviewsForItem } from "./memo-reading-review";
 import type { MemoProductItem } from "../types";
 
 export function orderModeForItem(item: MemoProductItem): "memo" | "pattern" {
@@ -18,6 +19,8 @@ export function planMemoOrder(input: {
   manualQuantity?: number;
   rawOrder?: string;
   confirmation?: string;
+  readingReviewConfirmation?: string;
+  globalNotes?: unknown;
 }) {
   const { item, repeatCm, basis, match, lossRate, manualQuantity, rawOrder, confirmation } = input;
   const mode = orderModeForItem(item);
@@ -39,8 +42,16 @@ export function planMemoOrder(input: {
   const invalidInput = incompleteMeasurements || incompleteSettings || rawOrder !== undefined || comparison.strict.status === "invalid" || !Number.isFinite(orderQuantity) || orderQuantity <= 0;
   const validNumbers = !invalidInput && comparison.strict.status === "calculated";
   const supported = mode === "memo" || (comparison.premisesAvailable && match !== "other");
-  const fingerprint = JSON.stringify({ version: 1, comparison: comparison.fingerprint, mode, allowance: item.memo_allowance ?? "add", lossRate, orderQuantity, manual });
-  const canConfirm = validNumbers && supported;
+  const readingReviews = readingReviewsForItem(item, input.globalNotes);
+  const readingReviewFingerprint = readingReviews.length ? JSON.stringify({ version: 1,
+    product: { code: item.product_code, manufacturer: item.manufacturer, spec: item.spec }, readingReviews,
+    rows: input.rows, sourceRows: item.entries.map(entry => ({ formula: entry.original_formula, id: entry.source_row_id, image: entry.source_image_index, index: entry.source_entry_index })),
+    mode, allowance: item.memo_allowance ?? "add", lossRate, orderQuantity, manual }) : "";
+  const canConfirmReadingReview = !incompleteMeasurements && !incompleteSettings && rawOrder === undefined && comparison.strict.rows.length > 0 && comparison.strict.rows.every(row => row.original.status === "calculated");
+  const readingReviewConfirmed = !readingReviews.length || (canConfirmReadingReview && (input.readingReviewConfirmation ?? item.reading_review_confirmation) === readingReviewFingerprint);
+  const fingerprint = JSON.stringify({ version: 1, comparison: comparison.fingerprint, mode, allowance: item.memo_allowance ?? "add", lossRate, orderQuantity, manual,
+    ...(readingReviews.length ? { readingReviewFingerprint, readingReviewConfirmed } : {}) });
+  const canConfirm = validNumbers && supported && readingReviewConfirmed;
   const confirmed = canConfirm && confirmation === fingerprint;
   const assessment = assessProductOrder(rawOrder ?? orderQuantity, required, confirmed);
   const ready = confirmed && assessment.status === "sufficient";
@@ -51,8 +62,10 @@ export function planMemoOrder(input: {
     : basis === "repeat-adjusted"
       ? "柄調整済みの数量は再計算しません。メモの数量を使い、予備分を確認してください。"
       : "職人さんに確認：切り代・柄合わせ方式・リピート値を確認してください。表示は参考値です。";
+  else if (!readingReviewConfirmed) message = "要確認：訂正・取消の候補を原画像と照合し、有効な訂正値を明細に反映するか、取消として除外したことを確認してください。";
   else if (!confirmed) message = `要確認：元メモ・写真と数量、柄合わせ・切り代・予備分を確認してください。${assessment.shortage && assessment.shortage !== "0" ? `（入力値の比較では${assessment.shortage}m不足）` : ""}`;
   else if (mode === "memo" && assessment.status === "sufficient") message = "確認済み：メモの数量と発注数量を照合しました。";
   return { mode, allowanceIncluded, comparison, totalM, automaticQuantity, orderQuantity, manual, incompleteMeasurements, incompleteSettings,
+    readingReviews, readingReviewFingerprint, readingReviewConfirmed, canConfirmReadingReview,
     canConfirm, confirmed, fingerprint, ready, assessment: { ...assessment, message } };
 }

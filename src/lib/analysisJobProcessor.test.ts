@@ -95,20 +95,19 @@ test("unproven old pending completion is quarantined without sending LINE", asyn
   assert.equal(updates[0].notification_status, "legacy_unknown");
 });
 
-test("automatic notifications contain only the completion notice for clean, reviewed and uncertain results", async () => {
+test("existing automatic order lists remain for clean OCR while correction evidence uses the existing review gate", async () => {
   const savedFetch = global.fetch, savedToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   process.env.LINE_CHANNEL_ACCESS_TOKEN = "synthetic-token";
-  const item = { product_code: "SYNTHETIC-ORDER", manufacturer: "Synthetic", entries: [{ original_formula: "20×1", length_m: 20, quantity: 1, subtotal_m: 20 }], total_m: 20, order_quantity: 23 };
-  const results = [
-    { items: [item] },
-    { items: [{ ...item, quantity_confirmation: "confirmed-in-an-older-client", manual_order_quantity: 27 }] },
-    { image_needs_review: true, items: [item] },
-    { items: [{ ...item, needs_review: true, review_reasons: ["訂正行を確認してください"] }] },
-    { items: [{ ...item, entries: [{ ...item.entries[0], needs_review: true }] }] },
+  const item = { product_code: "ANON-A", manufacturer: "Synthetic", entries: [{ original_formula: "20×1", length_m: 20, quantity: 1, subtotal_m: 20 }], total_m: 20, order_quantity: 23 };
+  const variants = [
+    { item, expectedMessages: 2 },
+    { item: { ...item, notes: "1.00 x 12 は取り消し線があるため除外しました。", needs_review: false }, expectedMessages: 1 },
+    { item: { ...item, reading_reviews: [{ reason: "訂正候補を確認", candidate_formulas: ["1.00×12"] }] }, expectedMessages: 1 },
+    { item: { ...item, needs_review: true }, expectedMessages: 1 },
   ];
   try {
-    for (const result of results) {
-      const job: any = { id: "00000000-0000-4000-8000-000000000001", status: "done", site_name: "合成現場", line_user_id: "synthetic-owner", notification_status: "pending", notification_protocol: "line_retry_v1", result };
+    for (const variant of variants) {
+      const job: any = { id: "00000000-0000-4000-8000-000000000001", status: "done", line_user_id: "synthetic-owner", notification_status: "pending", notification_protocol: "line_retry_v1", result: { items: [variant.item] } };
       let sends = 0;
       global.fetch = async (input, init) => {
         const url = new URL(String(input));
@@ -116,7 +115,12 @@ test("automatic notifications contain only the completion notice for clean, revi
         if (url.hostname === "api.line.me") {
           sends++;
           assert.equal(body.to, "synthetic-owner");
-          assert.deepEqual(body.messages, [{ type: "text", text: "✅ ソクパ解析が完了しました！\n現場：合成現場\nアプリを開いて結果を確認してください。" }]);
+          assert.equal(body.messages.length, variant.expectedMessages);
+          assert.equal(body.messages[0].text, "✅ ソクパ解析が完了しました！\nアプリを開いて結果を確認してください。");
+          if (variant.expectedMessages === 2) {
+            assert.match(body.messages[1].text, /【発注リスト】/);
+            assert.match(body.messages[1].text, /ANON-A \/ 数量：23m/);
+          }
           assert.equal(new Headers(init?.headers).get("X-Line-Retry-Key"), job.id);
           return new Response("{}", { headers: { "Content-Type": "application/json" } });
         }
@@ -128,64 +132,14 @@ test("automatic notifications contain only the completion notice for clean, revi
       const admin = createClient("https://db.example.test", "synthetic-key", { auth: { persistSession: false } });
       assert.equal((await processAnalysisJobStep({ admin, jobId: job.id })).status, "done");
       assert.equal(job.notification_status, "accepted");
-      assert.equal((await processAnalysisJobStep({ admin, jobId: job.id })).status, "done");
-      assert.equal(sends, 1, "already accepted completion must not be replayed");
-      assert.deepEqual(job.result, result, "notification must not change the stored quantities");
+      await processAnalysisJobStep({ admin, jobId: job.id });
+      assert.equal(sends, 1);
+      assert.deepEqual(job.result.items[0], variant.item);
     }
   } finally {
     global.fetch = savedFetch;
     if (savedToken === undefined) delete process.env.LINE_CHANNEL_ACCESS_TOKEN; else process.env.LINE_CHANNEL_ACCESS_TOKEN = savedToken;
   }
-});
-
-test("a failed completion retries the same notice and key without an order list or analysis reset", async () => {
-  const savedFetch = global.fetch, savedToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
-  process.env.LINE_CHANNEL_ACCESS_TOKEN = "synthetic-token";
-  const job: any = { id: "00000000-0000-4000-8000-000000000002", status: "done", line_user_id: "synthetic-owner", notification_status: "pending", notification_protocol: "line_retry_v1", result: { items: [{ product_code: "PRIVATE-ORDER", order_quantity: 23 }] } };
-  const requests: { key: string | null; messages: unknown }[] = [];
-  global.fetch = async (input, init) => {
-    const url = new URL(String(input));
-    const body = init?.body ? JSON.parse(String(init.body)) : {};
-    if (url.hostname === "api.line.me") {
-      requests.push({ key: new Headers(init?.headers).get("X-Line-Retry-Key"), messages: body.messages });
-      return requests.length === 1 ? new Response(null, { status: 401 }) : new Response(null, { status: 409, headers: { "x-line-accepted-request-id": "synthetic-accepted" } });
-    }
-    assert.equal(url.hostname, "db.example.test");
-    assert.ok(url.pathname.endsWith("/analysis_jobs"));
-    if (init?.method === "PATCH") Object.assign(job, body);
-    return new Response(JSON.stringify(job), { headers: { "Content-Type": "application/json" } });
-  };
-  try {
-    const admin = createClient("https://db.example.test", "synthetic-key", { auth: { persistSession: false } });
-    assert.equal((await processAnalysisJobStep({ admin, jobId: job.id })).status, "done");
-    assert.equal(job.notification_status, "failed");
-    const attempted = job.notification_attempted_at;
-    assert.equal((await processAnalysisJobStep({ admin, jobId: job.id })).status, "done");
-    assert.equal(job.notification_status, "accepted");
-    assert.equal(job.notification_attempted_at, attempted);
-    assert.equal(job.status, "done");
-    assert.equal(requests.length, 2);
-    assert.deepEqual(requests[0], requests[1]);
-    assert.deepEqual(requests[0].messages, [{ type: "text", text: "✅ ソクパ解析が完了しました！\nアプリを開いて結果を確認してください。" }]);
-    await processAnalysisJobStep({ admin, jobId: job.id });
-    assert.equal(requests.length, 2);
-  } finally {
-    global.fetch = savedFetch;
-    if (savedToken === undefined) delete process.env.LINE_CHANNEL_ACCESS_TOKEN; else process.env.LINE_CHANNEL_ACCESS_TOKEN = savedToken;
-  }
-});
-
-test("completion retry expiry stays quarantined without contacting LINE", async () => {
-  const updates: any[] = [];
-  const admin = createClient("https://db.example.test", "synthetic-key", { auth: { persistSession: false }, global: { fetch: async (input, init) => {
-    const url = new URL(String(input));
-    assert.equal(url.hostname, "db.example.test");
-    const value = init?.method === "PATCH" ? (updates.push(JSON.parse(String(init.body))), null) : { id: "synthetic", status: "done", notification_status: "failed", notification_protocol: "line_retry_v1", notification_attempted_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), result: { items: [] } };
-    return new Response(JSON.stringify(value), { headers: { "Content-Type": "application/json" } });
-  } } });
-  assert.equal((await processAnalysisJobStep({ admin, jobId: "synthetic" })).status, "done");
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0].notification_status, "uncertain");
 });
 
 

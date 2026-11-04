@@ -89,3 +89,72 @@ test("order text and draft transfer use the reviewed final quantity without a se
   assert.match(buildOrderRequestText([final], "Synthetic"), /数量：27m/);
   assert.equal(confirm({ ...input, item: { ...item, memo_allowance: "included" } }).orderQuantity, 20);
 });
+
+const readingInput = { ...input, item: { ...item, reading_reviews: [{ reason: "訂正された候補式を計算から除外したため、原画像で確認してください。", candidate_formulas: ["1.5×4"], source_image_index: 1 }] } };
+const reviewReading = (value: Parameters<typeof planMemoOrder>[0]) => ({ ...value, readingReviewConfirmation: planMemoOrder(value).readingReviewFingerprint });
+
+test("a general quantity acknowledgement cannot bypass a separate correction review in either mode", () => {
+  for (const value of [readingInput, { ...readingInput, item: { ...readingInput.item, order_mode: "pattern" as const }, basis: "trim-included", match: "straight", repeatCm: 60, rows: [{ ...input.rows[0], active: true }] }]) {
+    const pending = confirm(value);
+    assert.equal(pending.canConfirm, false); assert.equal(pending.ready, false); assert.equal(pending.readingReviewConfirmed, false);
+    assert.match(pending.assessment.message, /訂正・取消/);
+    const reviewed = planMemoOrder(reviewReading(value));
+    assert.equal(reviewed.readingReviewConfirmed, true); assert.equal(reviewed.canConfirm, true); assert.equal(reviewed.ready, false);
+    assert.equal(confirm(reviewReading(value)).ready, true);
+    assert.equal(planMemoOrder({ ...reviewReading(value), readingReviewConfirmation: "" }).readingReviewConfirmed, false);
+  }
+  assert.equal(planMemoOrder(readingInput).totalM, 20, "a candidate is evidence, never an automatic added quantity");
+  const legacy = planMemoOrder({ ...input, item: { ...item, needs_review: false, notes: "訂正候補 1.5×4 は読み取りから除外しました。" } });
+  assert.equal(legacy.readingReviews.length, 1); assert.equal(legacy.canConfirm, false);
+});
+
+test("candidate review and general acknowledgement restore together and invalidate on later edits", () => {
+  const reviewed = reviewReading(readingInput), final = confirm(reviewed);
+  const savedItem = { ...readingInput.item, reading_review_confirmation: final.readingReviewFingerprint, quantity_confirmation: final.fingerprint };
+  assert.equal(planMemoOrder({ ...readingInput, item: savedItem, confirmation: savedItem.quantity_confirmation }).ready, true);
+  const variants = [
+    { rows: [{ ...input.rows[0], quantity: 2 }] }, { manualQuantity: 25 }, { lossRate: 16 },
+    { item: { ...readingInput.item, product_code: "CHANGED" } },
+    { item: { ...readingInput.item, reading_reviews: [{ ...readingInput.item.reading_reviews[0], candidate_formulas: ["1.6×4"] }] } },
+  ];
+  for (const overrides of variants) {
+    const changed = planMemoOrder({ ...readingInput, ...overrides, confirmation: final.fingerprint, readingReviewConfirmation: final.readingReviewFingerprint });
+    assert.equal(changed.readingReviewConfirmed, false); assert.equal(changed.ready, false);
+  }
+  assert.equal(planMemoOrder({ ...reviewed, rows: [{ ...input.rows[0], quantityInput: "" }], confirmation: final.fingerprint }).canConfirmReadingReview, false);
+});
+
+test("a manually included corrected row is counted once and its candidate evidence remains", () => {
+  const corrected = { ...readingInput, item: { ...readingInput.item, entries: [...item.entries, { original_formula: "1.5×4", length_m: 1.5, quantity: 4, subtotal_m: 6 }] }, rows: [...input.rows, { id: "b", length: 1.5, quantity: 4, active: false }] };
+  const final = confirm(reviewReading(corrected));
+  assert.equal(final.totalM, 26); assert.equal(final.orderQuantity, 30); assert.equal(final.ready, true);
+  assert.deepEqual(final.readingReviews[0].candidate_formulas, ["1.5×4"]);
+  assert.equal(dimensionItemToOrderDraftInput({ ...corrected.item, order_quantity: final.orderQuantity }).quantity, 30);
+});
+
+test("workspace validation preserves correction evidence and rejects malformed review arrays or image indexes", () => {
+  const saved = { ...readingInput.item, reading_review_confirmation: "source-review-fingerprint" };
+  const draft = { version: 1, siteName: "Synthetic", parsed: { items: [saved] }, originalParsed: { items: [readingInput.item] }, orderDraftItems: [] };
+  assert.deepEqual(readWorkspaceDraft(JSON.stringify(draft)).parsed!.items[0], saved);
+  const malformed = [null, {}, [{ reason: 1, candidate_formulas: [] }], [{ reason: "reason", candidate_formulas: {} }], [{ reason: "reason", candidate_formulas: [1] }],
+    ...[-1, 0.1, 16, Number.MAX_SAFE_INTEGER + 1].map(source_image_index => [{ reason: "reason", candidate_formulas: [], source_image_index }])];
+  for (const reading_reviews of malformed) assert.throws(() => readWorkspaceDraft(JSON.stringify({ ...draft, parsed: { items: [{ ...saved, reading_reviews }] } })));
+  assert.throws(() => readWorkspaceDraft(JSON.stringify({ ...draft, parsed: { items: [{ ...saved, reading_review_confirmation: 1 }] } })));
+});
+
+test("global correction notes gate legacy restored items and cannot be hidden by another item's local warning", () => {
+  const globalNotes = "別の材料の3×4行は取消として除外しました。原画像を照合してください。";
+  const first = planMemoOrder({ ...input, item: { ...item, notes: "品番を書き直したため、原画像で確認してください。" }, globalNotes });
+  const second = planMemoOrder({ ...input, item: { ...item, product_code: "SECOND", needs_review: false }, globalNotes });
+  assert.ok(first.readingReviews.some(review => review.reason.includes("品番を書き直した")));
+  for (const plan of [first, second]) {
+    assert.ok(plan.readingReviews.some(review => review.candidate_formulas.includes("3×4")));
+    assert.equal(plan.canConfirm, false); assert.equal(plan.ready, false);
+  }
+  const draft = { version: 1, siteName: "Synthetic", parsed: { items: [item], notes: globalNotes }, orderDraftItems: [] };
+  const restored = readWorkspaceDraft(JSON.stringify(draft));
+  const legacy = planMemoOrder({ ...input, item: restored.parsed!.items[0], globalNotes: restored.parsed!.notes });
+  assert.equal(legacy.canConfirm, false); assert.ok(legacy.readingReviews.length > 0);
+  const changed = planMemoOrder({ ...readingInput, globalNotes, readingReviewConfirmation: planMemoOrder(readingInput).readingReviewFingerprint });
+  assert.equal(changed.readingReviewConfirmed, false, "new global evidence invalidates a previous per-item review");
+});

@@ -1,5 +1,6 @@
 import { calculateOrderQuantity, DEFAULT_LOSS_RATE_PERCENT } from "./calc-logic";
 import type { MemoEntry, MemoProductItem, ParsedMemoPayload } from "../types";
+import { normalizeReadingReviews, readingReviewsForItem } from "./memo-reading-review";
 
 export const roundMeters = (n: number) => Math.round((n + Number.EPSILON) * 10000) / 10000;
 
@@ -53,7 +54,7 @@ export function parseVisionJson(text: string): VisionPayload {
 }
 
 export function requiresMemoReview(payload: ParsedMemoPayload): boolean {
-  return Boolean(payload.image_needs_review || payload.needs_review_any || payload.items.some((item) => item.needs_review || item.review_reasons?.length || item.entries.some((entry) => entry.needs_review)));
+  return Boolean(payload.image_needs_review || payload.needs_review_any || payload.items.some((item) => item.needs_review || item.review_reasons?.length || readingReviewsForItem(item, payload.notes).length || item.entries.some((entry) => entry.needs_review)));
 }
 
 export function mergeParsedPayloads(payloads: ParsedMemoPayload[]): ParsedMemoPayload {
@@ -65,9 +66,11 @@ export function mergeParsedPayloads(payloads: ParsedMemoPayload[]): ParsedMemoPa
     const entries = [...(existing?.entries ?? []), ...item.entries.map((entry, entryIndex) => ({ ...validateMemoEntry(entry), source_row_id: `image-${imageIndex}:item-${itemIndex}:row-${entryIndex}`, source_image_index: imageIndex, source_entry_index: entryIndex }))];
     const total = roundMeters(entries.reduce((sum, entry) => sum + entry.subtotal_m, 0));
     const loss = existing?.loss_rate_percent ?? item.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT;
-    const reasons = Array.from(new Set([...(existing?.review_reasons ?? []), ...(item.review_reasons ?? []), ...(imageReview ? ["画像：解析結果を原画像で確認してください"] : []), ...entries.filter((entry) => entry.needs_review).map((entry) => `式：${entry.review_reason}`)]));
+    const reading_reviews = normalizeReadingReviews([...(existing?.reading_reviews ?? []), ...readingReviewsForItem(item, payload.notes).map(review => ({ ...review, source_image_index: imageIndex }))]);
+    const reasons = Array.from(new Set([...(existing?.review_reasons ?? []), ...(item.review_reasons ?? []), ...reading_reviews.map(review => `訂正・取消：${review.reason}`), ...(imageReview ? ["画像：解析結果を原画像で確認してください"] : []), ...entries.filter((entry) => entry.needs_review).map((entry) => `式：${entry.review_reason}`)]));
     map.set(code, { ...existing, ...item, entries, total_m: total, order_quantity: calculateOrderQuantity(total, loss),
-      needs_review: Boolean(imageReview || existing?.needs_review || item.needs_review || entries.some((entry) => entry.needs_review)), review_reasons: reasons });
+      needs_review: Boolean(imageReview || existing?.needs_review || item.needs_review || reading_reviews.length || entries.some((entry) => entry.needs_review)), review_reasons: reasons,
+      ...(reading_reviews.length ? { reading_reviews, reading_review_confirmation: undefined } : {}) });
   }
   const items = Array.from(map.values());
   return { items, notes: Array.from(new Set(payloads.map((p) => p.notes).filter(Boolean))).join("\n"), image_needs_review: payloads.some((payload) => payload.image_needs_review), needs_review_any: items.some((item) => item.needs_review) };

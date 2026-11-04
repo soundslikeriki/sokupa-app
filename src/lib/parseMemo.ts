@@ -9,6 +9,7 @@ import { augmentProductWithCatalogSearch, type CatalogAugment } from "@/lib/wall
 import type { MemoProductItem } from "@/types";
 import { MemoProviderError, providerError } from "@/lib/analysis-failure";
 import { readQaRuntime, syntheticQaVision, QaRuntimeError } from "./qa-runtime";
+import { annotateVisionReadingReviews, normalizeReadingReviews } from "./memo-reading-review";
 
 const MAX_IMAGES = 16;
 /** 画像解析（JSON 安定のため Google 検索ツールは付けない） */
@@ -48,7 +49,9 @@ const SYSTEM_PROMPT = `あなたは内装職人の優秀な事務員です。
 - 足し算、括弧、複数行の続きがある場合は、見えている全ての加算値を拾い、途中で切り捨てないこと。
 - 幅数の減算も先に処理する。2.5×7+4-3 は 2.5×(7+4-3) = 20m。
 - ハイフンは小数表記と減算の両方の可能性がある。原文の式を必ず original_formula にそのまま残し、曖昧なら needs_review: true、notes に理由を書く。推測で書き換えない。
-- 画像全体が不鮮明なら image_needs_review: true、品番が不確かなら product_code_needs_review: true、個々の式が不確かなら entries の needs_review: true を付ける。notes に理由を書き、品番ブロックの confidence を0〜1で示す。`;
+- 画像全体が不鮮明なら image_needs_review: true、品番が不確かなら product_code_needs_review: true、個々の式が不確かなら entries の needs_review: true を付ける。notes に理由を書き、品番ブロックの confidence を0〜1で示す。
+- 取り消し線と訂正後の数字を区別する。元の数字の上や横に新しい数字が書かれ、掛け算や幅数が残る行を、行全体の取消だと断定して黙って捨てない。訂正か取消か不確かな行・品番があれば、その品番に correction_needs_review: true を付け、correction_candidates: [{"original_formula":"見えている候補の式をそのまま","reason":"訂正か取消か等の不確かさ"}] と notes を残す。有効か断定できない候補を勝手に合計へ加減しない。
+- 取消・訂正・除外を判断した場合は、自信が高くても correction_needs_review: true と候補・理由を残し、原画像での確認を求める。`;
 
 type ParseMemoContext = {
   site_name?: string;
@@ -319,6 +322,7 @@ function finalizeClientItem(raw: unknown): MemoProductItem | null {
     typeof conf === "number" && Number.isFinite(conf) ? Math.min(1, Math.max(0, conf)) : undefined;
 
   const is_live_searched = Boolean(r.is_live_searched);
+  const reading_reviews = normalizeReadingReviews(r.vision_reading_reviews);
 
   const review_reasons = [
     ...(Array.isArray(r.review_reasons) ? r.review_reasons.map(String) : []),
@@ -326,6 +330,7 @@ function finalizeClientItem(raw: unknown): MemoProductItem | null {
     ...(r.vision_needs_review || r.image_needs_review ? ["画像：不鮮明な箇所を原画像で確認してください"] : []),
     ...(r.product_code_needs_review || (typeof r.vision_confidence === "number" && r.vision_confidence < 0.8) ? ["品番：原画像の品番を確認してください"] : []),
     ...(r.catalog_needs_review || r.needs_review ? ["商品情報：カタログ情報を確認してください"] : []),
+    ...reading_reviews.map(review => `訂正・取消：${review.reason}`),
   ];
   const needs_review = review_reasons.length > 0;
 
@@ -339,6 +344,7 @@ function finalizeClientItem(raw: unknown): MemoProductItem | null {
     repeat_info,
     needs_review,
     review_reasons,
+    ...(reading_reviews.length ? { reading_reviews } : {}),
     is_live_searched,
   };
 
@@ -440,7 +446,7 @@ export async function parseMemoBody(body: ParseMemoBody) {
     console.info("[parse-memo] timing", { stage: "vision", durationMs: Date.now() - visionStarted, synthetic: Boolean(qa) });
 
     const parsedData = parseVisionJson(responseText);
-    const rawItems = parsedData.items.map((item) => ({ ...item, image_needs_review: parsedData.image_needs_review === true || item.image_needs_review === true, vision_needs_review: parsedData.needs_review === true || item.needs_review, vision_confidence: item.confidence }));
+    const rawItems = annotateVisionReadingReviews(parsedData.items, parsedData.notes).map((item) => ({ ...item, image_needs_review: parsedData.image_needs_review === true || item.image_needs_review === true, vision_needs_review: parsedData.needs_review === true || item.needs_review, vision_confidence: item.confidence }));
 
     const admin = qa ? null : createSupabaseAdmin();
     const catalogStarted = Date.now();

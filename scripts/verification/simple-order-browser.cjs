@@ -165,7 +165,8 @@ const until = async predicate => { for (let n = 0; n < 200; n++) { if (await pre
     await q.getByTitle('この数式を削除').first().click(); await p.saved();
     await q.getByTitle('タップして式を編集').click();
     await q.getByLabel('HEIGHT 1行目の長さ (m)', { exact: true }).fill('4.4');
-    await q.getByTitle('この行の編集を元に戻す').click(); await p.saved();
+    await q.getByTitle('この行の編集を元に戻す').click();
+    await until(() => p.read().then(draft => draft.parsed.items[0].entries[0].length_m === 3.8)); await p.saved();
     check((await p.read()).parsed.items[0].entries[0].length_m === 3.8, 'row reset after deletion follows the surviving original identity');
     check((await p.read()).originalParsed.items[0].entries.length === 2, 'original result never loses the deleted source row');
     check(await q.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'desktop layout fits viewport');

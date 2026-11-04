@@ -1171,6 +1171,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         items={parsed?.items ?? []}
         sourceItems={originalParsed?.items}
         sourceJobId={basicView ? null : resultJobId}
+        readingReviewSourceJobId={resultJobId}
         basicView={basicView}
         notes={parsed?.notes}
         siteName={siteName}
