@@ -1,5 +1,7 @@
 # iPhone実機を本番から分離して確認する手順
 
+> **新しい第一候補は [独立HTTPS QA案](./hosted-iphone-qa-plan.md)。** 以下のLAN／本番secret再利用案は調査履歴で、現時点の承認依頼に使わない。いずれも未実施。
+
 2026-11-04時点の準備。テスト用URL、外部project、LINE callback追加、トンネル、保護bypassは作成していない。旧版のURLと本番DBはそのまま利用できる。専用の実機URLができる前に「iPhone検証済み」とはしない。
 
 ## 最短の選択肢

@@ -989,8 +989,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           <span className="text-xs">要確認</span>
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className={`gap-1 px-2 py-0.5 ml-1 ${product.comparisonConfirmed ? "text-emerald-600 border-emerald-600/30 bg-emerald-500/10" : "text-amber-600 border-amber-600/30 bg-amber-500/10"}`}>
-                          {product.comparisonConfirmed ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                        <Badge variant="outline" className={`gap-1 px-2 py-0.5 ml-1 ${!basicView && product.comparisonConfirmed ? "text-emerald-600 border-emerald-600/30 bg-emerald-500/10" : "text-amber-600 border-amber-600/30 bg-amber-500/10"}`}>
+                          {!basicView && product.comparisonConfirmed ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
                           <span className="text-xs">{basicView ? "数量を確認" : product.comparisonConfirmed ? "比較条件確認済" : "前提未確認"}</span>
                         </Badge>
                       )}

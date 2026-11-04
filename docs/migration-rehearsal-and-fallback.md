@@ -11,7 +11,7 @@
 - 既存3本の状態、および残り各migrationの後に、旧版相当のjob作成・worker更新・匿名poll・Storage insertをtransaction内の試験行で確認した。すべてrollbackし、実データは変更しない。
 - 追加9本後、全56表の元列・元行のhashが元snapshotと完全一致した。ユーザー／招待／無制限／利用枠／結果／通知／画像IDを含む。
 - execution policyの初期値は`scheduled`。private accessが未成立なので新方式の受付は閉じている。切替手順では明示的に`disabled`へ変更してからPhase 2へ進む。初期値がdisabledであるとは仮定しない。
-- Phase 2後はprivate access判定が成立し、旧版の匿名poll／uploadが権限エラーになる。旧コードへの単純alias切戻しが動かない境界を実SQLで確認した。
+- Phase 2後はprivate access判定が成立し、旧版の匿名poll／uploadが権限エラーになる。旧コードへの単純alias切戻しが動かない境界を実SQLで確認した。ただし旧service権限APIや稼働中workerの停止を意味しない。入口の別途停止が必要（[条件](./legacy-ingress-retirement.md)）。
 - 121ジョブ・175画像明細・181画像レコードのID／結果／通知等は保持され、旧ジョブは再開対象0件。既存のStorage bucket設定変更と運用health状態の初期化は意図した差分として区別した。
 - 切替後に新しい試験jobを追加すると再開対象に入り、sealを再確認してもlegacyへ戻らず保持された。試験jobは最後にrollbackした。
 
@@ -40,3 +40,6 @@ Node24.22.2で通常／基本の両方を本番形式buildし、型・lintを確
 - 通常表示では直近の4件修正33項目と統合機能32項目、計65項目を再確認。基準22f0ffaは独立レビューで193単体／250ブラウザ／画像API16項目を通過し、新しいP1/P2がないとの報告を受領済み。
 
 これらはlocalhostと合成APIの試験。通常／基本で共通のbackendは前段の実native Cron／pg_net25項目の対象と同じで、今回backendへ変更を入れていない。Vercel上のalias切替や実LINEログインまで実行したという意味ではない。試験サーバーと実データの予行DBは停止し、本番へは反映していない。
+
+
+追補: 基本表示で保存済み確認状態から緑チェックが残るP3を修正し、通常→基本の確認済み切替を含む17項目と通常機能32項目を確認した。UI fallbackの限界と旧service APIの停止条件は [legacy-ingress-retirement.md](./legacy-ingress-retirement.md)、実機の第一候補は [hosted-iphone-qa-plan.md](./hosted-iphone-qa-plan.md) を参照。
