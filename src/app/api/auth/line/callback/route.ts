@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { isAdmin } from "@/lib/server-auth";
 import { INVITE_COOKIE, SESSION_COOKIE, SESSION_SECONDS, secureCookieOptions, signToken, verifyToken } from "@/lib/session-token";
+import { lineLoginErrorResponse } from "@/lib/line-login-error";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -59,13 +60,14 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const code = url.searchParams.get("code") || "";
     const state = url.searchParams.get("state") || "";
+    if (url.searchParams.has("error")) return lineLoginErrorResponse(url.searchParams.get("error")?.toUpperCase() === "ACCESS_DENIED" ? "cancelled" : "provider");
     if (!code || !state) {
-      return NextResponse.json({ error: "Missing code/state" }, { status: 400 });
+      return lineLoginErrorResponse("state");
     }
 
     const cookieState = req.cookies.get("sokupa_line_state")?.value || "";
     if (!cookieState || cookieState !== state) {
-      return NextResponse.json({ error: "ログインの確認ができませんでした。元のブラウザから再度ログインしてください。" }, { status: 400 });
+      return lineLoginErrorResponse("state");
     }
 
     const clientId = getEnv("LINE_LOGIN_CHANNEL_ID");
@@ -77,7 +79,7 @@ export async function GET(req: NextRequest) {
 
     const invite = verifyToken(req.cookies.get(INVITE_COOKIE)?.value, "invite");
     const admin = createSupabaseAdmin();
-    if (!admin) return NextResponse.json({ error: "Server not configured" }, { status: 503 });
+    if (!admin) return lineLoginErrorResponse("configuration", 503);
 
     // Existing accounts are grandfathered even when their historic invite_code is null.
     const { data: existing, error: lookupError } = await admin.from("users").select("line_user_id").eq("line_user_id", profile.userId).maybeSingle();
@@ -90,7 +92,7 @@ export async function GET(req: NextRequest) {
         p_line_user_id: profile.userId, p_display_name: profile.displayName ?? null,
         p_picture_url: profile.pictureUrl ?? null, p_invite_code: invite.subject,
       });
-      if (error) return NextResponse.json({ error: "招待コードの登録に失敗しました。コードを確認してください。" }, { status: 403 });
+      if (error) return lineLoginErrorResponse("invite", 403);
     } else {
       const { error } = await admin.from("users").upsert({
         line_user_id: profile.userId, display_name: profile.displayName ?? null,
@@ -100,6 +102,8 @@ export async function GET(req: NextRequest) {
     }
 
     const res = NextResponse.redirect(new URL("/", req.url), { status: 302 });
+    res.headers.set("Cache-Control", "no-store");
+    res.headers.set("Referrer-Policy", "no-referrer");
     res.cookies.set(SESSION_COOKIE, signToken("session", profile.userId, SESSION_SECONDS), { ...secureCookieOptions, maxAge: SESSION_SECONDS });
     res.cookies.delete(INVITE_COOKIE);
     res.cookies.delete("sokupa_line_user_id");
@@ -108,9 +112,9 @@ export async function GET(req: NextRequest) {
     res.cookies.delete("sokupa_line_state");
     res.cookies.delete("sokupa_invite_code");
     return res;
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : "Internal Server Error";
-    return NextResponse.json({ error: msg }, { status: 500 });
+  } catch {
+    console.error("[LINE callback] login unavailable");
+    return lineLoginErrorResponse("provider", 503);
   }
 }
 
