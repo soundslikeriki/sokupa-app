@@ -1,8 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { buildOrderRequestText } from "@/lib/order-text";
 
 import type { ParsedMemoPayload } from "@/types";
-import { mergeParsedPayloads, requiresMemoReview } from "@/lib/memo-calculation";
+import { mergeParsedPayloads } from "@/lib/memo-calculation";
 import { parseMemoBody } from "@/lib/parseMemo";
 import { MEMO_BUCKET, memoObjectPath, MAX_MEMO_BYTES } from "@/lib/memo-storage";
 import { sendLineMessages } from "@/lib/line-notification";
@@ -18,7 +17,7 @@ export type AnalysisJobStepResult = {
 const infrastructureFailure = (error: string, status: AnalysisJobStepResult["status"] = "running"): AnalysisJobStepResult => ({ status, error, failureKind: "infrastructure" });
 class NotificationStateError extends Error {}
 
-async function notifyCompletion(admin: SupabaseClient, job: any, result: ParsedMemoPayload) {
+async function notifyCompletion(admin: SupabaseClient, job: any) {
   const started = Date.now();
   try {
     if (job.notification_protocol !== "line_retry_v1") {
@@ -37,11 +36,8 @@ async function notifyCompletion(admin: SupabaseClient, job: any, result: ParsedM
       if (error) throw new NotificationStateError("notification attempt recording failed");
     }
     const messages = [{ type: "text", text: `✅ ソクパ解析が完了しました！${job.site_name ? `\n現場：${job.site_name}` : ""}\nアプリを開いて結果を確認してください。` }];
-    // Uncertain calculations must be reviewed in the app before presenting an order text.
-    if (!requiresMemoReview(result)) {
-      const orderText = buildOrderRequestText(result.items, job.site_name);
-      if (orderText.length <= 4900) messages.push({ type: "text", text: orderText });
-    }
+    // Completion is automatic; order quantities require a separate review in the app.
+    // Keep this payload stable across retries, regardless of OCR flags or later edits.
     await sendLineMessages(job.line_user_id, messages, job.id);
     const { error } = await admin.from("analysis_jobs").update({ notification_status: "accepted", notification_error: null, notified_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", job.id);
     if (error) throw new NotificationStateError("notification state update failed");
@@ -82,7 +78,7 @@ export async function processAnalysisJobStep(opts: {
   }
   if (job.status === "done") {
     try {
-      if (["pending", "failed"].includes(job.notification_status) && job.result) await notifyCompletion(admin, job, job.result as ParsedMemoPayload);
+      if (["pending", "failed"].includes(job.notification_status) && job.result) await notifyCompletion(admin, job);
     } catch { return infrastructureFailure("Notification state unavailable", "done"); }
     return { status: "done" };
   }
@@ -152,7 +148,7 @@ export async function processAnalysisJobStep(opts: {
     }
     if (!finalized) return { status: "done" };
 
-    try { await notifyCompletion(admin, { ...job, notification_protocol: "line_retry_v1" }, resultPayload); }
+    try { await notifyCompletion(admin, { ...job, notification_protocol: "line_retry_v1" }); }
     catch { return infrastructureFailure("Notification state unavailable", "done"); }
     return { status: "done" };
   }
