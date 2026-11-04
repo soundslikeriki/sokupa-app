@@ -5,8 +5,35 @@ import { saveLatestWorkspaceSnapshot, restoreLatestWorkspaceSnapshot, rebuildLat
 import { replaceWorkspaceDraft, type WorkspaceDraft } from "./workspace-draft";
 import { mergeParsedPayloads } from "./memo-calculation";
 import type { MemoProductItem } from "../types";
+import { findOriginalMemoEntry } from "./original-memo-entry";
+import { readWorkspaceDraft } from "./workspace-draft";
 const item: MemoProductItem = { product_code: "SYNTHETIC", manufacturer: "Synthetic", entries: [{ original_formula: "2.7×2", length_m: 2.7, quantity: 2, subtotal_m: 5.4 }, { original_formula: "3.8×1", length_m: 3.8, quantity: 1, subtotal_m: 3.8 }], total_m: 9.2, order_quantity: 11 };
 const rows = [{ id: "a", length: 2.7, quantity: 2, active: true }, { id: "b", length: 3.8, quantity: 1, active: true }];
+test("incomplete measurements never reuse the last valid number for sufficiency", async () => {
+  const valid = compareProduct(item, rows, 60, "trim-included", "straight");
+  for (const field of ["lengthInput", "quantityInput"] as const) {
+    const comparison = compareProduct(item, [{ ...rows[0], [field]: "" }, rows[1]], 60, "trim-included", "straight");
+    assert.equal(comparison.premisesAvailable, false);
+    assert.equal(comparison.strict.totals.selectedM, null);
+    assert.equal(comparison.reference!.totals.selectedM, null);
+    assert.notEqual(comparison.fingerprint, valid.fingerprint);
+    assert.equal(assessProductOrder(30, comparison.strict.totals.selectedM, false).showCheckmark, false);
+  }
+  const blank = { ...item, entries: [{ ...item.entries[0], length_input: "", quantity_input: "" }] };
+  const draft: WorkspaceDraft = { version: 1, siteName: "Incomplete", parsed: { items: [blank] }, originalParsed: { items: [item] }, orderDraftItems: [] };
+  assert.equal(readWorkspaceDraft(JSON.stringify(draft)).parsed!.items[0].entries[0].length_input, "");
+  const values = new Map<string, string>(); const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, raw: string) => { values.set(key, raw); } };
+  await saveLatestWorkspaceSnapshot(storage, "owner", draft);
+  assert.equal((await restoreLatestWorkspaceSnapshot(storage, "owner"))!.parsed!.items[0].entries[0].quantity_input, "");
+});
+test("row reset follows source identity after deletion and refuses ambiguous legacy matches", () => {
+  const originals = item.entries.map((entry, index) => ({ ...entry, source_row_id: `image-${index}:row-0`, source_image_index: index }));
+  const survivor = { ...originals[1], length_m: 9, quantity: 7 };
+  assert.equal(findOriginalMemoEntry(originals, survivor), originals[1]);
+  assert.equal(findOriginalMemoEntry(item.entries, { ...item.entries[1], length_m: 9 }), item.entries[1]);
+  assert.equal(findOriginalMemoEntry([item.entries[1], { ...item.entries[1] }], item.entries[1]), undefined);
+  assert.equal(findOriginalMemoEntry(originals, { ...survivor, source_row_id: "missing" }), undefined);
+});
 test("integrated repeat compares each height, restores source OFF and refuses double adjustment", () => {
   const on = compareProduct(item, rows, 60, "trim-included", "straight");
   assert.equal(on.strict.totals.selectedM, "10.2");

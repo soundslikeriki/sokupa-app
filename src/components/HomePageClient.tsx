@@ -155,6 +155,7 @@ export default function HomePageClient() {
   const [lineUserId, setLineUserId] = useState<string | null>(null);
   const [images, setImages] = useState<ProcessedImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const intakeInFlightRef = useRef(false);
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const [parsed, setParsed] = useState<ParsedMemoPayload | null>(null);
   const [originalParsed, setOriginalParsed] = useState<ParsedMemoPayload | null>(null);
@@ -519,12 +520,14 @@ export default function HomePageClient() {
 
   const handleAnalyze = async () => {
     if (!draftReady || analysisBlocksIntake(jobAccepted)) return;
-    if (isAnalyzing) return;
+    if (intakeInFlightRef.current || isAnalyzing) return;
     if (readyImages.length === 0) return;
-    try { if (pendingJobResultRef.current) await retainPendingResult(pendingJobResultRef.current); }
-    catch { setResultRetentionError("別の解析結果を端末へ保管できませんでした。サーバーの「保存済みの解析結果」から開けます。"); }
+    // Claim synchronously, before any lock/upload/digest can yield to another click.
+    intakeInFlightRef.current = true;
     const previousAnalysis = jobAccepted, previousUi = jobUi;
     const admissionVersion = ++analysisSelectionVersionRef.current;
+    // Replacement consent covers only the workspace visible at the user's click.
+    const workspaceAtStart = currentWorkspaceRef.current;
     setIsAnalyzing(true);
     setError(null);
     setProgress({ done: 0, total: readyImages.length });
@@ -532,6 +535,9 @@ export default function HomePageClient() {
     setJobUi(null);
 
     try {
+      const replacementFingerprint = workspaceAtStart ? await workspaceFingerprint(workspaceAtStart) : null;
+      try { if (pendingJobResultRef.current) await retainPendingResult(pendingJobResultRef.current); }
+      catch { setResultRetentionError("別の解析結果を端末へ保管できませんでした。サーバーの「保存済みの解析結果」から開けます。"); }
       // Save prepared JPEGs through the authenticated server API.
       const uploadedUrls: string[] = [];
       for (let i = 0; i < readyImages.length; i++) {
@@ -598,11 +604,10 @@ export default function HomePageClient() {
         throw new Error(msg);
       }
 
-      const current = currentWorkspaceRef.current;
       // A successful new upload is explicit consent to replace the previous latest result.
       // Keep it visible/saved until completion; edits made meanwhile require a separate choice.
-      if (current) {
-        const consent = { jobId: String(createJson.job_id), fingerprint: await workspaceFingerprint(current) };
+      if (replacementFingerprint) {
+        const consent = { jobId: String(createJson.job_id), fingerprint: replacementFingerprint };
         acceptedReplacementRef.current = consent;
         try { await withWorkspaceLock(`sokupa:workspace:v1:${lineUserId}`, () => writeReplacementConsent(localStorage, lineUserId!, consent)); }
         catch { setResultRetentionError("切替情報を端末に保存できませんでした。再起動後は保存済みの解析結果から選べます。"); }
@@ -621,6 +626,7 @@ export default function HomePageClient() {
         setAnalysisRecoveryEpoch((current) => current + 1);
       }
     } finally {
+      intakeInFlightRef.current = false;
       setIsAnalyzing(false);
       setProgress(null);
     }

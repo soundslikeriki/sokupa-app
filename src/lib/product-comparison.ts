@@ -2,12 +2,12 @@ import { calculateMultiHeightRepeat } from "./calculation/multi-height-repeat.mj
 import { assessOrderQuantity } from "./calculation/order-quantity.mjs";
 import type { MemoProductItem } from "../types";
 
-export type ComparisonRow = { id: string; length: number; quantity: number; active: boolean };
+export type ComparisonRow = { id: string; length: number; quantity: number; active: boolean; lengthInput?: string; quantityInput?: string };
 export function compareProduct(item: MemoProductItem, rows: ComparisonRow[], repeatCm: number | null, basis: string, match: string) {
   const input: Parameters<typeof calculateMultiHeightRepeat>[0] = {
     productCode: item.product_code,
     repeat: { enabled: rows.some(row => row.active), matchType: match, ...(repeatCm !== null ? { vertical: { value: repeatCm, unit: "cm" as const } } : {}) },
-    rows: rows.map(row => ({ id: row.id, sourceLength: { value: row.length, unit: "m" as const }, stripCount: row.quantity,
+    rows: rows.map(row => ({ id: row.id, sourceLength: { value: row.lengthInput ?? row.length, unit: "m" as const }, stripCount: row.quantityInput ?? row.quantity,
       lengthKind: basis === "trim-included" || basis === "repeat-adjusted" ? basis : "unknown" as const, applyRepeat: row.active })),
   };
   const strict = calculateMultiHeightRepeat(input);

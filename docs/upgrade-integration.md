@@ -1,5 +1,7 @@
 # 最新結果保存・複数高さ・数量チェックの統合
 
+> 2026-11-04追補: 独立レビュー4件の修正、Node 24検証、最新保全と公開前条件は [post-rollback-validation.md](./post-rollback-validation.md) を参照。旧版は維持している。
+
 2026-11-04、別worktree `sokupa-next-upgrade`で実装。本番、旧版、既存DB・画像、招待、LINE ID、管理者設定、プラン、Cron設定は変更していない。旧版復帰後の運用を維持し、前日の失効した移行承認は再使用していない。
 
 ## 取り込んだもの

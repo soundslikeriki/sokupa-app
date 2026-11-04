@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ListPlus } from "lucide-react";
 import { roundMeters } from "@/lib/memo-calculation";
 import { compareProduct, assessProductOrder } from "@/lib/product-comparison";
+import { findOriginalMemoEntry } from "@/lib/original-memo-entry";
 import { calculateOrderQuantity, DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import {
   areAllCodesCollapsed,
@@ -117,6 +118,7 @@ function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
 export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft }: OrderListProps) {
   const [photoIndex, setPhotoIndex] = useState<number | null>(null);
   const [photoError, setPhotoError] = useState(false);
+  const [rowResetError, setRowResetError] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
   const [lossRates, setLossRates] = useState<Record<string, number | "">>({});
@@ -161,7 +163,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
   };
 
   const canonicalizeDerivedItem = (item: any): MemoProductItem => {
-    const { derivedEntries, override_active, rActive, total_quantity, comparison, comparisonConfirmed, quantityAssessment, ...base } = item;
+    const { derivedEntries, override_active, rActive, total_quantity, comparison, comparisonConfirmed, quantityAssessment, incompleteMeasurements, ...base } = item;
     return {
       ...base,
       entries: (derivedEntries ?? item.entries ?? []).map((entry: any) => {
@@ -172,7 +174,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
           original_formula: entry.original_formula || `${length_m} x ${quantity}`,
           repeat_enabled: entry.isRepeatActive ?? entry.repeat_enabled ?? false,
           needs_review: entry.needs_review, review_reason: entry.review_reason,
-          length_m, quantity,
+          length_m, quantity, length_input: entry.length_input, quantity_input: entry.quantity_input,
           subtotal_m: toFiniteNumber(entry.derived_subtotal ?? entry.subtotal_m, Number((length_m * quantity).toFixed(2))),
         };
       }),
@@ -281,6 +283,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
         ...prev,
         [productCode]: {
           ...prevOvr,
+          quantityConfirmation: "",
           [field]: {
             ...prevFieldVals,
             [entryIndex]: val
@@ -455,16 +458,22 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
   };
 
   const handleResetEntry = (productCode: string, entryIndex: number) => {
+    const original = findOriginalMemoEntry(
+      originalItemsRef.current.find((item) => item.product_code === productCode)?.entries ?? [],
+      items.find((item) => item.product_code === productCode)?.entries[entryIndex],
+    );
+    if (!original) {
+      setRowResetError("元の行を特定できませんでした。写真や元メモを確認し、長さと幅数を入力してください。");
+      return;
+    }
+    setRowResetError(null);
     clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
       const prevOvr = prev[productCode] || {};
       const newQtys = { ...prevOvr.entryQtys };
-      const original = originalItemsRef.current.find((item) => item.product_code === productCode)?.entries[entryIndex];
-      if (original) newQtys[entryIndex] = original.quantity;
-      else delete newQtys[entryIndex];
+      newQtys[entryIndex] = original.quantity;
       const newLengths = { ...prevOvr.entryLengths };
-      if (original) newLengths[entryIndex] = original.length_m;
-      else delete newLengths[entryIndex];
+      newLengths[entryIndex] = original.length_m;
       return {
         ...prev,
         [productCode]: {
@@ -565,7 +574,9 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
         const active = eRepeats[idx] ?? e.repeat_enabled ?? false;
         // A common height is an explicit override. Otherwise preserve every row's own height.
         return { id: e.source_row_id ?? `${item.product_code}:${idx}`, length: active && h !== null && h > 0 && typeof elengths[idx] !== "number" ? h : base,
-          quantity: typeof eqtys[idx] === "number" ? eqtys[idx] as number : e.quantity, active };
+          quantity: typeof eqtys[idx] === "number" ? eqtys[idx] as number : e.quantity, active,
+          lengthInput: elengths[idx] === "" ? "" : typeof elengths[idx] === "number" ? undefined : e.length_input,
+          quantityInput: eqtys[idx] === "" ? "" : typeof eqtys[idx] === "number" ? undefined : e.quantity_input };
       });
       const comparison = compareProduct(item, rows, r, basis, match);
       const derivedEntries = (item.entries || []).map((e: any, idx: number) => {
@@ -577,6 +588,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
         const subtotal = stripL * row.quantity;
         calcTotalM = roundMeters(calcTotalM + roundMeters(subtotal)); calcTotalQty += row.quantity;
         return { ...e, base_length: base, derived_length: Number(stripL.toFixed(6)), derived_quantity: row.quantity,
+          length_input: row.lengthInput, quantity_input: row.quantityInput,
           derived_subtotal: Number(subtotal.toFixed(6)), isEditing: ovr.entryEditMode?.[idx] === true, isRepeatActive: row.active };
       });
 
@@ -602,6 +614,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
         ...item,
         measurement_basis: basis, pattern_match: match, quantity_confirmation: confirmation, order_quantity_input: rawOrder,
         comparison, comparisonConfirmed, quantityAssessment,
+        incompleteMeasurements: rows.some(row => row.lengthInput !== undefined || row.quantityInput !== undefined),
         total_m: Number(calcTotalM.toFixed(2)),
         order_quantity,
         loss_rate_percent: lossRate,
@@ -651,7 +664,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
         entries: item.entries?.map((entry) => ({
           length_m: entry.length_m,
           quantity: entry.quantity,
-          subtotal_m: entry.subtotal_m, repeat_enabled: entry.repeat_enabled,
+          subtotal_m: entry.subtotal_m, repeat_enabled: entry.repeat_enabled, length_input: entry.length_input, quantity_input: entry.quantity_input,
         })),
       })),
     );
@@ -662,7 +675,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
   }, [derivedItems, onItemsChange]);
 
   const copyOrderText = async () => {
-    if (!derivedItems.length || derivedItems.some(item => item.order_quantity_input !== undefined)) return;
+    if (!derivedItems.length || derivedItems.some(item => (item.order_quantity_input !== undefined || item.incompleteMeasurements))) return;
     const text = buildOrderRequestText(derivedItems, siteName);
     try {
       await navigator.clipboard.writeText(text);
@@ -727,7 +740,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
           )}
           <Button 
             onClick={() => void copyOrderText()} 
-            disabled={derivedItems.some(item => item.order_quantity_input !== undefined)}
+            disabled={derivedItems.some(item => (item.order_quantity_input !== undefined || item.incompleteMeasurements))}
             className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 py-5 text-sm font-semibold shadow-lg transition-all duration-300 hover:from-indigo-700 hover:to-purple-700 hover:shadow-xl sm:py-6 sm:text-base"
           >
             <CopyIcon className="w-4 h-4 mr-2" />
@@ -791,7 +804,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                 className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-black/5 bg-black/[0.03] px-2 py-1.5 dark:border-white/5 dark:bg-white/[0.04] sm:px-3"
               >
                 <p className="min-w-0 flex-1 truncate whitespace-nowrap text-xs font-semibold tabular-nums text-zinc-900 dark:text-zinc-100 sm:text-sm">
-                  ・{code} / 数量：{item.order_quantity_input === undefined ? `${quantity}m` : "入力を確認してください"}
+                  ・{code} / 数量：{item.order_quantity_input === undefined && !item.incompleteMeasurements ? `${quantity}m` : "入力を確認してください"}
                 </p>
                 <div className="flex shrink-0 items-center gap-1.5">
                   <Button
@@ -800,7 +813,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                     size="icon"
                     className="h-8 w-8 rounded-md bg-white p-0 dark:bg-black"
                     onClick={() => handleAdjustOrderQuantity(item.product_code, -1)}
-                    disabled={quantity <= 0 || item.order_quantity_input !== undefined}
+                    disabled={quantity <= 0 || (item.order_quantity_input !== undefined || item.incompleteMeasurements)}
                     aria-label={`${code} の発注数量を1m減らす`}
                   >
                     <Minus className="h-3.5 w-3.5" />
@@ -810,14 +823,14 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                     variant="outline"
                     size="icon"
                     className="h-8 w-8 rounded-md bg-white p-0 dark:bg-black"
-                    disabled={item.order_quantity_input !== undefined}
+                    disabled={(item.order_quantity_input !== undefined || item.incompleteMeasurements)}
                     onClick={() => handleAdjustOrderQuantity(item.product_code, 1)}
                     aria-label={`${code} の発注数量を1m増やす`}
                   >
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-                <p className={`w-full text-xs ${item.quantityAssessment.showCheckmark ? "text-emerald-700 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300"}`} role="status" aria-label={`${code} の発注量チェック`}>{item.quantityAssessment.message}</p>
+                <p className={`w-full text-xs ${item.quantityAssessment.showCheckmark ? "text-emerald-700 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300"}`} role="status" aria-label={`${code} の発注量チェック`}>{item.incompleteMeasurements ? "要確認：長さまたは幅数が未入力です。入力を完成させてから前提を確認してください。" : item.quantityAssessment.message}</p>
               </div>
             );
           })}
@@ -829,7 +842,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
           <Button
             type="button"
             className="min-h-11 w-full gap-2 bg-violet-600 px-4 font-bold hover:bg-violet-700 sm:w-auto"
-            disabled={derivedItems.some(item => item.order_quantity_input !== undefined)}
+            disabled={derivedItems.some(item => (item.order_quantity_input !== undefined || item.incompleteMeasurements))}
             onClick={() =>
               onAddAllToOrderDraft(
                 derivedItems.map((item) => dimensionItemToOrderDraftInput(item)),
@@ -861,6 +874,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
         </Button>
       </div>
 
+      {rowResetError ? <p role="alert" className="text-sm text-amber-800 dark:text-amber-300">{rowResetError}</p> : null}
       <div className="space-y-4 sm:space-y-6">
         {groups.map((group) => (
           <Card key={group.label} className="border-none shadow-md overflow-hidden bg-white/60 dark:bg-zinc-900/60 backdrop-blur-md">
@@ -892,7 +906,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                           type="button"
                           variant="outline"
                           className="h-11 shrink-0 gap-1.5 rounded-lg bg-white px-2.5 text-xs font-bold dark:bg-black"
-                          disabled={product.order_quantity_input !== undefined}
+                          disabled={(product.order_quantity_input !== undefined || product.incompleteMeasurements)}
                           onClick={() => onAddToOrderDraft(dimensionItemToOrderDraftInput(product))}
                           title="発注リストに追加"
                         >
@@ -986,7 +1000,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                           type="button"
                           variant="outline"
                           className="h-11 gap-2 rounded-lg bg-white px-3 text-xs font-bold dark:bg-black sm:text-sm"
-                          disabled={product.order_quantity_input !== undefined}
+                          disabled={(product.order_quantity_input !== undefined || product.incompleteMeasurements)}
                           onClick={() => onAddToOrderDraft(dimensionItemToOrderDraftInput(product))}
                         >
                           <ListPlus className="h-4 w-4" />
@@ -1048,7 +1062,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                           size="icon"
                           className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
                           onClick={() => handleAdjustOrderQuantity(product.product_code, -1)}
-                          disabled={product.order_quantity <= 0 || product.order_quantity_input !== undefined}
+                          disabled={product.order_quantity <= 0 || (product.order_quantity_input !== undefined || product.incompleteMeasurements)}
                           aria-label={`${product.product_code} の発注数量を1m減らす`}
                         >
                           <Minus className="h-4 w-4" />
@@ -1068,7 +1082,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                           variant="outline"
                           size="icon"
                           className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
-                          disabled={product.order_quantity_input !== undefined}
+                          disabled={(product.order_quantity_input !== undefined || product.incompleteMeasurements)}
                           onClick={() => handleAdjustOrderQuantity(product.product_code, 1)}
                           aria-label={`${product.product_code} の発注数量を1m増やす`}
                         >
@@ -1227,8 +1241,8 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                        {product.derivedEntries?.map((e: any, eidx: number) => {
                          const rawQty = overrides[product.product_code]?.entryQtys?.[eidx];
                          const rawLen = overrides[product.product_code]?.entryLengths?.[eidx];
-                         const qValue = rawQty !== undefined ? rawQty : e.quantity;
-                         const lValue = rawLen !== undefined ? rawLen : e.length_m;
+                         const qValue = rawQty !== undefined ? rawQty : e.quantity_input ?? e.quantity;
+                         const lValue = rawLen !== undefined ? rawLen : e.length_input ?? e.length_m;
                          
                          return (
                            <div
@@ -1299,7 +1313,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                                         title="タップして式を編集"
                                       >
                                         <span className={`min-w-0 shrink-0 truncate tabular-nums ${typeof rawLen === "number" && rawLen !== e.length_m ? "font-bold text-indigo-600 dark:text-indigo-400" : ""}`}>
-                                          {e.derived_length}m
+                                          {e.length_input !== undefined ? "未入力" : `${e.derived_length}m`}
                                         </span>
                                         <span className="shrink-0 text-muted-foreground mx-px">×</span>
                                         <span className={`min-w-[1.25rem] shrink-0 text-center font-bold tabular-nums sm:w-[2.5rem] ${typeof rawQty === "number" && rawQty !== e.quantity ? "text-indigo-600 dark:text-indigo-400" : ""}`}>
@@ -1313,7 +1327,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                                 
                                 <div className="flex shrink-0 items-center justify-end pl-1 sm:pl-2">
                                   <span className="w-[3.25rem] shrink-0 text-right text-xs font-bold tabular-nums leading-none text-indigo-600 dark:text-indigo-400 sm:w-16 sm:text-base">
-                                    {e.derived_subtotal}m
+                                    {e.length_input !== undefined || e.quantity_input !== undefined ? "入力確認" : `${e.derived_subtotal}m`}
                                   </span>
                                   <button
                                     type="button"

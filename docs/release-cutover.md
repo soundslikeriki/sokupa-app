@@ -1,5 +1,7 @@
 # 本番切替と復旧
 
+> **2026-11-04: 旧版復帰後はこの旧手順を実行しない。** 本番状態・最新保全・未実施条件は [post-rollback-validation.md](./post-rollback-validation.md) が優先する。前日の承認・拒否済み操作を再利用しない。
+
 ユーザーは、安全確認後の公開、Production専用SESSION_SECRET 1個の生成・登録、Supabaseの毎分wakeを承認済み。Hobbyを維持する。実LINEの試験送信、有料AIの試験、新しいVercel保護bypass資格情報、権限拡張や有料プランはこの承認に含めない。
 
 ## 今回の追加保護

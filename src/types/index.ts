@@ -18,6 +18,9 @@ export type MemoEntry = {
   original_formula: string;
   length_m: number;
   quantity: number;
+  /** Incomplete editor input. Numeric fields retain the last valid measurements. */
+  length_input?: string;
+  quantity_input?: string;
   subtotal_m: number;
   needs_review?: boolean;
   review_reason?: string;
