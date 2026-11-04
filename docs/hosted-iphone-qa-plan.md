@@ -67,3 +67,11 @@ QA作成・専用鍵・本人profile利用・専用Developing channel・限定HT
 QAの90分TTLは処理を止めるが、public入口への不要リクエスト自体のプラットフォーム消費は完全には止めない。Vercel共有枠の使用量と試験停止閾値（残量が試験予算未満／想定外traffic発生でQAを停止）を確認してから配備する。Supabase新組織の利用枠と全Ownerの2active無料project制限も別々に確認する。`ops/qa/wake-ttl.sql`は期限切れ時にwake／受付をdisabledにし、QA専用scheduleだけを解除する。ローカルSQLのCron／ネットワーク部分はfixtureであり、実pg_cron／pg_netとの新adapter統合は未検証。終了後はCron停止→QA TTL停止→個別資源の削除確認。本番鍵・実データ・AI・LINE送信を使わない。
 
 本人のiPhone操作は正式QA URLと専用LINE設定ができてから案内する。接続権限が未更新のため現時点で開始時刻は確約できず、15:00UTC公開は未確約。既存の本番公開／SESSION_SECRET／wake承認の再確認は不要だが、本番切替に必要な実機と入口退役の安全条件は未達。
+
+## 実拡張とのローカル統合結果（13:47 UTC）
+
+新adapterを含むQA用Next buildを、既存の使い捨てnative Supabaseへ接続して26項目を確認した。実pg_cron／pg_net／Vault、private Storage、実HTTP署名session、2回の独立した実Cron/private成功、31秒画像2枚がpoll/resumeなしに40m／発注46mへ完了、合成通知1回、本人quota0、QA job/upload上限記録、実Cronによる期限切れ自己解除とdisabled、期限後の再受付拒否・session／OAuth開始拒否が通った。Google／LINEへのfetchは試験serverが遮断し、合成応答は出荷コードのQA adapter自身が返す。実OAuthやiPhone到達の代用にはしない。
+
+既存native platform schemaへQA限定marker/limitsを加える結合試験であり、空hosted Supabaseの初期化は別のfresh PG84項目による確認。初回cleanupはfixtureの親子FKにより失敗したため、子画像→親jobの順へ修正し、正確な同一手順を実行してQA画像・job・user・cap・Cronの除去、元の2合成user、disabled状態を確認した。26機能項目とcleanupの証跡は別々に保持し、初回プロセス全体の終了コード0とは報告しない。
+
+13:47 UTC、ツールmetadataが更新され、正式な`link_id`選択が利用可能になった。新接続Sokupa（`link_6aeb35dcab2481918a368dc3f75151b2`）のlist_organizationsはSokupa組織`ipixeawnrdmkurtpcdru`だけを返した。旧Primaryの拒否を別手段で迂回したものではなく、新しく承認された接続対象の通常の組織一覧。get_cost／project作成はこの確認段階では未実施で、親の作成保留を維持している。
