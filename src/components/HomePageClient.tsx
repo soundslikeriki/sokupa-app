@@ -152,6 +152,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const uploadInputId = useId();
   const siteNameId = useId();
   const [siteName, setSiteName] = useState("");
+  const [qaSynthetic, setQaSynthetic] = useState(false);
   const [lineUserId, setLineUserId] = useState<string | null>(null);
   const [images, setImages] = useState<ProcessedImage[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -314,6 +315,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         const session = await response.json();
         if (!response.ok || !session.authenticated || cancelled) return;
         setLineUserId(session.line_user_id);
+        setQaSynthetic(Boolean(session.qa?.synthetic));
         const key = `sokupa:workspace:v1:${session.line_user_id}`;
         const saved = localStorage.getItem(key);
         try { acceptedReplacementRef.current = readReplacementConsent(localStorage, session.line_user_id); } catch { /* Server discovery still retains the job. */ }
@@ -785,7 +787,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
               <span className="text-xs text-muted-foreground">（※ロス率変更可能）</span>
             </p>
           </div>
-          <div className="shrink-0">
+          {!qaSynthetic ? <div className="shrink-0">
             <a
               href="https://lin.ee/Xr6sd53"
               target="_blank"
@@ -796,7 +798,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
             </a>
             <p className="text-xs text-muted-foreground mt-1">※解析完了の通知を受け取るために必要です</p>
             <p className="text-xs text-muted-foreground mt-1">※発注用テキストはアプリ上からもコピーできます</p>
-          </div>
+          </div> : null}
         </div>
       </header>
 
@@ -981,7 +983,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
                   解析中... {progress ? `${progress.done}/${progress.total}` : ""}
                 </span>
                 <span className="hidden sm:inline">
-                  解析中... {progress ? `${progress.done}/${progress.total}` : ""}（完了後にLINEで通知します）
+                  解析中... {progress ? `${progress.done}/${progress.total}` : ""}（{qaSynthetic ? "合成通知の受付を確認します" : "完了後にLINEで通知します"}）
                 </span>
               </span>
             </span>
@@ -989,18 +991,18 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
             `${images.length}枚の画像を解析する`
           )}
         </Button>
-        <p className="mt-3 text-center text-xs text-muted-foreground sm:text-sm">
+        {!qaSynthetic ? <p className="mt-3 text-center text-xs text-muted-foreground sm:text-sm">
           ※通知が届かない場合は
           <a href="https://lin.ee/Xr6sd53" target="_blank" rel="noopener noreferrer" className="mx-1 font-bold text-[#06C755] hover:underline">
             こちらから友だち追加
           </a>
-        </p>
+        </p> : null}
       </div>
 
       {notificationWatches.length ? (
         <Card>
           <CardHeader className="space-y-3">
-            <CardTitle className="text-base">LINE通知</CardTitle>
+            <CardTitle className="text-base">{qaSynthetic ? "合成通知（LINE送信なし）" : "LINE通知"}</CardTitle>
             {notificationWatches.some((watch) => notificationRetryable(watch.status)) ? <CardDescription>LINE通知を再確認しています。解析結果は利用でき、新しい解析も開始できます。</CardDescription> : null}
             {notificationWatches.map((watch) => (
               <div key={watch.jobId} className="rounded border p-3 text-sm" aria-label={`${watch.siteName || "現場名なし"}の通知状態`}>
@@ -1135,7 +1137,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           <CardHeader>
             <CardTitle className="text-base">{jobAccepted.status === "done" || jobUi?.status === "done" ? "解析が完了しました" : "解析を受け付けました"}</CardTitle>
             <CardDescription>
-              {jobAccepted.status === "done" && !jobUi ? "結果を確認しています。新しい解析も開始できます。" : jobUi?.status === "done" ? pendingJobResult?.jobId === jobAccepted.jobId ? "別の解析結果は保存されています。切替方法を選べます。LINE通知も再確認しています。" : "LINE通知を再確認しています。解析結果はこの画面で利用できます。" : jobAccepted.backgroundReady ? "サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。" : "解析は保存されています。サーバーの処理再開を待っています。画面を閉じてもデータは失われません。"}
+              {jobAccepted.status === "done" && !jobUi ? "結果を確認しています。新しい解析も開始できます。" : jobUi?.status === "done" ? pendingJobResult?.jobId === jobAccepted.jobId ? "別の解析結果は保存されています。切替方法を選べます。LINE通知も再確認しています。" : "LINE通知を再確認しています。解析結果はこの画面で利用できます。" : jobAccepted.backgroundReady ? qaSynthetic ? "サーバー側で合成解析を続けています。画面を閉じても処理を続け、合成通知を記録します（LINE送信なし）。" : "サーバー側で解析を続けています。スマホを閉じても、完了後にLINEで通知します。" : "解析は保存されています。サーバーの処理再開を待っています。画面を閉じてもデータは失われません。"}
               {jobUi ? (
                 <span className="mt-2 block font-semibold text-emerald-800/90 dark:text-emerald-200">
                   {jobUi.percent}% 完了（{jobUi.done}/{jobUi.total}）

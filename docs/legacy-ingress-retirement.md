@@ -21,10 +21,12 @@
 切替は少なくとも次の境界が必要。
 
 1. 本人の既存編集中データと受理済みjobを確認する。旧版の未保存ブラウザ編集が新しいsnapshotへ遡って保存されるとは約束しない。必要な内容を書き出してから合意した保守時間に入る。
-2. すべての公開aliasを、旧service APIを持たない保守入口または検証済みの安全な入口へ移し、旧immutable URL等をplatform側で停止する。新しいjob・画像受付も止まる境界にする。今回その操作はしていない。
-3. 最後の旧受付以降に旧workerの最大寿命を超える6分以上drainし、旧invocationが終了し、DB／画像更新と新規受付がないことをlog・状態で確認する。古いstuck jobを新しい正規jobと一括処理せず、個別に保持する。
-4. 最新DB＋Storageと移行後の差分を再保全する。新client混在や稼働中のまま全pre-cutover行をsealしない。初期scheduled値を仮定せず、新方式を明示的disabledにする。
-5. 入口停止が確認できてからPhase 2＋seal、新client、実wake2回の正常完了、本人ID／画像／通知状態を確認して受付する。これはゼロ停止の手順ではなく、保守時間と復旧条件の合意が必要。
+2. **aliasを移す前に**、旧919を指すcanonical・team alias・branch alias・919生成URLで、新規job受付を含むAPIを全method遮断する。受理済み旧workerは同じhostの`POST /api/parse-memo`を認証ヘッダーなしで呼ぶため、この1経路だけをdrain中に残す。その他の古いREADY生成URL3件は、そのhostのworkerがないことを確認後に全API遮断する。これはWAFの論理案であり、未知のactive configへpayloadを上書きしない。実際のconfig、影響、段階試験と本人publishが必要。
+3. 受理済み全画像・worker内の直接LINE通知を完了させ、全hostの全APIを遮断する。最後の旧HTTP受付から6分以上経過し、旧解析・通知invocationの終了をログで確認する。`/api/parse-memo`までalias変更で先に止めると、後続画像が失敗する。古いstuck jobは再開せず、状態を保全する。
+4. 事前DB＋Storage保全を確認する。**Vercel遮断だけでは旧PWAのSupabase直接uploadは止まらない**ので、この時点を最終スナップショットと扱わない。新workerは明示的disabled、Phase 2＋sealを実施し、匿名書込みが拒否されることを確認してからDB／Storage最終差分を保全する。元画像の実ファイルとmetadataを含め、事前保全との差分を確認する。
+5. canonicalを新コードへ移し、canonical以外の旧host/API遮断を維持する。新workerは`parseMemoBody`を直接実行し旧hostへHTTP依存しない。wakeの固定canonical、正常な独立2回のprivate完了、本人ID／画像／通知状態を確認して受付を開ける。これは保守時間と復旧条件の合意が必要。
+
+隔離試験`qa-bootstrap-and-drain.cjs`では、旧service SQLはRLS後も書けること、drain中のparse POST維持、遅い匿名Storage書込みがVercel停止後も入ること、Phase2後の匿名拒否、最終差分への保持、旧job非再開を合成データで確認する。HTTP gate・invocation・6分経過はfixtureなので、実WAF／本番ログの証明に拡大しない。
 
 旧deploymentの削除や鍵の失効も別案になり得るが、可逆性・他用途・外部APIキーを含む影響が大きく個別確認が必要。DBのservice keyだけを失効させれば全旧機能が停止するとは仮定しない。現在の旧版利用を妨げる操作はしない。
 

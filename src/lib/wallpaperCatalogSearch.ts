@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { dedupeSlashDelimited } from "./dedupeSlashList";
 import { manufacturerFromOfficialUrl } from "./officialDomainManufacturer";
+import { readQaRuntime } from "./qa-runtime";
 
 const CATALOG_MODEL = "gemini-3-flash-preview";
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -254,6 +255,7 @@ export async function augmentProductWithCatalogSearch(
   rawProductCode: string,
 ): Promise<CatalogAugment> {
   void _genAI;
+  if (readQaRuntime()) return { confidence: 0.45, needs_review: true, catalog_notes_extra: "QA合成試験：カタログ検索は行いません", is_live_searched: false };
   const productCode = rawProductCode.replace(/[\s\-]+/g, "").toUpperCase();
   const fallback: CatalogAugment = {
     confidence: 0.45,

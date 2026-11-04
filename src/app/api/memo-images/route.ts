@@ -2,6 +2,7 @@ import { analysisBackgroundReady } from "@/lib/analysis-background";
 import { NextRequest, NextResponse } from "next/server";
 import { authorize } from "@/lib/server-auth";
 import { MAX_MEMO_BYTES, MEMO_BUCKET, UUID_PATTERN } from "@/lib/memo-storage";
+import { readQaRuntime } from "@/lib/qa-runtime";
 export const runtime = "nodejs";
 export async function POST(req: NextRequest) {
   const auth = await authorize(req);
@@ -24,6 +25,10 @@ export async function POST(req: NextRequest) {
   const bytes = Buffer.concat(chunks);
   if (size < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) return NextResponse.json({ error: "JPEG画像が必要です" }, { status: 400 });
   const path = `${auth.lineUserId}/${uploadId}.jpg`;
+  if (readQaRuntime()) {
+    const reserved = await auth.admin.rpc("reserve_qa_upload", {p_owner:auth.lineUserId,p_bytes:size});
+    if (reserved.error || reserved.data !== true) return NextResponse.json({error:"QAの試験上限または有効期限に達しました"},{status:429});
+  }
   const { error } = await auth.admin.storage.from(MEMO_BUCKET).upload(path, bytes, { contentType: "image/jpeg", upsert: true });
   if (error) return NextResponse.json({ error: "画像の保存に失敗しました" }, { status: 503 });
   return NextResponse.json({ object_path: path });

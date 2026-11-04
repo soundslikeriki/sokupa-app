@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { lineLoginErrorResponse } from "@/lib/line-login-error";
+import { readQaRuntime } from "@/lib/qa-runtime";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -18,6 +19,7 @@ function randomState(): string {
 
 export async function GET(req: NextRequest) {
   try {
+    readQaRuntime();
     const clientId = getEnv("LINE_LOGIN_CHANNEL_ID");
     const redirectUri = getEnv("LINE_LOGIN_REDIRECT_URI");
 

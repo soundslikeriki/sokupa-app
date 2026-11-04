@@ -10,6 +10,7 @@ type Props = {
 };
 
 export function InviteGate({ children }: Props) {
+  const [qa, setQa] = useState(false);
   const [ready, setReady] = useState(false);
   const [invited, setInvited] = useState(false);
   const [lineUserId, setLineUserId] = useState<string | null>(null);
@@ -27,6 +28,7 @@ export function InviteGate({ children }: Props) {
         const response = await fetch("/api/auth/session", { cache: "no-store" });
         const session = await response.json();
         if (cancelled) return;
+        setQa(Boolean(session.qa?.synthetic));
         if (!response.ok) throw new Error("ログイン状態を確認できません。通信を確認して再読み込みしてください。");
         setInvited(Boolean(session.authenticated || session.invited));
         setLineUserId(session.authenticated ? session.line_user_id : null);
@@ -72,19 +74,20 @@ export function InviteGate({ children }: Props) {
     }
   };
 
+  const banner = qa ? <div role="status" className="border-b border-amber-300 bg-amber-50 p-3 text-center text-sm text-amber-950">ソクパQA：本人専用の検証環境。画像解析とLINE通知は合成です。実際の発注には使わないでください。</div> : null;
   if (!ready) return null;
-  if (invited && lineUserId) return <>{children}</>;
+  if (invited && lineUserId) return <>{banner}{children}</>;
 
   // Step 2: LINE login
   if (invited && !lineUserId) {
     return (
-      <main className="mx-auto flex min-h-screen max-w-lg items-center px-4 py-10">
+      <>{banner}<main className="mx-auto flex min-h-screen max-w-lg items-center px-4 py-10">
         <Card className="w-full">
           <CardHeader>
             <CardTitle className="text-xl">ソクパへようこそ</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-sm text-muted-foreground">LINEでログインして通知を受け取る</p>
+            <p className="text-sm text-muted-foreground">{qa ? "LINEで本人確認（通知は合成試験）" : "LINEでログインして通知を受け取る"}</p>
             {displayName ? (
               <p className="text-sm text-muted-foreground">
                 ログイン中: <span className="font-semibold">{displayName}</span>
@@ -95,13 +98,13 @@ export function InviteGate({ children }: Props) {
             </Button>
           </CardContent>
         </Card>
-      </main>
+      </main></>
     );
   }
 
   // Step 1: invite code
   return (
-    <main className="mx-auto flex min-h-screen max-w-lg items-center px-4 py-10">
+    <>{banner}<main className="mx-auto flex min-h-screen max-w-lg items-center px-4 py-10">
       <Card className="w-full">
         <CardHeader>
           <CardTitle className="text-xl text-center">ようこそ！ソクパへ</CardTitle>
@@ -148,7 +151,7 @@ export function InviteGate({ children }: Props) {
           {error ? <p className="text-sm font-semibold text-destructive">{error}</p> : null}
         </CardContent>
       </Card>
-    </main>
+    </main></>
   );
 }
 

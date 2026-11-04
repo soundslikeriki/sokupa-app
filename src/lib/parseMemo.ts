@@ -8,6 +8,7 @@ import { manufacturerFromOfficialUrl } from "@/lib/officialDomainManufacturer";
 import { augmentProductWithCatalogSearch, type CatalogAugment } from "@/lib/wallpaperCatalogSearch";
 import type { MemoProductItem } from "@/types";
 import { MemoProviderError, providerError } from "@/lib/analysis-failure";
+import { readQaRuntime, syntheticQaVision, QaRuntimeError } from "./qa-runtime";
 
 const MAX_IMAGES = 16;
 /** 画像解析（JSON 安定のため Google 検索ツールは付けない） */
@@ -390,16 +391,17 @@ export async function parseMemoBody(body: ParseMemoBody) {
       return NextResponse.json({ error: `画像は最大${MAX_IMAGES}枚までです` }, { status: 400 });
     }
 
+    const qa = readQaRuntime();
     const apiKey =
       process.env.GOOGLE_GENERATIVE_AI_API_KEY?.trim() ||
       process.env.GEMINI_API_KEY?.trim();
 
-    if (!apiKey) {
+    if (!qa && !apiKey) {
       throw new MemoProviderError({kind:"infrastructure",code:"configuration",retryable:false,delivery_unknown:false});
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const visionModel = genAI.getGenerativeModel({
+    const genAI = qa ? null : new GoogleGenerativeAI(apiKey!);
+    const visionModel = genAI?.getGenerativeModel({
       model: VISION_MODEL,
       generationConfig: {
         temperature: 0.1,
@@ -429,25 +431,27 @@ export async function parseMemoBody(body: ParseMemoBody) {
 
     const visionStarted = Date.now();
     const signal = AbortSignal.timeout(150_000);
-    let result;
-    try { result = await visionModel.generateContent(contents, { signal }); }
-    catch (error) { throw providerError(error, signal.aborted); }
-    console.info("[parse-memo] timing", { stage: "vision", durationMs: Date.now() - visionStarted });
-    const responseText = result.response.text();
+    let responseText: string;
+    if (qa) responseText = await syntheticQaVision(qa);
+    else {
+      try { responseText = (await visionModel!.generateContent(contents, { signal })).response.text(); }
+      catch (error) { throw providerError(error, signal.aborted); }
+    }
+    console.info("[parse-memo] timing", { stage: "vision", durationMs: Date.now() - visionStarted, synthetic: Boolean(qa) });
 
     const parsedData = parseVisionJson(responseText);
     const rawItems = parsedData.items.map((item) => ({ ...item, image_needs_review: parsedData.image_needs_review === true || item.image_needs_review === true, vision_needs_review: parsedData.needs_review === true || item.needs_review, vision_confidence: item.confidence }));
 
-    const admin = createSupabaseAdmin();
+    const admin = qa ? null : createSupabaseAdmin();
     const catalogStarted = Date.now();
     const withCatalog = await Promise.all(
       rawItems.map(async (raw) => {
         const item = raw as Record<string, unknown>;
         const code = String(item.product_code ?? "").trim();
-        if (!code || !isLikelyWallpaperProductCode(code)) {
+        if (qa || !code || !isLikelyWallpaperProductCode(code)) {
           return item;
         }
-        const aug = await augmentProductWithCatalogSearch(genAI, admin, code);
+        const aug = await augmentProductWithCatalogSearch(genAI!, admin, code);
         return mergeVisionWithCatalog(item, aug);
       })
     );
@@ -479,6 +483,7 @@ export async function parseMemoBody(body: ParseMemoBody) {
       imageCount: base64Images.length,
     });
   } catch (error: unknown) {
+    if (error instanceof QaRuntimeError) return NextResponse.json({error:error.message,failure:{kind:"infrastructure",code:"configuration",retryable:false,delivery_unknown:false}},{status:503});
     if (error instanceof MemoProviderError) {
       console.error("[parse-memo] provider failure", {code:error.failure.code,status:error.upstreamStatus,retryable:error.failure.retryable});
       return NextResponse.json({error:error.message,failure:error.failure},{status:error.failure.kind==="content"?422:error.upstreamStatus===429?429:503});

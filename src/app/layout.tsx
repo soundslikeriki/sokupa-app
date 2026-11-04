@@ -6,7 +6,11 @@ import "./globals.css";
 
 const notoSansJp = Noto_Sans_JP({ subsets: ["latin"], display: "swap" });
 
-export const metadata = APP_METADATA;
+export function generateMetadata() {
+  return process.env.SOKUPA_QA_MODE || process.env.SOKUPA_QA_BINDING
+    ? { ...APP_METADATA, title: "ソクパQA | 合成試験", applicationName: "ソクパQA", manifest: "/qa-manifest.webmanifest", appleWebApp: { capable:true, title:"ソクパQA", statusBarStyle:"default" as const } }
+    : APP_METADATA;
+}
 
 export default function RootLayout({
   children,

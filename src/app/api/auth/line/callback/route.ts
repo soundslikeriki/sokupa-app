@@ -3,6 +3,7 @@ import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { isAdmin } from "@/lib/server-auth";
 import { INVITE_COOKIE, SESSION_COOKIE, SESSION_SECONDS, secureCookieOptions, signToken, verifyToken } from "@/lib/session-token";
 import { lineLoginErrorResponse } from "@/lib/line-login-error";
+import { readQaRuntime } from "@/lib/qa-runtime";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -57,6 +58,7 @@ async function fetchProfile(accessToken: string): Promise<{ userId: string; disp
 
 export async function GET(req: NextRequest) {
   try {
+    const qa = readQaRuntime();
     const url = new URL(req.url);
     const code = url.searchParams.get("code") || "";
     const state = url.searchParams.get("state") || "";
@@ -76,6 +78,9 @@ export async function GET(req: NextRequest) {
 
     const { access_token } = await exchangeToken({ code, redirectUri, clientId, clientSecret });
     const profile = await fetchProfile(access_token);
+    if (qa && profile.userId !== qa.ownerLineUserId) return lineLoginErrorResponse("invite", 403);
+    // OAuth may have consumed the remaining TTL. Recheck before saving any profile.
+    readQaRuntime();
 
     const invite = verifyToken(req.cookies.get(INVITE_COOKIE)?.value, "invite");
     const admin = createSupabaseAdmin();

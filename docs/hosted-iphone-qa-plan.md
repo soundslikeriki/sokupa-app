@@ -7,7 +7,7 @@
 | 対象 | 作成候補と必要権限 | 本番との境界 |
 | --- | --- | --- |
 | Vercel | team `team_KOlFnguSk3s5yqYmQmvZCehz`（`rikiharada93-2282s-projects`）内の新project `sokupa-iphone-qa`。project作成／配備／QA専用env設定の権限 | 既存 `prj_9cgKHuUfIbFQ2pctK35y3AOqFBbx` へ配備しない。既存domain／env／保護を変更しない。Hobby維持 |
-| Supabase | 新project `sokupa-iphone-qa`。候補組織は既存NeoPlus `edsiqphjayhfyfiyqgyb`。**作成先組織の本人確認と見積が先**。新projectでschema／RLS／Storage／pg_cron／pg_netを設定できる権限 | `yegdgginwcmvpzeiuags` をbranch／clone元にせず、実データ・Auth・画像・Vault・本番キーをコピーしない |
+| Supabase | 新project `sokupa-iphone-qa`。承認された別組織Sokupa `ipixeawnrdmkurtpcdru`（2026-11-04作成、Free）。NeoPlusは別組織で実障害がある場合だけの代替。**正式見積と接続権限の確認が先**。新projectでschema／RLS／Storage／pg_cron／pg_netを設定できる権限 | `yegdgginwcmvpzeiuags` をbranch／clone元にせず、実データ・Auth・画像・Vault・本番キーをコピーしない |
 | LINE Login | 既存channel `2009808783` が属する**同じprovider**内に、新Web App channel `Sokupa iPhone QA`。provider IDをConsoleで照合してから作成。Provider／channel Adminの権限 | 新providerを作らない。本番channelのsecret、callback、公開状態、連携botは変更しない。QAをDevelopingのままにする |
 | 本人profile | 実Loginで取得した本人のLINE ID／表示名／画像URLをQAだけに保存する同意。本人だけをAdminまたはTesterとする | 本番user/device紐付けは更新しない。他の人へ招待・メッセージを送らない |
 
@@ -34,12 +34,12 @@ CronはVercelのログインCookieを持てない。QAのcanonical Production do
 | LINE access token／認可code | OAuth処理のメモリだけ。ログやDBへ保存しない |
 | Messaging token／有料AI key | **QAには登録しない**。実通知・有料解析をしない |
 
-鍵を作る／Vercelへ登録する操作は未承認・未実施。承認後もチャット、Git、build logへ平文を出さず、QA project IDを確認して保護したstdin等で扱う。QA sourceはGitの追跡対象だけから別directoryへ用意し、現在の`.vercel`リンク・`.env.local`・repo外の本番バックアップをコピー／uploadしない。Management tokenやDB root passwordをアプリへ渡さない。
+QA作成・専用鍵・本人profile利用・専用Developing channel・限定HTTPS入口は個別承認済み。無料枠・利用枠・ローカル検証を満たすまで外部project／鍵は未作成。承認後もチャット、Git、build logへ平文を出さず、QA project IDを確認して保護したstdin等で扱う。QA sourceはGitの追跡対象だけから別directoryへ用意し、現在の`.vercel`リンク・`.env.local`・repo外の本番バックアップをコピー／uploadしない。Management tokenやDB root passwordをアプリへ渡さない。
 
 ## 配備前に必要な実装・検査
 
 1. 空のSupabaseへ入れる最小schemaを再現可能に用意する。repoの古いmigrationを一括実行して本番と同じになると仮定しない。users／invite等の初期定義と12本の追加SQL、非公開化、明示的disabled、空のlegacy境界を確認する。新projectのmigration履歴・権限・拡張も検査する。実データdumpを初期化に使わない。
-2. **QA専用provider adapterは別途実装・検証が必要。** 現在のlocalhost用custom serverをそのままVercelへ配備しない。承認されたQA project ID＋QA DB ref＋期限が一致した時だけ、31秒の合成OCRと合成通知を使えるようにする。実project ID/ref、実Messaging／AI資格情報の混入、guard不成立では起動・処理を拒否する。通常版へmockが有効になる経路を作らない。
+2. **QA専用provider adapterはローカル実装済み。hosted検証が必要。** 現在のlocalhost用custom serverをそのままVercelへ配備しない。承認されたQA project ID＋QA DB ref＋期限が一致した時だけ、31秒の合成OCRと合成通知を使えるようにする。実project ID/ref、実Messaging／AI資格情報の混入、guard不成立では起動・処理を拒否する。通常版へmockが有効になる経路を作らない。
 3. LINEの実通信は専用channelのtoken交換と本人profile取得だけ。callback origin／state／署名session、既存IDと同じproviderであることを照合する。初回だけでなく、同意済みの2回目、キャンセル、alias開始、Safari／LINE内ブラウザ／PWAを確認する。
 4. QAだけで毎分wakeを期限付きで有効化する。90分なら最大約90回の定期HTTPに、本人操作とworker処理が加わる。2回のprivate成功、31秒画像2枚、画面を閉じてpoll/resumeなしでの完了、401等での受付停止と復帰を実Vercel＋Supabaseで観測する。
 5. 通知は画面にも合成と明示する。LINE端末到達と実写真のOCR精度はこの試験に含めず、必要なら別の限定した実送信／AI予算の承認を取る。
@@ -50,12 +50,20 @@ CronはVercelのログインCookieを持てない。QAのcanonical Production do
 - Vercel Hobbyは無料プランで、QAも同じplanの利用枠を消費する。Pro、独自domain購入、有料integrationを追加しない。[Hobby](https://vercel.com/docs/plans/hobby)
 - LINE Loginは無料。専用Login channelだけを使い、Messaging送信は0件とする。[LINE Login](https://developers.line.biz/en/docs/line-login/overview/)
 - Supabase Free枠が利用可能なら追加固定料金0円の候補。ただし全Owner／AdminにまたがるFree2project制限があり、見えるprojectが1件でも作成可能とは断定できない。[Free制限](https://supabase.com/docs/guides/platform/billing-faq)
-- 今回の読取では組織NeoPlusとactive本番project1件を確認した。**組織を推測せず、本人に作成先を確認してから`get_cost`で実見積を取る必要があるため、見積は未取得。** 非0見積なら作成・課金せず金額と代替を報告する。無料見積と対象を提示して、QA作成・鍵・公開先の承認を得てから進める。
+- 別組織Sokupaの作成先・無料限定のQA範囲は承認済み。公式画面でFreeと使用量0を確認したが、コネクタの新組織権限が反映されず正式見積は未取得。接続を更新してからSokupaだけで`get_cost`を行い、非0なら作成しない。
 
 残るリスクは、QA公開URLへの不要アクセスによる利用枠消費、Developing用LINEアカウントと本人アカウントの違い、provider選択ミス、QA資格情報の混入、端末間cookie差、実Vercel処理の上限／障害である。QAは本番channelとは別なので、QA合格を本番Login・実LINE配送・実AI精度の確認済みと拡大しない。実データ移行39項目と基本表示fallbackは、これら実機／hosted確認の代用にはしない。
 
-## ユーザーへ提示する最小の確認文
+## 2026-11-04 13:28 UTC の実施結果と次の操作
 
-「QA用DBの作成先は現在のNeoPlusでよいですか。見積を確認し、追加固定料金0円の場合だけ、独立Vercel／Supabaseと同じLINE providerの本人限定Developing channel・専用鍵を作り、検証用URLを公開してよいですか。LINE実送信・有料AI・本番変更はせず、検証終了後は停止・専用設定を後片付けします。」
+本人指定どおり、同じ既存アカウント内に新しいFree組織「Sokupa」を公式画面で1回作成した。ID `ipixeawnrdmkurtpcdru`。NeoPlusのrename／move／削除は行っていない。公式組織画面でproject0、Egress0/5GB、DB0/500MB、Storage0/1GB、MAU0/50,000を確認した。情報提供のTerms更新noticeのみで、明示的な規約同意操作は出ていない。
 
-組織確認後にget_costの実見積を提示し、費用条件と作成範囲への理解を確認してから作成する。見積非0や別対象への変更は停止して相談する。これは本番の公開許可・既存SESSION_SECRET／wake承認の再確認ではなく、新しいQA資源・資格情報・LINE設定・公開先への個別確認である。既存本番の署名鍵は登録済みを保全し、理由なく再生成しない。
+接続済みコネクタは新組織をまだ列挙せず、`get_organization`／`get_cost`はpermission denied（-32600）。見積・project作成は停止、別ツールによる拒否迂回はしない。必要なのは既存Supabase接続で新組織Sokupaを対象に追加承認／再接続すること。新しいキーそのものをチャットへ渡す必要はない。アクセス確認後に同じ対象を状態確認してから一度だけ見積を再試行し、非0なら止める。
+
+ローカル準備：`ops/qa/clean-base.sql`は空public schemaのみ受付、既存Storage/Authをコピーせず最小app schemaを作る。12本の202611 migration→明示disabled→Phase2/空seal→`ops/qa/limits.sql`の順序。rootだけが本人ID／開始・終了時刻を1行設定する。QAに限り最大90分、10job／20画像、40upload試行／累計80MiBをDBで制限する。upload失敗も消費し、無限再試行を防ぐ。本番管理者の無制限枠は変更しない。
+
+`qa-runtime.ts`の合成adapterは専用Vercel project ID・Supabase ref・本人ID・新LINE channel ID・callback origin・専用キーのSHA256・開始／終了時刻を照合する。source project/ref/channel、混入したAI／Messaging資格情報、片方だけのQA設定、期限切れでfail closed。31秒OCRと通知は合成、Google検索も実行しない。署名sessionの他人IDはDB照会前に拒否する。OAuth token交換と本人profile取得は専用LINEの実通信なのでhosted試験が残る。
+
+QAの90分TTLは処理を止めるが、public入口への不要リクエスト自体のプラットフォーム消費は完全には止めない。Vercel共有枠の使用量と試験停止閾値（残量が試験予算未満／想定外traffic発生でQAを停止）を確認してから配備する。Supabase新組織の利用枠と全Ownerの2active無料project制限も別々に確認する。`ops/qa/wake-ttl.sql`は期限切れ時にwake／受付をdisabledにし、QA専用scheduleだけを解除する。ローカルSQLのCron／ネットワーク部分はfixtureであり、実pg_cron／pg_netとの新adapter統合は未検証。終了後はCron停止→QA TTL停止→個別資源の削除確認。本番鍵・実データ・AI・LINE送信を使わない。
+
+本人のiPhone操作は正式QA URLと専用LINE設定ができてから案内する。接続権限が未更新のため現時点で開始時刻は確約できず、15:00UTC公開は未確約。既存の本番公開／SESSION_SECRET／wake承認の再確認は不要だが、本番切替に必要な実機と入口退役の安全条件は未達。

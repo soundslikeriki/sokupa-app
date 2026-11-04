@@ -1,5 +1,12 @@
+import { readQaRuntime, QaRuntimeError } from "./qa-runtime";
 /** LINE de-duplicates retries using the stable job UUID, including a lost HTTP response. */
 export async function sendLineMessages(to: string, messages: { type: string; text: string }[], retryKey?: string, fetcher: typeof fetch = fetch) {
+  const qa = readQaRuntime();
+  if (qa) {
+    if (to !== qa.ownerLineUserId || !messages.length) throw new QaRuntimeError();
+    console.info("[qa] synthetic notification accepted");
+    return;
+  }
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!token || !to) throw new Error("LINE通知が未設定です");
   const headers: Record<string, string> = { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
