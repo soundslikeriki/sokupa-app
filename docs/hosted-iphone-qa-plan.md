@@ -1,6 +1,6 @@
 # 独立したHTTPS環境で行うiPhone試験の提案
 
-2026-11-04。第一候補を、独立Vercel project＋独立Supabase project＋同じLINE provider内の専用Developing channelへ変更する。以前のLAN／本番Login secret再利用案は現在の承認依頼に使わない。**外部project、channel、資格情報、callback、Cronはまだ作成していない。** 本番の設定・データは変更しない。
+2026-11-04。第一候補を、独立Vercel project＋独立Supabase project＋同じLINE provider内の専用Developing channelへ変更する。以前のLAN／本番Login secret再利用案は現在の承認依頼に使わない。当初の計画時点では外部資源は未作成だった。**現在の実施状態は末尾の「Hosted実施結果」を参照する。** 本番の設定・データは変更しない。
 
 ## 対象を限定する
 
@@ -75,3 +75,39 @@ QAの90分TTLは処理を止めるが、public入口への不要リクエスト�
 既存native platform schemaへQA限定marker/limitsを加える結合試験であり、空hosted Supabaseの初期化は別のfresh PG84項目による確認。初回cleanupはfixtureの親子FKにより失敗したため、子画像→親jobの順へ修正し、正確な同一手順を実行してQA画像・job・user・cap・Cronの除去、元の2合成user、disabled状態を確認した。26機能項目とcleanupの証跡は別々に保持し、初回プロセス全体の終了コード0とは報告しない。
 
 13:47 UTC、ツールmetadataが更新され、正式な`link_id`選択が利用可能になった。新接続Sokupa（`link_6aeb35dcab2481918a368dc3f75151b2`）のlist_organizationsはSokupa組織`ipixeawnrdmkurtpcdru`だけを返した。旧Primaryの拒否を別手段で迂回したものではなく、新しく承認された接続対象の通常の組織一覧。get_cost／project作成はこの確認段階では未実施で、親の作成保留を維持している。
+
+## Hosted実施結果（2026-11-04 14:30 UTC）
+
+ユーザーが指定した別Sokupa組織へ作成。NeoPlusの本番projectを移動・変更・コピーしていない。公式コネクタに追加されたSokupa専用`link_id`を明示して接続できたため、Primary側のpermission拒否を再実行・迂回していない。
+
+| QA対象 | 実際の識別子・状態 |
+| --- | --- |
+| Supabase組織 | Sokupa `ipixeawnrdmkurtpcdru`、Free |
+| Supabaseproject | `vijvkewnfybhduzlsxzw`、東京。空publicから初期化 |
+| migration | `20261104135400 / qa_clean_private_bootstrap`、25表RLS有効 |
+| Vercelproject | `prj_R9rJtSTh996GBkYavokDzCgNPOIp`、Hobbyの既存team内、新規Node24 |
+| canonical | `https://sokupa-iphone-qa.vercel.app`、準備HTMLから実QAアプリへ置換 |
+| appdeployment | `dpl_4j3XqLXFFCNR4citgbb4vVGZtqfX`、source `dda7909` |
+| LINE | provider Claire `2005057445`内、新Login `2012379733`「ソクパQA」、Developing、Riki Admin1名だけ |
+| callback | QA canonicalの`/api/auth/line/callback`1件だけ、既存channel不変更 |
+| 期限 | `2026-11-04T14:42:10.041Z`（23:42:10 JST）、延長しない |
+
+Sokupaのget_costはproject月額0、作成前project0／使用量0。Vercel共有Hobby枠の実読取はCPU30秒/4時間、メモリ0.92/360GBh、function74/100万、transfer471.95MB/100GBで、試験分の余裕を確認した。QA制限は10job/20画像、40upload試行/累計80MiB、今回binding25分。公開入口への想定外trafficがあれば停止し、無料プランを有料へ変更しない。
+
+QA専用Supabaseキー、独立したSESSION_SECRET、新LINE secretをQA Production envだけに登録。Management token／DB root password／実AIキー／Messaging tokenをアプリへ渡していない。新LINE契約は具体的な同意確認を受けてから作成した。秘密値を表示せず、保護したローカルファイルからstdin経由で登録した。初回stdinに余分な改行が入りguardが503で拒否したため、QAの12設定だけを正確な値へ訂正。guardを緩めず、同じコードを再配備した。自動メタデータ公開を有効化する設定変更は自動審査で拒否されたため実行せず、読取で新projectの既存defaultがtrueだったことを確認した。Node24への最小変更だけを実施。
+
+実HTTPでsession200/QA synthetic、匿名job401、LINE開始302・新channel/callback一致・state cookie HttpOnly/SameSite Laxを確認。14:28:00.143005と14:29:00.023553の独立した実Cronが、private成功＋pg_net HTTP acceptedとなり、14:29:35にready=true。人工的な時計変更、SDK応答mockをhosted環境へ入れていない。実callbackで本人IDだけのuser1件・last_login14:29:36.199を確認したが、ログイン端末の種類は未確認。
+
+本人のiPhoneによる新画像2枚の受付・画面を閉じて完了・編集復元・PWA／基本表示確認は、14:30時点で開始依頼中。agentはhostedへ画像やjobを作っていない。実OCR精度とLINE端末到達は今回の合成試験に含めず、実AI／Messagingの承認範囲へ拡大しない。runtime console log集計が空でも、GET poll／resumeがなかった証明には使わない。本人の閉じた時刻とDB進行に加え、HTTP記録が得られる場合に照合し、未取得なら未確認と記す。
+
+期限後はruntime guard／DB job/upload制限で受付を拒否し、次の毎分Cron（14:43予定）がmode disabled・wake無効・QA専用Cron解除を実行する。期限前にrootから止める場合も、このQAだけのconfigure(false)/disabled/unscheduleと未処理キューを確認する。短い間に既に受理された空wakeが残っても、無効化したroot permitから新しい仕事は認可されない。実際の停止と残留要求は期限時に再照合する。鍵そのものは自動で暗号学的失効するわけではないため、試験後の専用キー／channel／project削除は対象を特定した確認を受けて行い、まずTTLで停止する。
+
+再開する場合、期限が切れたbindingのままmodeだけを戻さない。必要な確認後にQA限定の新しい有効時間を明示し、DB期限とbinding・Vercel再配備を一致させ、また独立成功2回を確認する。実providerへのfallback、旧本番の資格情報再利用、古い本番jobの再送は行わない。
+
+## Hosted終了結果（14:47 UTC、延長なし）
+
+本人のjobは1件・画像1枚で、14:39:37受付、14:40:09完了、合成通知accepted1回、結果20m／予備15%込み23mだった。実画像内容を読む試験ではない。予定した2枚・40m／46mの試験には該当せず、完了前に本人が画面を閉じたという時刻証拠もないため、実iPhoneの閉画面完了は未確認とする。実callbackによる本人ログインと、hosted上の31秒合成処理・合成通知記録は確認できた。
+
+14:42:10.041の期限後はsession／ログイン開始／job入口が503。14:43:00の実Cronが自己解除し、mode disabled・wake無効・QA用Cron0・待機queue0・有効permit0を確認した。残っていたHTTP応答メタデータ1件は14:47に照合だけを行い、未照合0になった。新しいHTTP要求を発行していない。QA画像・本人profile・専用キーは保持されており、削除は未実施。鍵そのものの暗号学的失効や環境削除を完了扱いしない。
+
+旧本番919379dの設定・DB・Storage・LINEは変更していない。QAの固定値表示を実OCR成功と取り違えないよう説明済みで、その後の指定画像による実OCRは別の隔離ローカル試験として記録する（[実OCR試験記録](./real-ocr-trial-2026-11-04.md)）。この実OCRにもQAの鍵・DB・Cron・LINE送信経路は使っていない。
