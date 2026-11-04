@@ -111,3 +111,15 @@ QA専用Supabaseキー、独立したSESSION_SECRET、新LINE secretをQA Produc
 14:42:10.041の期限後はsession／ログイン開始／job入口が503。14:43:00の実Cronが自己解除し、mode disabled・wake無効・QA用Cron0・待機queue0・有効permit0を確認した。残っていたHTTP応答メタデータ1件は14:47に照合だけを行い、未照合0になった。新しいHTTP要求を発行していない。QA画像・本人profile・専用キーは保持されており、削除は未実施。鍵そのものの暗号学的失効や環境削除を完了扱いしない。
 
 旧本番919379dの設定・DB・Storage・LINEは変更していない。QAの固定値表示を実OCR成功と取り違えないよう説明済みで、その後の指定画像による実OCRは別の隔離ローカル試験として記録する（[実OCR試験記録](./real-ocr-trial-2026-11-04.md)）。この実OCRにもQAの鍵・DB・Cron・LINE送信経路は使っていない。
+
+## 16:03 UTC の中断記録（本人の就寝指示）
+
+本人が同じQAの最大60分再開を承認したため、新規キーなしで30分のbinding（15:58:43.948〜16:28:43.948 UTC）を準備し、検証済み`aff0ca4`を同じQA projectへ配備した。CLIのenv updateがSensitive変数のkey更新エラーになった際、成功確認より先に配備を開始してしまい、旧期限のdeployment `dpl_6eUiv72ZJgHbaUDpc88FBZuawdaV` がREADYになった。DB・wake・Cronは停止のままで、これを再開成功として扱っていない。公式edit_project_envで既存変数のvalueだけを更新して成功を確認し、再配備 `dpl_HcAfTBVe2NtjboE4DEYC8hCCq3uc` もREADYになった。
+
+この間に本人から今夜は安全な区切りで中断する指示があったため、受付を有効化せず停止した。VercelのQA project `prj_R9rJtSTh996GBkYavokDzCgNPOIp` を公式pause_projectでpauseし、公開`/api/auth/session`のHTTP503／`x-vercel-error: DEPLOYMENT_PAUSED`を実測した。Supabase QAではroot停止処理後、16:03:27にmode disabled・wake無効・Cron0・queued HTTP0・未照合HTTP0・有効permit0、jobは既存done1件だけを確認。DBのQA期限は旧14:42:10のまま更新していない。今回の新しい合成job／画像uploadは0。
+
+最新bindingの実環境照合200、再開後wake2回、無人2画像、hosted上の編集復元／基本表示切替／新期限自動停止は**未実施**。停止を優先したため、新しい試験時間を最後まで稼働させていない。専用キー・本人profile・最初のQA画像は非公開で残り、削除・鍵失効は未実施。本番旧版には変更なし。
+
+次回は本人の再開指示と新しい時間枠を確認し、同じ対象だけunpauseする。期限切れbindingのままunpauseだけをしない。専用キー・project/ref・LINE callbackが同じこととprovider資格情報なしを再確認し、Vercel bindingとDBのissued/expiresを一致させる。QA件数／容量の既存使用分をリセットせず残量を確認し、guard200→独立wake2回→合成2画像を受理→クライアントpoll/resumeなしの完了→編集復元／表示切替→受付／wake／Cron停止と残留照合の順に進める。
+
+本番切替は別の保守作業で、最新の事前／最終差分保全、旧入口受付停止とdrain、Phase2＋seal、canonical移動の順序を維持する。Firewall draftの最終publishは本人操作、Phase2＋sealには具体的な実行時確認が残る。今夜はWAF draftも本番停止・migration・deployも行っていない。
