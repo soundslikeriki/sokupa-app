@@ -43,3 +43,21 @@ Mac内では実Supabase native、pg_cron、pg_net、Vaultを既に起動・検�
 - 外部案: 指定組織内の独立Supabase／Vercel project、専用資格情報と期間限定Cron、保護の方式。作成前に無料枠と見積を確認し、課金やPro変更はしない。
 
 今回のMac合成試験に新しい有料プラン・実AI料金・LINE送信料金は発生させていない。Mac資源と通信は消費する。外部案や定期wakeは利用枠を消費するため、費用0や実行時刻・通知到達を保証しない。
+
+## 今回確定した最小の承認対象
+
+既存LINE Login channelは **2009808783**。既存callbackは `https://sokupa-app.vercel.app/api/auth/line/callback` で、削除・変更しない。Macのen0の現在のprivate IPv4を読み取り、TCP3443の候補を作成した。**正確なLAN callback候補はrepo外の `sokupa-upgrade-evidence/iphone-approval-target.json` に記録した。まだ入口は起動していない。** DHCPで変わり得るため、承認直前と起動前に同じ値か照合する。登録先が変われば再確認し、別URLへ無断で広げない。
+
+最小案は、新しい外部projectを作らず、MacとiPhoneを同じWi-Fiへ接続して90分以内の試験を行うこと。必要な個別承認は次の組合せになる。
+
+1. LINE Developers Consoleのchannel2009808783のLINE Loginタブに、その**LAN HTTPS callback 1件だけを一時追加**し、試験後にその追加分だけ削除する。Consoleがprivate IPのcallbackを受理するかも、その操作時に確認する。未確認のまま有効と主張しない。
+2. 既存の**LINE Login channel secretだけ**を、Mac内の新しい専用QAサーバーへ一時的に限定利用する。ブラウザ、iPhone、Git、Vercel Preview、外部トンネル、第三者へ値を渡さない。本番Supabase key、Messaging token、AI key、本番SESSION_SECRETは使わない。専用QAのDB/session/TLS資格情報はローカル用として分離する。
+3. 確認したLAN interfaceのHTTPS3443だけを開き、iPhone上で試験CAの公開証明書のfingerprintを照合して信頼する。必要なmacOSプロンプトは専用Nodeプロセスだけを対象とし、firewall全体を無効化しない。DB／REST／Storageは127.0.0.1に留める。ルーター開放・公共トンネルは対象外。
+
+既存の合成専用Supabaseには実LINE profileを混ぜない。別のローカルQA stackを使い、稼働させるnative stackは1つに限定する。試験で取得する本人profile／IDは専用QAだけに保存し、本番のuser/device登録を更新しない。本人以外の新規登録や招待は許可しない。QA環境は実Loginのtoken/profile endpointだけを許可し、AI／Messagingは合成応答に固定、実送信は拒否する。実Loginに使う認証情報とcode/tokenをログに記録しない。
+
+本人の操作は、同じWi-Fiへの接続、公開試験CAの信頼確認、Safari／LINE内ブラウザ／PWAでの実Loginと画面確認、試験後のCA削除。Macは試験中起動しておく。このLAN試験ではMacを閉じたままのVercel処理は検証できず、端末の画面を閉じたローカルworker処理までが範囲となる。
+
+LINE Login自体は[公式に無料](https://developers.line.biz/en/docs/line-login/overview/)。このLAN案は新しいクラウドホスティング契約・有料AI・Messaging実送信を使わず、追加固定料金は0円の構成。Mac・ネットワーク資源は使用する。クラウド案へ変更する場合は、組織選択／無料枠／見積・秘密の登録先を別途確認し、今回のLAN承認を流用しない。
+
+これらは**未承認・未実施**。正確な候補、秘密の共有範囲、本人profileのQA利用、90分後の停止・追加callback削除をまとめて確認すればよい。資格情報の平文をチャットへ貼る操作は不要。

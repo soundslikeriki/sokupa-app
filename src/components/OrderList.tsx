@@ -52,6 +52,7 @@ function groupByManufacturer(items: any[]) {
 }
 
 type OrderListProps = {
+  basicView?: boolean;
   items: MemoProductItem[];
   sourceItems?: MemoProductItem[];
   sourceJobId?: string | null;
@@ -115,7 +116,7 @@ function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
   };
 }
 
-export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft }: OrderListProps) {
+export function OrderList({ basicView = false, items, sourceItems, sourceJobId, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft }: OrderListProps) {
   const [photoIndex, setPhotoIndex] = useState<number | null>(null);
   const [photoError, setPhotoError] = useState(false);
   const [rowResetError, setRowResetError] = useState<string | null>(null);
@@ -830,7 +831,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-                <p className={`w-full text-xs ${item.quantityAssessment.showCheckmark ? "text-emerald-700 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300"}`} role="status" aria-label={`${code} の発注量チェック`}>{item.incompleteMeasurements ? "要確認：長さまたは幅数が未入力です。入力を完成させてから前提を確認してください。" : item.quantityAssessment.message}</p>
+                <p className={`w-full text-xs ${!basicView && item.quantityAssessment.showCheckmark ? "text-emerald-700 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300"}`} role="status" aria-label={`${code} の発注量チェック`}>{item.incompleteMeasurements ? "要確認：長さまたは幅数が未入力です。入力を完成させてから前提を確認してください。" : basicView ? "数量は元メモ・写真と照合してください。" : item.quantityAssessment.message}</p>
               </div>
             );
           })}
@@ -990,7 +991,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                       ) : (
                         <Badge variant="outline" className={`gap-1 px-2 py-0.5 ml-1 ${product.comparisonConfirmed ? "text-emerald-600 border-emerald-600/30 bg-emerald-500/10" : "text-amber-600 border-amber-600/30 bg-amber-500/10"}`}>
                           {product.comparisonConfirmed ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
-                          <span className="text-xs">{product.comparisonConfirmed ? "比較条件確認済" : "前提未確認"}</span>
+                          <span className="text-xs">{basicView ? "数量を確認" : product.comparisonConfirmed ? "比較条件確認済" : "前提未確認"}</span>
                         </Badge>
                       )}
                     </div>
@@ -1152,7 +1153,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                       </div>
                     </div>
                     
-                    <div className="mb-3 grid gap-3 sm:grid-cols-2">
+                    {!basicView ? <><div className="mb-3 grid gap-3 sm:grid-cols-2">
                       <label className="text-xs">寸法の前提
                         <select aria-label={`${product.product_code} の寸法区分`} className="mt-1 block w-full rounded border bg-background p-2" value={product.measurement_basis} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], measurementBasis: event.target.value as MemoProductItem["measurement_basis"] } }))}>
                           <option value="unconfirmed">未確認</option><option value="trim-included">切り代込みの裁断長</option><option value="repeat-adjusted">既に柄調整済み（再計算しない）</option>
@@ -1172,6 +1173,7 @@ export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "
                       <input type="checkbox" aria-label={`${product.product_code} の必要量の前提を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.comparison.premisesAvailable} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.comparison.fingerprint : "" } }))} />
                       採寸・切り代・柄合わせと読み取りを確認済み（変更すると再確認）
                     </label>
+                    </> : null}
                     <div className={`flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 transition-opacity duration-300 ${(product.derivedEntries || []).some((e: any) => e.isRepeatActive) ? 'opacity-100' : 'opacity-40'}`}>
                       <div className="flex-1">
                         <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">共通高さ (m・任意・全行上書き)</label>

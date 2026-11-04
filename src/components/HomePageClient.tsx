@@ -148,7 +148,7 @@ async function fetchAnalysisJob(id: string) {
   return { data: response.ok ? payload.data : null, error: response.ok ? null : payload.error };
 }
 
-export default function HomePageClient() {
+export default function HomePageClient({ basicView = false }: { basicView?: boolean }) {
   const uploadInputId = useId();
   const siteNameId = useId();
   const [siteName, setSiteName] = useState("");
@@ -771,6 +771,7 @@ export default function HomePageClient() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-2 py-8 sm:gap-8 sm:px-4 sm:py-10 md:px-6 lg:px-8">
+      {basicView ? <p role="status" className="rounded-xl border border-amber-500/40 p-3 text-sm">基本表示中です。解析・編集・保存・発注の基本機能を使えます。数量は元メモと照合してください。</p> : null}
       <header className="space-y-2">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 sm:gap-x-3">
           <p className="text-sm font-medium text-muted-foreground shrink-0">{APP_FORMAL_NAME}</p>
@@ -1167,7 +1168,8 @@ export default function HomePageClient() {
         key={resultJobId ?? "legacy-workspace"}
         items={parsed?.items ?? []}
         sourceItems={originalParsed?.items}
-        sourceJobId={resultJobId}
+        sourceJobId={basicView ? null : resultJobId}
+        basicView={basicView}
         notes={parsed?.notes}
         siteName={siteName}
         needs_review_any={parsed?.needs_review_any}

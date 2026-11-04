@@ -1,5 +1,7 @@
 # 旧版を維持した追加検証と公開前の手順（2026-11-04）
 
+> 追補: 最新snapshotからの隔離移行39項目と、基本表示fallbackの通常／基本切替13＋基本165項目を検証した。[追加結果](./migration-rehearsal-and-fallback.md) が移行予行・fallbackの現状に優先する。
+
 この記録が11月3日の公開／切替手順に優先する。旧版復帰後のデータを保全し、本番を変更せずに検証した。拒否されたM4、期限切れのPhase 2、前日の公開承認を再利用していない。本番DDL・Cron・環境変数・alias・権限・プランの変更は行っていない。
 
 ## 現在の版と検証
@@ -43,7 +45,7 @@ Vault secretは0件。Authのデータとschemaは論理復元したが、Supaba
 現在の修正版を3-migrationのDBへコードだけ配備すると、必要なRPC／列や稼働条件が揃わず受付503になる。今の旧版利用を妨げるため、その公開はしない。次は**未実行の設計**であり、本番操作の許可待ちコマンドではない。
 
 1. 独立レビューの修正を再確認し、実iPhoneのLINE開始→戻り先→署名session、Safari／LINE内ブラウザ／PWAを非本番で確認する。state照合を外さない。canonicalとalias、キャンセル、同時ログイン、エラー日本語表示も含める。
-2. 現在の3本からのmigration差分を改めてレビューする。M4以降を以前の拒否／承認の続きとして実行しない。破壊・全履歴書換え・既存IDの再作成を避け、追加段階で旧版が動くことを隔離DBで確認する。最新snapshotの移行予行は今回は未実施。
+2. 現在の3本からのmigration差分を改めてレビューする。M4以降を以前の拒否／承認の続きとして実行しない。破壊・全履歴書換え・既存IDの再作成を避け、追加段階で旧版が動くことを隔離DBで確認する。追補の隔離予行は [migration-rehearsal-and-fallback.md](./migration-rehearsal-and-fallback.md) を参照。本番への適用はしていない。
 3. 切替時点で改めて未完了・更新中・通知不明のjobを確認する。新しい正規jobを古い作業と一括分類しない。本人の受理済みjobは完了まで待ち、状態が不明なら個別判断に残す。古いjobの有料再解析や再通知を自動実施しない。
 4. 新旧受付の境界、旧dynamic入口の扱い、最大worker寿命後のdrain条件を具体化し、限定した保守時間を合意してから最終のDB＋Storage checkpointを取る。移行開始後の新規行も別途保全する。いまの利用を止めてこの手順を先行しない。
 5. 署名APIへのclient切替、RLS／private Storage、legacy境界、disabled modeの順序をひとつのcutoverとしてレビューする。旧clientの直接読取・uploadだけを先に閉じない。現在のseal関数は全pre-cutover行を対象にするため、新規受付が混在したまま呼ばない。
@@ -56,7 +58,7 @@ Vault secretは0件。Authのデータとschemaは論理復元したが、Supaba
 
 将来RLSを閉じた後の `919379d` への単純alias切戻しは、匿名DB／直接uploadを使う旧版を壊す。public ALLの復活を安全な復旧手順にはしない。新しいコードと同じschema／署名API／private Storage／worker方式を扱えるfallbackを用意し、移行後の隔離DBで先に確認する必要がある。前段の`17f0f8f`を未検査のfallbackとして使わない。新しい空欄編集保存などを古いclientが落とす可能性があるため、draft互換性も確認する。
 
-障害時は新規受付を閉じ、既存jobの処理・通知状態と切替後の差分を保全して、互換性のある修正版へ戻す／進める。done／accepted／uncertainを一括pendingへ戻さない。dump全体の上書き復元で切替後のjobを消さない。同一IDの差分取り込み・通知retry key・Storage差分を確認してから判断する。hosted復元と互換fallbackの実動作確認は公開前に残る。
+障害時は新規受付を閉じ、既存jobの処理・通知状態と切替後の差分を保全して、互換性のある修正版へ戻す／進める。done／accepted／uncertainを一括pendingへ戻さない。dump全体の上書き復元で切替後のjobを消さない。同一IDの差分取り込み・通知retry key・Storage差分を確認してから判断する。hosted復元とVercel上の互換fallback切替は公開前に残る。ローカルで準備した基本表示は追補を参照。
 
 ## 非本番iPhone確認への経路
 
@@ -74,4 +76,4 @@ Node 24.22.2＋実Next HTTPS入口＋使い捨てSupabaseのpg_cron 1.6.4／pg_n
 
 試験用NextとCronは終了処理で停止した。native stackも対象IDだけを指定して停止し、DB／APIとUI試験ポートにlistenerがないことを確認済み。最初の起動は既定の余分なcapabilityでtimeoutしたため停止し、DB／REST／Storageに限定して再起動した。期限切れのlocalhost証明書は承認済みのローカル試験用として更新し、試験プロセスのCAファイルだけで信頼した。OSキーチェーン／本番の鍵・証明書は変更していない。
 
-これはVercel本番入口、実LINEログイン／実配送、iPhone Safari／PWAの試験ではない。本番pg_net 0.20.0とローカル0.20.4の差、Vercelのredirect／保護／実行制限、hosted restore、最新snapshotでの新しい移行予行と互換fallbackは未検証として残る。
+これはVercel本番入口、実LINEログイン／実配送、iPhone Safari／PWAの試験ではない。本番pg_net 0.20.0とローカル0.20.4の差、Vercelのredirect／保護／実行制限、hosted restore、Vercel上での移行／互換fallback切替は未検証として残る。最新snapshotのローカル移行予行は追補で実施した。
