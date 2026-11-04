@@ -14,7 +14,10 @@ function memo(value: unknown): boolean {
   if (value === null) return true;
   return object(value) && ["image_needs_review", "needs_review_any"].every((key) => value[key] === undefined || typeof value[key] === "boolean") && (value.notes === undefined || typeof value.notes === "string") && Array.isArray(value.items) && value.items.length <= 1000 && value.items.every((item: unknown) =>
     object(item) && (item.needs_review === undefined || typeof item.needs_review === "boolean") && typeof item.product_code === "string" && typeof item.manufacturer === "string" && number(item.total_m) && number(item.order_quantity) &&
-    ["notes", "spec", "catalog_name", "catalog_page_num", "source_url", "quantity_confirmation", "order_quantity_input"].every((key) => item[key] === undefined || typeof item[key] === "string") &&
+    ["notes", "spec", "catalog_name", "catalog_page_num", "source_url", "quantity_confirmation", "order_quantity_input", "loss_rate_input", "repeat_cm_input", "repeat_height_input"].every((key) => item[key] === undefined || typeof item[key] === "string") &&
+    (item.order_mode === undefined || ["memo", "pattern"].includes(item.order_mode)) &&
+    (item.pattern_rows_configured === undefined || typeof item.pattern_rows_configured === "boolean") &&
+    (item.memo_allowance === undefined || ["add", "included"].includes(item.memo_allowance)) &&
     (item.measurement_basis === undefined || ["unconfirmed","trim-included","repeat-adjusted"].includes(item.measurement_basis)) &&
     (item.pattern_match === undefined || ["unconfirmed","straight","other"].includes(item.pattern_match)) &&
     ["repeat_cm", "repeat_height_m", "manual_order_quantity", "loss_rate_percent"].every((key) => item[key] === undefined || number(item[key])) &&

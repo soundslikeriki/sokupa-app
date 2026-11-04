@@ -29,6 +29,14 @@ export type MemoEntry = {
 
 /** 品番単位で集約された1ブロック（AI出力スキーマ） */
 export type MemoProductItem = {
+  /** Simple memo use is the default; legacy active repeat drafts reopen the pattern editor. */
+  order_mode?: "memo" | "pattern";
+  /** Remember an intentional all-rows-OFF setting when the pattern editor is hidden. */
+  pattern_rows_configured?: boolean;
+  memo_allowance?: "add" | "included";
+  loss_rate_input?: string;
+  repeat_cm_input?: string;
+  repeat_height_input?: string;
   measurement_basis?: "unconfirmed" | "trim-included" | "repeat-adjusted";
   pattern_match?: "unconfirmed" | "straight" | "other";
   quantity_confirmation?: string;

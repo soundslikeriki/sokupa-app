@@ -1,0 +1,91 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { orderModeForItem, planMemoOrder } from "./order-planning";
+import { readWorkspaceDraft } from "./workspace-draft";
+import { dimensionItemToOrderDraftInput } from "./order-draft";
+import { buildOrderRequestText } from "./order-text";
+import type { MemoProductItem } from "../types";
+
+const item: MemoProductItem = { product_code: "SYNTHETIC", manufacturer: "Synthetic", entries: [{ original_formula: "20×1", length_m: 20, quantity: 1, subtotal_m: 20 }], total_m: 20, order_quantity: 23 };
+const input = { item, rows: [{ id: "a", length: 20, quantity: 1, active: false }], repeatCm: null, basis: "unconfirmed", match: "unconfirmed", lossRate: 15 };
+const confirm = (value: Parameters<typeof planMemoOrder>[0]) => planMemoOrder({ ...value, confirmation: planMemoOrder(value).fingerprint });
+
+test("simple memo mode keeps 20m + 15% = 23m and requires an explicit acknowledgement", () => {
+  const plan = planMemoOrder(input);
+  assert.equal(plan.mode, "memo"); assert.equal(plan.totalM, 20); assert.equal(plan.orderQuantity, 23);
+  assert.equal(plan.canConfirm, true); assert.equal(plan.ready, false);
+  assert.match(plan.assessment.message, /要確認/);
+  assert.equal(confirm(input).ready, true);
+  assert.equal(planMemoOrder({ ...input, rows: [{ ...input.rows[0], length: 20.000001 }] }).orderQuantity, 23, "retain the existing four-decimal subtotal rounding before reserve calculation");
+});
+
+test("already-final memo quantities skip repeat and reserve without changing the default reserve", () => {
+  const final = { ...input, item: { ...item, order_mode: "memo" as const, memo_allowance: "included" as const }, rows: [{ ...input.rows[0], active: true }], repeatCm: 60 };
+  const plan = confirm(final);
+  assert.equal(plan.totalM, 20); assert.equal(plan.orderQuantity, 20); assert.equal(plan.ready, true);
+  assert.equal(final.lossRate, 15); assert.equal(final.rows[0].active, true);
+  assert.equal(plan.comparison.strict.rows[0].selectedMode, "original");
+  const patterned = planMemoOrder({ ...final, item: { ...final.item, order_mode: "pattern" }, basis: "trim-included", match: "straight" });
+  assert.equal(patterned.totalM, 20.4); assert.equal(patterned.orderQuantity, 24); assert.equal(patterned.allowanceIncluded, false);
+});
+
+test("restored legacy active-repeat drafts keep distinct heights and the saved manual final amount", () => {
+  const legacy: MemoProductItem = { ...item, entries: [{ ...item.entries[0], length_m: 2.7, quantity: 2, repeat_enabled: true }, { ...item.entries[0], length_m: 3.8, quantity: 1, repeat_enabled: true }], manual_order_quantity: 15 };
+  assert.equal(orderModeForItem(legacy), "pattern");
+  const plan = confirm({ ...input, item: legacy, rows: [{ id: "a", length: 2.7, quantity: 2, active: true }, { id: "b", length: 3.8, quantity: 1, active: true }], repeatCm: 60, basis: "trim-included", match: "straight", manualQuantity: legacy.manual_order_quantity });
+  assert.equal(plan.totalM, 10.2); assert.equal(plan.automaticQuantity, 12); assert.equal(plan.orderQuantity, 15); assert.equal(plan.ready, true);
+  assert.deepEqual(plan.comparison.strict.rows.map(row => row.selected.perStripM), ["3", "4.2"]);
+  const simple = confirm({ ...input, item: { ...legacy, order_mode: "memo" }, manualQuantity: 15 });
+  assert.equal(simple.orderQuantity, 15); assert.equal(simple.ready, false); // Explicitly acknowledged shortage stays blocked.
+});
+
+test("unknown and unsupported pattern premises cannot be acknowledged into a final order", () => {
+  const pattern = { ...input, item: { ...item, order_mode: "pattern" as const }, rows: [{ ...input.rows[0], active: true }], repeatCm: 60 };
+  for (const overrides of [{}, { basis: "trim-included", match: "other" }, { basis: "repeat-adjusted", match: "straight" }, { basis: "trim-included", match: "straight", repeatCm: null }]) {
+    const plan = confirm({ ...pattern, ...overrides });
+    assert.equal(plan.canConfirm, false); assert.equal(plan.ready, false); assert.equal(plan.assessment.showCheckmark, false);
+  }
+  assert.match(planMemoOrder({ ...pattern, basis: "trim-included", match: "other" }).assessment.message, /職人さんに確認/);
+  assert.equal(confirm({ ...pattern, basis: "trim-included", match: "straight" }).ready, true);
+});
+
+test("numeric defects block both acknowledgement and output even if last valid values remain", () => {
+  const variants = [
+    { rows: [{ ...input.rows[0], lengthInput: "" }] }, { rows: [{ ...input.rows[0], quantityInput: "-1" }] },
+    { rows: [{ ...input.rows[0], quantity: 1.5 }] }, { rows: [{ ...input.rows[0], length: 0 }] },
+    { rows: [{ ...input.rows[0], quantity: 0 }] }, { rawOrder: "" }, { rawOrder: "-1" },
+    { item: { ...item, loss_rate_input: "" } }, { manualQuantity: 0 },
+  ];
+  for (const overrides of variants) {
+    const plan = confirm({ ...input, ...overrides });
+    assert.equal(plan.canConfirm, false); assert.equal(plan.ready, false);
+  }
+  const pattern = { ...input, item: { ...item, order_mode: "pattern" as const }, basis: "trim-included", match: "straight", repeatCm: 60, rows: [{ ...input.rows[0], active: true }] };
+  for (const raw of [{ repeat_cm_input: "-1" }, { repeat_height_input: "-1" }]) assert.equal(confirm({ ...pattern, item: { ...pattern.item, ...raw } }).ready, false);
+});
+
+test("changed order value, reserve, mode, allowance, measurements or product details invalidate acknowledgement", () => {
+  const confirmation = planMemoOrder(input).fingerprint;
+  assert.equal(planMemoOrder({ ...input, confirmation }).ready, true);
+  const variants = [
+    { manualQuantity: 24 }, { lossRate: 16 }, { item: { ...item, order_mode: "pattern" as const } },
+    { item: { ...item, memo_allowance: "included" as const } }, { rows: [{ ...input.rows[0], length: 21 }] },
+    { item: { ...item, needs_review: true } }, { item: { ...item, product_code: "CHANGED" } },
+  ];
+  for (const overrides of variants) assert.equal(planMemoOrder({ ...input, ...overrides, confirmation }).ready, false);
+});
+
+test("draft roundtrip preserves the mode, latent repeat settings, raw inputs and final manual edits", () => {
+  const saved: MemoProductItem = { ...item, order_mode: "memo", pattern_rows_configured: true, memo_allowance: "included", manual_order_quantity: 27, quantity_confirmation: "reviewed", loss_rate_percent: 15, loss_rate_input: "", repeat_cm: 60, repeat_cm_input: "-1", repeat_height_input: "-2", entries: [{ ...item.entries[0], repeat_enabled: true, quantity_input: "-1" }] };
+  const draft = { version: 1, siteName: "Synthetic", parsed: { items: [saved] }, orderDraftItems: [] };
+  assert.deepEqual(readWorkspaceDraft(JSON.stringify(draft)).parsed!.items[0], saved);
+  for (const field of ["order_mode", "memo_allowance"]) assert.throws(() => readWorkspaceDraft(JSON.stringify({ ...draft, parsed: { items: [{ ...saved, [field]: "invalid" }] } })));
+});
+
+test("order text and draft transfer use the reviewed final quantity without a second adjustment", () => {
+  const plan = confirm({ ...input, manualQuantity: 27 }); assert.equal(plan.ready, true);
+  const final = { ...item, order_quantity: plan.orderQuantity, manual_order_quantity: 27 };
+  assert.equal(dimensionItemToOrderDraftInput(final).quantity, 27);
+  assert.match(buildOrderRequestText([final], "Synthetic"), /数量：27m/);
+  assert.equal(confirm({ ...input, item: { ...item, memo_allowance: "included" } }).orderQuantity, 20);
+});

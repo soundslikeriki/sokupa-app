@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ListPlus } from "lucide-react";
 import { roundMeters } from "@/lib/memo-calculation";
-import { compareProduct, assessProductOrder } from "@/lib/product-comparison";
+import { orderModeForItem, planMemoOrder } from "@/lib/order-planning";
 import { findOriginalMemoEntry } from "@/lib/original-memo-entry";
 import { calculateOrderQuantity, DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import {
@@ -65,13 +65,16 @@ type OrderListProps = {
 };
 
 type ItemOverride = {
+  orderMode?: MemoProductItem["order_mode"];
+  patternRowsConfigured?: boolean;
+  memoAllowance?: MemoProductItem["memo_allowance"];
   measurementBasis?: MemoProductItem["measurement_basis"];
   patternMatch?: MemoProductItem["pattern_match"];
   quantityConfirmation?: string;
-  repeatCm?: number | "";
-  heightM?: number | "";
-  entryQtys?: Record<number, number | "">;
-  entryLengths?: Record<number, number | "">;
+  repeatCm?: number | string;
+  heightM?: number | string;
+  entryQtys?: Record<number, number | string>;
+  entryLengths?: Record<number, number | string>;
   entryEditMode?: Record<number, boolean>;
   entryRepeatActive?: Record<number, boolean>;
 };
@@ -102,9 +105,12 @@ function formatSummaryNumber(value: number, maximumFractionDigits = 2): string {
   });
 }
 
-function calculateLossRateFromOrderQuantity(orderQuantity: number, totalM: number): number {
-  if (!Number.isFinite(orderQuantity) || !Number.isFinite(totalM) || totalM <= 0) return 0;
-  return Math.max(0, Math.round(((orderQuantity / totalM) - 1) * 100));
+function orderCheckMessage(item: { orderReady: boolean; quantityAssessment: { message: string } }, basicView: boolean): string {
+  return basicView && item.orderReady ? "確認済み：入力した発注数量を元メモ・写真と照合してください。" : item.quantityAssessment.message;
+}
+
+function orderCheckColor(ready: boolean, basicView: boolean): string {
+  return ready ? basicView ? "text-muted-foreground" : "text-emerald-700 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300";
 }
 
 function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
@@ -122,7 +128,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const [rowResetError, setRowResetError] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
-  const [lossRates, setLossRates] = useState<Record<string, number | "">>({});
+  const [lossRates, setLossRates] = useState<Record<string, number | string>>({});
   const [newEntryInputs, setNewEntryInputs] = useState<Record<string, NewEntryInput>>({});
   const [orderQuantityInputs, setOrderQuantityInputs] = useState<Record<string,string | undefined>>({});
   const [manualOrderQuantities, setManualOrderQuantities] = useState<Record<string, number>>({});
@@ -164,7 +170,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const canonicalizeDerivedItem = (item: any): MemoProductItem => {
-    const { derivedEntries, override_active, rActive, total_quantity, comparison, comparisonConfirmed, quantityAssessment, incompleteMeasurements, ...base } = item;
+    const { derivedEntries, override_active, rActive, total_quantity, comparison, comparisonConfirmed, quantityAssessment, incompleteMeasurements, incompleteSettings, orderReady, confirmationFingerprint, canConfirm, automaticQuantity, manualQuantityActive, allowanceIncluded, ...base } = item;
     return {
       ...base,
       entries: (derivedEntries ?? item.entries ?? []).map((entry: any) => {
@@ -173,7 +179,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         return {
           source_row_id: entry.source_row_id, source_image_index: entry.source_image_index, source_entry_index: entry.source_entry_index,
           original_formula: entry.original_formula || `${length_m} x ${quantity}`,
-          repeat_enabled: entry.isRepeatActive ?? entry.repeat_enabled ?? false,
+          repeat_enabled: entry.configured_repeat_enabled ?? entry.isRepeatActive ?? entry.repeat_enabled ?? false,
           needs_review: entry.needs_review, review_reason: entry.review_reason,
           length_m, quantity, length_input: entry.length_input, quantity_input: entry.quantity_input,
           subtotal_m: toFiniteNumber(entry.derived_subtotal ?? entry.subtotal_m, Number((length_m * quantity).toFixed(2))),
@@ -189,7 +195,12 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     }));
   };
 
+  const invalidateConfirmation = (productCode: string) => {
+    setOverrides(previous => ({ ...previous, [productCode]: { ...previous[productCode], quantityConfirmation: "" } }));
+  };
+
   const clearManualOrderQuantity = (productCode: string) => {
+    invalidateConfirmation(productCode);
     setManualOrderQuantities((prev) => {
       return { ...prev, [productCode]: NaN };
     });
@@ -258,9 +269,9 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     }
   };
 
-  const handleOverrideChange = (productCode: string, field: keyof Omit<ItemOverride, "entryQtys" | "entryEditMode" | "entryRepeatActive" | "entryLengths">, value: string) => {
-    const val = value === "" ? "" : Number(value);
-    if (val !== "" && (!Number.isFinite(val) || val < 0)) return;
+  const handleOverrideChange = (productCode: string, field: "repeatCm" | "heightM", value: string) => {
+    const numeric = Number(value);
+    const val = /^\d{1,12}(?:\.\d{1,6})?$/.test(value) && Number.isFinite(numeric) && numeric > 0 ? numeric : value;
     clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
       return {
@@ -274,8 +285,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const handleEntryFieldChange = (productCode: string, entryIndex: number, field: "entryQtys" | "entryLengths", value: string) => {
-    const val = value === "" ? "" : Number(value);
-    if (val !== "" && (!Number.isFinite(val) || val < 0)) return;
+    const numeric = Number(value);
+    const val = /^\d{1,12}(?:\.\d{1,6})?$/.test(value) && Number.isFinite(numeric) ? numeric : value;
     clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
       const prevOvr = prev[productCode] || {};
@@ -297,7 +308,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const handleLossRateChange = (productCode: string, value: string) => {
     clearManualOrderQuantity(productCode);
     const parsed = Number(value);
-    const nextLoss = value === "" ? "" : Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
+    const nextLoss = /^\d{1,12}(?:\.\d{1,6})?$/.test(value) && Number.isFinite(parsed) ? Math.round(parsed) : value;
     setLossRates((prev) => ({
       ...prev,
       [productCode]: nextLoss,
@@ -441,6 +452,16 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     });
   };
 
+  const handleOrderModeChange = (product: MemoProductItem, mode: "memo" | "pattern") => {
+    setOverrides(previous => {
+      const current = previous[product.product_code] ?? {};
+      const configured = current.patternRowsConfigured ?? product.pattern_rows_configured ?? product.entries.some((entry, index) => current.entryRepeatActive?.[index] ?? entry.repeat_enabled);
+      return { ...previous, [product.product_code]: { ...current, orderMode: mode, quantityConfirmation: "",
+        patternRowsConfigured: configured || mode === "pattern",
+        ...(mode === "pattern" && !configured ? { entryRepeatActive: Object.fromEntries(product.entries.map((_, index) => [index, true])) } : {}) } };
+    });
+  };
+
   const handleToggleEntryEdit = (productCode: string, entryIndex: number) => {
     setOverrides((prev) => {
       const prevOvr = prev[productCode] || {};
@@ -518,20 +539,18 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const handleSetOrderQuantity = (productCode: string, value: number) => {
+    invalidateConfirmation(productCode);
     setOrderQuantityInputs(previous => ({ ...previous, [productCode]: undefined }));
-    const currentItem = derivedItems.find((item) => item.product_code === productCode);
     const nextQuantity = Math.max(0, Math.ceil(toFiniteNumber(value)));
     setManualOrderQuantities((prev) => ({
       ...prev,
       [productCode]: nextQuantity,
     }));
-    setLossRates((prev) => ({
-      ...prev,
-      [productCode]: calculateLossRateFromOrderQuantity(nextQuantity, toFiniteNumber(currentItem?.total_m)),
-    }));
+
   };
 
   const handleOrderQuantityInput = (code: string, raw: string) => {
+    invalidateConfirmation(code);
     if (!/^\d{1,12}(?:\.\d{1,6})?$/.test(raw) || !Number.isFinite(Number(raw)) || Number(raw) > 999999999999) {
       setOrderQuantityInputs(previous => ({ ...previous, [code]: raw }));
       return;
@@ -562,6 +581,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       
       const r = typeof ovr.repeatCm === "number" ? ovr.repeatCm : ovr.repeatCm === "" ? null : item.repeat_cm ?? null;
       const h = typeof ovr.heightM === "number" ? ovr.heightM : ovr.heightM === "" ? null : item.repeat_height_m ?? null;
+      const mode = ovr.orderMode ?? orderModeForItem(item);
+      const memoAllowance = ovr.memoAllowance ?? item.memo_allowance ?? "add";
+      const rawSetting = (local: number | string | undefined, saved: string | undefined) => typeof local === "string" ? local || undefined : typeof local === "number" ? undefined : saved;
+      const lossInput = typeof lossRates[item.product_code] === "string" ? lossRates[item.product_code] as string : typeof lossRates[item.product_code] === "number" ? undefined : item.loss_rate_input;
+      const planningItem = { ...item, order_mode: mode, memo_allowance: memoAllowance, loss_rate_input: lossInput,
+        pattern_rows_configured: ovr.patternRowsConfigured ?? item.pattern_rows_configured ?? mode === "pattern",
+        repeat_cm_input: rawSetting(ovr.repeatCm, item.repeat_cm_input), repeat_height_input: rawSetting(ovr.heightM, item.repeat_height_input) };
 
       let calcTotalM = 0;
       let calcTotalQty = 0;
@@ -572,14 +598,18 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       const match = ovr.patternMatch ?? item.pattern_match ?? "unconfirmed";
       const rows = (item.entries || []).map((e: any, idx: number) => {
         const base = typeof elengths[idx] === "number" ? elengths[idx] as number : e.length_m;
-        const active = eRepeats[idx] ?? e.repeat_enabled ?? false;
+        const active = mode === "pattern" && (eRepeats[idx] ?? e.repeat_enabled ?? false);
         // A common height is an explicit override. Otherwise preserve every row's own height.
         return { id: e.source_row_id ?? `${item.product_code}:${idx}`, length: active && h !== null && h > 0 && typeof elengths[idx] !== "number" ? h : base,
           quantity: typeof eqtys[idx] === "number" ? eqtys[idx] as number : e.quantity, active,
-          lengthInput: elengths[idx] === "" ? "" : typeof elengths[idx] === "number" ? undefined : e.length_input,
-          quantityInput: eqtys[idx] === "" ? "" : typeof eqtys[idx] === "number" ? undefined : e.quantity_input };
+          lengthInput: typeof elengths[idx] === "string" ? elengths[idx] as string : typeof elengths[idx] === "number" ? undefined : e.length_input,
+          quantityInput: typeof eqtys[idx] === "string" ? eqtys[idx] as string : typeof eqtys[idx] === "number" ? undefined : e.quantity_input };
       });
-      const comparison = compareProduct(item, rows, r, basis, match);
+      const manualOrderQuantity = Object.prototype.hasOwnProperty.call(manualOrderQuantities, item.product_code) ? manualOrderQuantities[item.product_code] : item.manual_order_quantity;
+      const confirmation = ovr.quantityConfirmation ?? item.quantity_confirmation;
+      const rawOrder = Object.prototype.hasOwnProperty.call(orderQuantityInputs, item.product_code) ? orderQuantityInputs[item.product_code] : item.order_quantity_input;
+      const plan = planMemoOrder({ item: planningItem, rows, repeatCm: r, basis, match, lossRate, manualQuantity: manualOrderQuantity, rawOrder, confirmation });
+      const { comparison } = plan;
       const derivedEntries = (item.entries || []).map((e: any, idx: number) => {
         const row = rows[idx], base = typeof elengths[idx] === "number" ? elengths[idx] as number : e.length_m;
         if (!row.active) masterRepeatStatus = false;
@@ -590,6 +620,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         calcTotalM = roundMeters(calcTotalM + roundMeters(subtotal)); calcTotalQty += row.quantity;
         return { ...e, base_length: base, derived_length: Number(stripL.toFixed(6)), derived_quantity: row.quantity,
           length_input: row.lengthInput, quantity_input: row.quantityInput,
+          configured_repeat_enabled: eRepeats[idx] ?? e.repeat_enabled ?? false,
           derived_subtotal: Number(subtotal.toFixed(6)), isEditing: ovr.entryEditMode?.[idx] === true, isRepeatActive: row.active };
       });
 
@@ -599,25 +630,15 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
 
 
-      const calculatedOrderQuantity = calculateOrderQuantity(calcTotalM, lossRate);
-      const manualOrderQuantity = Object.prototype.hasOwnProperty.call(manualOrderQuantities, item.product_code) ? manualOrderQuantities[item.product_code] : item.manual_order_quantity;
-      const order_quantity =
-        typeof manualOrderQuantity === "number" && Number.isFinite(manualOrderQuantity)
-          ? Math.max(0, Math.round(manualOrderQuantity))
-          : calculatedOrderQuantity;
-
-      const confirmation = ovr.quantityConfirmation ?? item.quantity_confirmation;
-      const comparisonConfirmed = comparison.premisesAvailable && confirmation === comparison.fingerprint;
-      const required = comparison.strict.totals.selectedM ?? comparison.reference?.totals.selectedM ?? null;
-      const rawOrder = Object.prototype.hasOwnProperty.call(orderQuantityInputs, item.product_code) ? orderQuantityInputs[item.product_code] : item.order_quantity_input;
-      const quantityAssessment = assessProductOrder(rawOrder === undefined ? order_quantity : rawOrder, required, comparisonConfirmed);
       return {
-        ...item,
+        ...planningItem,
         measurement_basis: basis, pattern_match: match, quantity_confirmation: confirmation, order_quantity_input: rawOrder,
-        comparison, comparisonConfirmed, quantityAssessment,
-        incompleteMeasurements: rows.some(row => row.lengthInput !== undefined || row.quantityInput !== undefined),
+        comparison, comparisonConfirmed: plan.confirmed, quantityAssessment: plan.assessment,
+        incompleteMeasurements: plan.incompleteMeasurements, incompleteSettings: plan.incompleteSettings,
+        orderReady: plan.ready, canConfirm: plan.canConfirm, confirmationFingerprint: plan.fingerprint,
+        automaticQuantity: plan.automaticQuantity, manualQuantityActive: plan.manual, allowanceIncluded: plan.allowanceIncluded,
         total_m: Number(calcTotalM.toFixed(2)),
-        order_quantity,
+        order_quantity: plan.orderQuantity,
         loss_rate_percent: lossRate,
         repeat_cm: r ?? undefined,
         repeat_height_m: h ?? undefined,
@@ -657,6 +678,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     const signature = JSON.stringify(
       canonicalItems.map((item) => ({
         product_code: item.product_code,
+        order_mode: item.order_mode, pattern_rows_configured: item.pattern_rows_configured, memo_allowance: item.memo_allowance, loss_rate_input: item.loss_rate_input, repeat_cm_input: item.repeat_cm_input, repeat_height_input: item.repeat_height_input,
         total_m: item.total_m,
         order_quantity: item.order_quantity,
         loss_rate_percent: item.loss_rate_percent,
@@ -676,7 +698,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   }, [derivedItems, onItemsChange]);
 
   const copyOrderText = async () => {
-    if (!derivedItems.length || derivedItems.some(item => (item.order_quantity_input !== undefined || item.incompleteMeasurements))) return;
+    if (!derivedItems.length || derivedItems.some(item => !item.orderReady)) return;
     const text = buildOrderRequestText(derivedItems, siteName);
     try {
       await navigator.clipboard.writeText(text);
@@ -695,7 +717,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
           {APP_FORMAL_NAME}（{APP_PRODUCT_NAME}）— 発注・見積プレビュー
         </p>
         <p className="text-xs text-neutral-600">
-          発注数量は品番ごとのロス率を加えて切り上げています。
+          自動計算は予備分を加えて1m単位に切り上げます。調整済み・手動指定の発注量には再上乗せしません。
         </p>
       </div>
       <Card className="border-none shadow-xl bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-transparent backdrop-blur-xl ring-1 ring-inset ring-indigo-500/20">
@@ -710,7 +732,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                   発注リスト
                 </CardTitle>
                 <CardDescription className="mt-1 text-xs font-medium text-indigo-900/60 dark:text-indigo-100/60 sm:text-sm">
-                  {APP_FORMAL_NAME} — AIの計測にロス率を加算、または手動でリピート計算を行います
+                  {APP_FORMAL_NAME} — メモの数量と予備分を確認し、必要なときだけ柄合わせを計算します
                 </CardDescription>
               </div>
             </div>
@@ -721,8 +743,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         </CardHeader>
         <CardContent className="space-y-4 px-3 pb-4 pt-0 sm:space-y-5 sm:px-6 sm:pb-6">
           <p className="max-w-3xl text-xs leading-relaxed text-indigo-900/85 dark:text-indigo-100/85 sm:text-sm">
-            発注数量は品番ごとのロス率を加えて切り上げています。
-            <span className="text-[11px] text-muted-foreground sm:text-xs">（初期値 {DEFAULT_LOSS_RATE_PERCENT}%）</span>
+            自動計算は予備分を加えて1m単位に切り上げます。調整済み・手動指定の発注量には再上乗せしません。
+            <span className="text-[11px] text-muted-foreground sm:text-xs">（初期値 {DEFAULT_LOSS_RATE_PERCENT}%）確認前の数量は参考値です。確認するまでコピー・追加できません。</span>
           </p>
           {derivedItems.some((item) => item.review_reasons?.length) && (
             <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
@@ -741,7 +763,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
           )}
           <Button 
             onClick={() => void copyOrderText()} 
-            disabled={derivedItems.some(item => (item.order_quantity_input !== undefined || item.incompleteMeasurements))}
+            disabled={derivedItems.some(item => !item.orderReady)}
             className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 py-5 text-sm font-semibold shadow-lg transition-all duration-300 hover:from-indigo-700 hover:to-purple-700 hover:shadow-xl sm:py-6 sm:text-base"
           >
             <CopyIcon className="w-4 h-4 mr-2" />
@@ -768,7 +790,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       <Card className="border-none bg-gradient-to-r from-indigo-600/10 via-purple-600/10 to-indigo-600/5 shadow-lg ring-1 ring-inset ring-indigo-500/20 backdrop-blur-xl">
         <CardContent className="grid gap-3 px-3 py-4 sm:grid-cols-2 sm:px-6 sm:py-5">
           <div className="rounded-xl border border-indigo-500/10 bg-white/70 p-4 shadow-sm dark:bg-black/30">
-            <p className="text-xs font-bold text-indigo-900/60 dark:text-indigo-100/60">合計発注数量</p>
+            <p className="text-xs font-bold text-indigo-900/60 dark:text-indigo-100/60">{derivedItems.some(item => !item.orderReady) ? "合計発注数量（確認前の参考値を含む）" : "合計発注数量"}</p>
             <div className="mt-2 flex items-baseline gap-2">
               <span className="text-3xl font-black tabular-nums tracking-tight text-indigo-700 dark:text-indigo-300 sm:text-4xl">
                 {formatSummaryNumber(orderSummary.totalOrderQuantity, 0)}
@@ -792,7 +814,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         <CardHeader className="px-3 pb-2 pt-4 sm:px-6 sm:pt-5">
           <CardTitle className="flex items-center gap-2 text-sm font-bold text-indigo-900 dark:text-indigo-100 sm:text-base">
             <CopyIcon className="h-4 w-4" />
-            この内容でコピーされます
+            発注内容の確認
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-1.5 px-3 pb-4 pt-0 sm:px-6 sm:pb-5">
@@ -805,7 +827,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                 className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-black/5 bg-black/[0.03] px-2 py-1.5 dark:border-white/5 dark:bg-white/[0.04] sm:px-3"
               >
                 <p className="min-w-0 flex-1 truncate whitespace-nowrap text-xs font-semibold tabular-nums text-zinc-900 dark:text-zinc-100 sm:text-sm">
-                  ・{code} / 数量：{item.order_quantity_input === undefined && !item.incompleteMeasurements ? `${quantity}m` : "入力を確認してください"}
+                  ・{code} / 数量：{item.orderReady ? `${quantity}m` : `${quantity}m（確認前の参考値）`}
                 </p>
                 <div className="flex shrink-0 items-center gap-1.5">
                   <Button
@@ -831,7 +853,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-                <p className={`w-full text-xs ${!basicView && item.quantityAssessment.showCheckmark ? "text-emerald-700 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300"}`} role="status" aria-label={`${code} の発注量チェック`}>{item.incompleteMeasurements ? "要確認：長さまたは幅数が未入力です。入力を完成させてから前提を確認してください。" : basicView ? "数量は元メモ・写真と照合してください。" : item.quantityAssessment.message}</p>
+                <p className={`w-full text-xs ${orderCheckColor(item.orderReady, basicView)}`} role="status" aria-label={`${code} の発注量チェック`}>{orderCheckMessage(item, basicView)}</p>
               </div>
             );
           })}
@@ -843,8 +865,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
           <Button
             type="button"
             className="min-h-11 w-full gap-2 bg-violet-600 px-4 font-bold hover:bg-violet-700 sm:w-auto"
-            disabled={derivedItems.some(item => (item.order_quantity_input !== undefined || item.incompleteMeasurements))}
-            onClick={() =>
+            disabled={derivedItems.some(item => !item.orderReady)}
+            onClick={() => derivedItems.every(item => item.orderReady) &&
               onAddAllToOrderDraft(
                 derivedItems.map((item) => dimensionItemToOrderDraftInput(item)),
               )
@@ -897,9 +919,9 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] font-semibold tabular-nums text-muted-foreground sm:text-xs">
                           <span>計測 <strong className="text-foreground">{product.total_m}m</strong></span>
                           <span aria-hidden>／</span>
-                          <span>ロス <strong className="text-foreground">{product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}%</strong></span>
+                          <span>予備分 <strong className="text-foreground">{product.allowanceIncluded ? "調整済み（追加なし）" : `${product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}%`}</strong></span>
                           <span aria-hidden>／</span>
-                          <span>発注 <strong className="text-lg text-indigo-600 dark:text-indigo-400">{product.order_quantity}m</strong></span>
+                          <span>{product.orderReady ? "発注" : "参考"} <strong className="text-lg text-indigo-600 dark:text-indigo-400">{product.order_quantity}m</strong></span>
                         </div>
                       </div>
                       {onAddToOrderDraft ? (
@@ -907,8 +929,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           type="button"
                           variant="outline"
                           className="h-11 shrink-0 gap-1.5 rounded-lg bg-white px-2.5 text-xs font-bold dark:bg-black"
-                          disabled={(product.order_quantity_input !== undefined || product.incompleteMeasurements)}
-                          onClick={() => onAddToOrderDraft(dimensionItemToOrderDraftInput(product))}
+                          disabled={!product.orderReady}
+                          onClick={() => product.orderReady && onAddToOrderDraft(dimensionItemToOrderDraftInput(product))}
                           title="発注リストに追加"
                         >
                           <ListPlus className="h-4 w-4" />
@@ -989,9 +1011,9 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           <span className="text-xs">要確認</span>
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className={`gap-1 px-2 py-0.5 ml-1 ${!basicView && product.comparisonConfirmed ? "text-emerald-600 border-emerald-600/30 bg-emerald-500/10" : "text-amber-600 border-amber-600/30 bg-amber-500/10"}`}>
-                          {!basicView && product.comparisonConfirmed ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
-                          <span className="text-xs">{basicView ? "数量を確認" : product.comparisonConfirmed ? "比較条件確認済" : "前提未確認"}</span>
+                        <Badge variant="outline" className={`gap-1 px-2 py-0.5 ml-1 ${!basicView && product.orderReady ? "text-emerald-600 border-emerald-600/30 bg-emerald-500/10" : "text-amber-600 border-amber-600/30 bg-amber-500/10"}`}>
+                          {!basicView && product.orderReady ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                          <span className="text-xs">{basicView ? "数量を確認" : product.orderReady ? "発注内容確認済" : "数量を確認"}</span>
                         </Badge>
                       )}
                     </div>
@@ -1001,8 +1023,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           type="button"
                           variant="outline"
                           className="h-11 gap-2 rounded-lg bg-white px-3 text-xs font-bold dark:bg-black sm:text-sm"
-                          disabled={(product.order_quantity_input !== undefined || product.incompleteMeasurements)}
-                          onClick={() => onAddToOrderDraft(dimensionItemToOrderDraftInput(product))}
+                          disabled={!product.orderReady}
+                          onClick={() => product.orderReady && onAddToOrderDraft(dimensionItemToOrderDraftInput(product))}
                         >
                           <ListPlus className="h-4 w-4" />
                           発注リストに追加
@@ -1020,16 +1042,45 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         <ChevronUp className="h-5 w-5" />
                       </Button>
                     </div>
+                  <fieldset className="mb-4 w-full space-y-2 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-800 dark:bg-indigo-950/30">
+                    <legend className="px-1 text-sm font-bold">{product.product_code} の数量の使い方</legend>
+                    {([ ["memo", "メモの数量を使う（予備分を確認）"], ["pattern", "柄合わせを考慮して計算する"] ] as const).map(([mode, label]) => (
+                      <label key={mode} className="flex min-h-11 items-center gap-2 text-sm">
+                        <input type="radio" name={`${product.product_code}-order-mode`} value={mode} checked={product.order_mode === mode} onChange={() => handleOrderModeChange(product, mode)} />
+                        {label}
+                      </label>
+                    ))}
+                    {product.order_mode === "memo" ? <label className="block pt-2 text-sm">予備分の扱い
+                      <select aria-label={`${product.product_code} の予備分の扱い`} className="mt-1 min-h-11 w-full rounded border bg-background p-2" value={product.memo_allowance} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], memoAllowance: event.target.value as MemoProductItem["memo_allowance"], quantityConfirmation: "" } }))}>
+                        <option value="add">メモの数量に予備分を加える</option>
+                        <option value="included">メモは発注量まで調整済み（上乗せしない）</option>
+                      </select>
+                    </label> : null}
+                    <p className="text-sm font-semibold tabular-nums" aria-label={`${product.product_code} の数量の計算内訳`}>
+                      {product.order_mode === "memo" ? "メモ合計" : product.canConfirm ? "柄合わせ後の必要量" : "参考量（柄合わせ条件を確認）"} {product.total_m}m → {product.allowanceIncluded ? "予備分は調整済み・追加0%" : `予備分 ${product.loss_rate_percent}%`} → 自動計算 {product.automaticQuantity}m（1m単位に切り上げ）
+                    </p>
+                    {product.manualQuantityActive ? <div className="space-y-2 text-sm">
+                      <p>発注数量は手動指定 {product.order_quantity}m を保持しています。柄合わせ・予備分は再上乗せしません。</p>
+                      <Button type="button" variant="outline" className="min-h-11" onClick={() => { clearManualOrderQuantity(product.product_code); setOrderQuantityInputs(previous => ({ ...previous, [product.product_code]: undefined })); }}>自動計算の数量に戻す</Button>
+                    </div> : null}
+                    <p className="text-xs text-muted-foreground">メモに柄合わせや予備分が含まれるか不明なときは職人さんに確認してください。</p>
+                    {product.order_mode === "memo" || basicView ? <label className="flex min-h-11 items-start gap-2 py-2 text-sm">
+                      <input type="checkbox" className="mt-1" aria-label={`${product.product_code} のメモと発注数量を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.canConfirm} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.confirmationFingerprint : "" } }))} />
+                      元メモ・写真と照合し、必要な柄合わせ・切り代・予備分と発注数量を確認しました（変更すると再確認）
+                    </label> : null}
+                    <p role="status" className={`text-sm ${orderCheckColor(product.orderReady, basicView)}`}>{orderCheckMessage(product, basicView)}</p>
+                  </fieldset>
+
                     <div className="grid w-full gap-2 self-start sm:w-[25rem] sm:self-auto">
                       <div className="grid w-full grid-cols-[4.5rem_2.75rem_minmax(4.25rem,1fr)_1.5rem_2.75rem] items-center gap-2 rounded-xl border border-black/5 bg-black/5 p-1.5 dark:bg-white/5 sm:grid-cols-[5rem_2.75rem_minmax(5rem,1fr)_1.75rem_2.75rem]">
-                        <span className="pl-2 text-[10px] font-medium opacity-60 sm:text-xs">ロス率</span>
+                        <span className="pl-2 text-[10px] font-medium opacity-60 sm:text-xs">予備分</span>
                         <Button
                           type="button"
                           variant="outline"
                           size="icon"
                           className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
                           onClick={() => handleAdjustLossRate(product.product_code, product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT, -1)}
-                          disabled={(product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT) <= 0}
+                          disabled={product.allowanceIncluded || (product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT) <= 0}
                           aria-label={`${product.product_code} のロス率を1%減らす`}
                         >
                           <Minus className="h-4 w-4" />
@@ -1039,7 +1090,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           min="0"
                           step="1"
                           className="h-11 w-full bg-white px-2 text-center text-base font-bold tabular-nums dark:bg-black"
-                          value={lossRates[product.product_code] ?? product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}
+                          value={lossRates[product.product_code] ?? product.loss_rate_input ?? product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}
+                          disabled={product.allowanceIncluded}
                           onChange={(e) => handleLossRateChange(product.product_code, e.target.value)}
                           aria-label={`${product.product_code} のロス率を入力`}
                         />
@@ -1049,6 +1101,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           variant="outline"
                           size="icon"
                           className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
+                          disabled={product.allowanceIncluded}
                           onClick={() => handleAdjustLossRate(product.product_code, product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT, 1)}
                           aria-label={`${product.product_code} のロス率を1%増やす`}
                         >
@@ -1132,7 +1185,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     </Button>
                   </div>
 
-                  <div className="mb-6 mt-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 shadow-sm transition-colors dark:border-indigo-900/30 dark:bg-indigo-900/10 sm:p-4">
+                  {product.order_mode === "pattern" ? <div className="mb-6 mt-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 shadow-sm transition-colors dark:border-indigo-900/30 dark:bg-indigo-900/10 sm:p-4">
                     <div className="text-xs font-bold uppercase tracking-wider text-indigo-800/60 dark:text-indigo-300/60 mb-3 flex items-center justify-between">
                       <div className="flex items-center gap-1.5 text-indigo-900 dark:text-indigo-100 font-semibold text-[11px]">
                         <Layers className="w-3.5 h-3.5" />
@@ -1155,13 +1208,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     
                     {!basicView ? <><div className="mb-3 grid gap-3 sm:grid-cols-2">
                       <label className="text-xs">寸法の前提
-                        <select aria-label={`${product.product_code} の寸法区分`} className="mt-1 block w-full rounded border bg-background p-2" value={product.measurement_basis} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], measurementBasis: event.target.value as MemoProductItem["measurement_basis"] } }))}>
+                        <select aria-label={`${product.product_code} の寸法区分`} className="mt-1 block w-full rounded border bg-background p-2" value={product.measurement_basis} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: "", measurementBasis: event.target.value as MemoProductItem["measurement_basis"] } }))}>
                           <option value="unconfirmed">未確認</option><option value="trim-included">切り代込みの裁断長</option><option value="repeat-adjusted">既に柄調整済み（再計算しない）</option>
                         </select>
                       </label>
                       <label className="text-xs">柄合わせ方式
-                        <select aria-label={`${product.product_code} の柄合わせ方式`} className="mt-1 block w-full rounded border bg-background p-2" value={product.pattern_match} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], patternMatch: event.target.value as MemoProductItem["pattern_match"] } }))}>
-                          <option value="unconfirmed">未確認</option><option value="straight">ストレートリピート</option><option value="other">半落ち・その他（要確認）</option>
+                        <select aria-label={`${product.product_code} の柄合わせ方式`} className="mt-1 block w-full rounded border bg-background p-2" value={product.pattern_match} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: "", patternMatch: event.target.value as MemoProductItem["pattern_match"] } }))}>
+                          <option value="unconfirmed">未確認</option><option value="straight">ストレートリピート</option><option value="other">半落ち・その他（職人さんに確認）</option>
                         </select>
                       </label>
                     </div>
@@ -1170,8 +1223,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     </p>
                     {!product.comparison.premisesAvailable ? <p className="mb-2 text-xs text-amber-800 dark:text-amber-300">参考値です。寸法区分・柄合わせ・リピート値と写真の読み取りを確認してください。柄調整済み・半落ち等は推測計算しません。</p> : null}
                     <label className="mb-3 flex items-start gap-2 text-xs">
-                      <input type="checkbox" aria-label={`${product.product_code} の必要量の前提を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.comparison.premisesAvailable} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.comparison.fingerprint : "" } }))} />
-                      採寸・切り代・柄合わせと読み取りを確認済み（変更すると再確認）
+                      <input type="checkbox" aria-label={`${product.product_code} の必要量の前提を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.canConfirm} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.confirmationFingerprint : "" } }))} />
+                      採寸・切り代・柄合わせ・予備分と発注数量を確認しました（変更すると再確認）
                     </label>
                     </> : null}
                     <div className={`flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 transition-opacity duration-300 ${(product.derivedEntries || []).some((e: any) => e.isRepeatActive) ? 'opacity-100' : 'opacity-40'}`}>
@@ -1183,7 +1236,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           placeholder="例: 2.4" 
                           className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
                           aria-label={`${product.product_code} の壁の高さ (m)`}
-                          value={overrides[product.product_code]?.heightM ?? product.repeat_height_m ?? ""}
+                          value={overrides[product.product_code]?.heightM ?? product.repeat_height_input ?? product.repeat_height_m ?? ""}
                           onChange={(e) => handleOverrideChange(product.product_code, "heightM", e.target.value)}
                         />
                       </div>
@@ -1195,12 +1248,12 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           placeholder="例: 32" 
                           className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
                           aria-label={`${product.product_code} のリピート (cm)`}
-                          value={overrides[product.product_code]?.repeatCm ?? product.repeat_cm ?? ""}
+                          value={overrides[product.product_code]?.repeatCm ?? product.repeat_cm_input ?? product.repeat_cm ?? ""}
                           onChange={(e) => handleOverrideChange(product.product_code, "repeatCm", e.target.value)}
                         />
                       </div>
                     </div>
-                  </div>
+                  </div> : null}
 
                   {((product.source_url && product.source_url.trim() !== "null") || product.confidence != null || product.catalog_name) && (
                     <div className="flex flex-wrap items-center gap-4 mb-6 px-1">
@@ -1254,7 +1307,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                               {sourceJobId && Number.isInteger(e.source_image_index) ? <Button type="button" variant="outline" className="h-8 text-xs" aria-label={`${product.product_code} 明細${eidx + 1}の写真を確認`} onClick={() => { setPhotoError(false); setPhotoIndex(e.source_image_index); }}>写真{e.source_image_index + 1}・明細{e.source_entry_index + 1}を確認</Button> : null}
                               <div className="flex w-full min-w-0 items-center justify-between gap-1 sm:gap-2">
                                 <div className="flex min-w-0 flex-1 items-center gap-1 sm:gap-2">
-                                  <button 
+                                  {product.order_mode === "pattern" ? <button
                                     type="button"
                                     onClick={() => handleToggleEntryRepeat(product.product_code, eidx)}
                                     className="-ml-1 flex shrink-0 items-center justify-center p-1.5 sm:m-0 sm:p-0"
@@ -1264,7 +1317,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                     <span className={`flex h-3.5 w-6 items-center rounded-full p-px transition-colors ${e.isRepeatActive ? 'bg-indigo-600' : 'bg-black/20 dark:bg-white/20'}`}>
                                       <span className={`h-2.5 w-2.5 rounded-full bg-white shadow-sm transition-transform ${e.isRepeatActive ? 'translate-x-[10px]' : ''}`} />
                                     </span>
-                                  </button>
+                                  </button> : null}
 
                                   <div 
                                     className="flex w-full min-w-0"
@@ -1385,7 +1438,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                       </div>
                     </div>
                     <div className="flex justify-between items-center mt-3 pt-3 border-t border-black/10 dark:border-white/10 px-2">
-                       <span className="text-xs font-bold opacity-60">ロス {product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}%</span>
+                       <span className="text-xs font-bold opacity-60">予備分 {product.allowanceIncluded ? "調整済み（追加なし）" : `${product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}%`}</span>
                        <span className="text-xs font-bold tabular-nums">
                          <span className="opacity-60 mr-1">計測合計:</span>
                          <span className={product.override_active ? "text-indigo-600 dark:text-indigo-400" : "opacity-80"}>{product.total_m}m</span>

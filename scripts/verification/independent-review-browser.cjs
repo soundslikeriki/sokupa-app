@@ -32,9 +32,10 @@ const draft = {version:1,siteName:'Synthetic',parsed:{items:[original]},original
   assert.equal(await page.evaluate(key=>JSON.parse(localStorage.getItem(key)).parsed.items[0].order_quantity,key),23);checks++;
   await page.getByTitle('タップして式を編集').first().click();
   await page.getByLabel('VS2067 1行目の幅数',{exact:true}).fill('-1');
-  assert.equal(await page.getByLabel('VS2067 1行目の幅数',{exact:true}).inputValue(),'6');checks++;
+  assert.equal(await page.getByLabel('VS2067 1行目の幅数',{exact:true}).inputValue(),'-1');checks++;
   await page.getByLabel('VS2067 1行目の長さ (m)',{exact:true}).fill('-1');
-  assert.equal(await page.getByLabel('VS2067 1行目の長さ (m)',{exact:true}).inputValue(),'2.7');checks++;
+  assert.equal(await page.getByLabel('VS2067 1行目の長さ (m)',{exact:true}).inputValue(),'-1');checks++;
+  assert.equal(await page.getByRole('button',{name:'発注用テキストをコピー',exact:true}).isDisabled(),true);checks++;
   await page.reload();
   await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).waitFor();
   assert.equal(await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).inputValue(),'23');checks++;
