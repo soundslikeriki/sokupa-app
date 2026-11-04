@@ -58,11 +58,11 @@ export function requiresMemoReview(payload: ParsedMemoPayload): boolean {
 
 export function mergeParsedPayloads(payloads: ParsedMemoPayload[]): ParsedMemoPayload {
   const map = new Map<string, MemoProductItem>();
-  for (const payload of payloads) for (const item of payload.items) {
+  for (const [imageIndex, payload] of payloads.entries()) for (const [itemIndex, item] of payload.items.entries()) {
     const imageReview = Boolean(payload.image_needs_review || payload.needs_review_any);
     const code = item.product_code.trim().toUpperCase().replace(/[\s-]+/g, "");
     const existing = map.get(code);
-    const entries = [...(existing?.entries ?? []), ...item.entries].map(validateMemoEntry);
+    const entries = [...(existing?.entries ?? []), ...item.entries.map((entry, entryIndex) => ({ ...validateMemoEntry(entry), source_row_id: `image-${imageIndex}:item-${itemIndex}:row-${entryIndex}`, source_image_index: imageIndex, source_entry_index: entryIndex }))];
     const total = roundMeters(entries.reduce((sum, entry) => sum + entry.subtotal_m, 0));
     const loss = existing?.loss_rate_percent ?? item.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT;
     const reasons = Array.from(new Set([...(existing?.review_reasons ?? []), ...(item.review_reasons ?? []), ...(imageReview ? ["画像：解析結果を原画像で確認してください"] : []), ...entries.filter((entry) => entry.needs_review).map((entry) => `式：${entry.review_reason}`)]));

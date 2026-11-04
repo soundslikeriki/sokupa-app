@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --webpack",
-    "test": "node --import tsx --test src/lib/*.test.ts",
+    "test": "node --import tsx --test src/lib/*.test.ts src/lib/calculation/*.test.mjs",
     "clean": "rm -rf .next",
     "rebuild": "npm run clean && npm run build",
     "build": "next build --webpack",

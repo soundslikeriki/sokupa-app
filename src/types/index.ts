@@ -12,6 +12,9 @@ export type RepeatInfo = {
 
 /** 品番ごとの1行分の寸法・数量 */
 export type MemoEntry = {
+  source_row_id?: string;
+  source_image_index?: number;
+  source_entry_index?: number;
   original_formula: string;
   length_m: number;
   quantity: number;
@@ -23,6 +26,11 @@ export type MemoEntry = {
 
 /** 品番単位で集約された1ブロック（AI出力スキーマ） */
 export type MemoProductItem = {
+  measurement_basis?: "unconfirmed" | "trim-included" | "repeat-adjusted";
+  pattern_match?: "unconfirmed" | "straight" | "other";
+  quantity_confirmation?: string;
+  /** Incomplete/invalid editor input; keep the last valid numeric quantity separately. */
+  order_quantity_input?: string;
   product_code: string;
   manufacturer: string;
   entries: MemoEntry[];

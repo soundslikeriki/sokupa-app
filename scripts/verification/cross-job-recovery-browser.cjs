@@ -26,7 +26,11 @@ const item=(m,q,order)=>({product_code:'VS2067',manufacturer:'Synthetic',entries
     await page.evaluate(key=>{window.firstArchiveSet=Storage.prototype.setItem;Storage.prototype.setItem=function(name,value){if(name.startsWith(key+':recovery:'))throw new DOMException('Synthetic initial archive quota','QuotaExceededError');return window.firstArchiveSet.call(this,name,value);};},key);
     const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=4;return c.toDataURL('image/png').split(',')[1];});
     await page.locator('input[type=file]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await page.getByRole('button',{name:'1枚の画像を解析する',exact:true}).click();
-    await page.getByText('別の解析結果があります',{exact:true}).waitFor();await page.evaluate(()=>{Storage.prototype.setItem=window.firstArchiveSet;});assert.equal(submitted,true);checks++;
+    await page.waitForFunction(({key,b})=>JSON.parse(localStorage.getItem(key)).resultJobId===b,{key,b});
+    await page.evaluate(()=>{Storage.prototype.setItem=window.firstArchiveSet;});assert.equal(submitted,true);checks++;
+    assert.equal((await current()).parsed.items[0].order_quantity,12);checks++;
+    assert.equal((await archived()).length,0);checks++;
+    await context.close();continue;
   }else await page.getByText('別の解析結果があります',{exact:true}).waitFor();
   assert.equal(await page.getByText('別の解析結果があります',{exact:true}).locator('..').getByRole('button').evaluateAll(nodes=>nodes.every(node=>{const r=node.getBoundingClientRect();return r.x>=0&&r.right<=innerWidth;})),true);checks++;
   if(scenario==='different-job'&&process.env.SOKUPA_SCREENSHOT)await page.screenshot({path:process.env.SOKUPA_SCREENSHOT,fullPage:true});

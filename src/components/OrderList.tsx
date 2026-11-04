@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ListPlus } from "lucide-react";
-import { repeatCutLength, roundMeters } from "@/lib/memo-calculation";
+import { roundMeters } from "@/lib/memo-calculation";
+import { compareProduct, assessProductOrder } from "@/lib/product-comparison";
 import { calculateOrderQuantity, DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import {
   areAllCodesCollapsed,
@@ -52,6 +53,7 @@ function groupByManufacturer(items: any[]) {
 type OrderListProps = {
   items: MemoProductItem[];
   sourceItems?: MemoProductItem[];
+  sourceJobId?: string | null;
   notes?: string;
   siteName?: string;
   needs_review_any?: boolean;
@@ -61,6 +63,9 @@ type OrderListProps = {
 };
 
 type ItemOverride = {
+  measurementBasis?: MemoProductItem["measurement_basis"];
+  patternMatch?: MemoProductItem["pattern_match"];
+  quantityConfirmation?: string;
   repeatCm?: number | "";
   heightM?: number | "";
   entryQtys?: Record<number, number | "">;
@@ -109,11 +114,14 @@ function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
   };
 }
 
-export function OrderList({ items, sourceItems, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft }: OrderListProps) {
+export function OrderList({ items, sourceItems, sourceJobId, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft }: OrderListProps) {
+  const [photoIndex, setPhotoIndex] = useState<number | null>(null);
+  const [photoError, setPhotoError] = useState(false);
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
   const [lossRates, setLossRates] = useState<Record<string, number | "">>({});
   const [newEntryInputs, setNewEntryInputs] = useState<Record<string, NewEntryInput>>({});
+  const [orderQuantityInputs, setOrderQuantityInputs] = useState<Record<string,string | undefined>>({});
   const [manualOrderQuantities, setManualOrderQuantities] = useState<Record<string, number>>({});
   const [collapsedCodes, setCollapsedCodes] = useState<Set<string>>(() => new Set());
   const newEntryInputsRef = useRef<Record<string, NewEntryInput>>({});
@@ -153,13 +161,14 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
   };
 
   const canonicalizeDerivedItem = (item: any): MemoProductItem => {
-    const { derivedEntries, override_active, rActive, total_quantity, ...base } = item;
+    const { derivedEntries, override_active, rActive, total_quantity, comparison, comparisonConfirmed, quantityAssessment, ...base } = item;
     return {
       ...base,
       entries: (derivedEntries ?? item.entries ?? []).map((entry: any) => {
         const length_m = toFiniteNumber(entry.base_length ?? entry.length_m);
         const quantity = toFiniteNumber(entry.derived_quantity ?? entry.quantity);
         return {
+          source_row_id: entry.source_row_id, source_image_index: entry.source_image_index, source_entry_index: entry.source_entry_index,
           original_formula: entry.original_formula || `${length_m} x ${quantity}`,
           repeat_enabled: entry.isRepeatActive ?? entry.repeat_enabled ?? false,
           needs_review: entry.needs_review, review_reason: entry.review_reason,
@@ -491,6 +500,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
       return next;
     });
     delete newEntryInputsRef.current[productCode];
+    setOrderQuantityInputs(previous => ({ ...previous, [productCode]: undefined }));
 
     onItemsChange(
       items.map((item) => (item.product_code === productCode ? cloneMemoProductItem(original) : item)),
@@ -498,6 +508,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
   };
 
   const handleSetOrderQuantity = (productCode: string, value: number) => {
+    setOrderQuantityInputs(previous => ({ ...previous, [productCode]: undefined }));
     const currentItem = derivedItems.find((item) => item.product_code === productCode);
     const nextQuantity = Math.max(0, Math.ceil(toFiniteNumber(value)));
     setManualOrderQuantities((prev) => ({
@@ -508,6 +519,14 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
       ...prev,
       [productCode]: calculateLossRateFromOrderQuantity(nextQuantity, toFiniteNumber(currentItem?.total_m)),
     }));
+  };
+
+  const handleOrderQuantityInput = (code: string, raw: string) => {
+    if (!/^\d{1,12}(?:\.\d{1,6})?$/.test(raw) || !Number.isFinite(Number(raw)) || Number(raw) > 999999999999) {
+      setOrderQuantityInputs(previous => ({ ...previous, [code]: raw }));
+      return;
+    }
+    handleSetOrderQuantity(code, Number(raw));
   };
 
   const handleAdjustOrderQuantity = (productCode: string, delta: number) => {
@@ -539,55 +558,26 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
       let override_active = false;
       let masterRepeatStatus = true;
 
+      const basis = ovr.measurementBasis ?? item.measurement_basis ?? "unconfirmed";
+      const match = ovr.patternMatch ?? item.pattern_match ?? "unconfirmed";
+      const rows = (item.entries || []).map((e: any, idx: number) => {
+        const base = typeof elengths[idx] === "number" ? elengths[idx] as number : e.length_m;
+        const active = eRepeats[idx] ?? e.repeat_enabled ?? false;
+        // A common height is an explicit override. Otherwise preserve every row's own height.
+        return { id: e.source_row_id ?? `${item.product_code}:${idx}`, length: active && h !== null && h > 0 && typeof elengths[idx] !== "number" ? h : base,
+          quantity: typeof eqtys[idx] === "number" ? eqtys[idx] as number : e.quantity, active };
+      });
+      const comparison = compareProduct(item, rows, r, basis, match);
       const derivedEntries = (item.entries || []).map((e: any, idx: number) => {
-         const qInput = eqtys[idx];
-         const lInput = elengths[idx];
-         const actualQ = typeof qInput === "number" ? qInput : e.quantity;
-         const rowRepeatActive = eRepeats[idx] ?? e.repeat_enabled ?? false;
-
-         if (!rowRepeatActive) {
-            masterRepeatStatus = false;
-         }
-         
-         if ((typeof qInput === "number" && qInput !== e.quantity) || (typeof lInput === "number" && lInput !== e.length_m)) {
-             override_active = true;
-         }
-
-         const baseRowLength = typeof lInput === "number" ? lInput : e.length_m;
-         let stripL = baseRowLength;
-         let overridenL = typeof lInput === "number";
-
-         // Note: row height override takes precedence. If missing, we fallback to master heightM.
-         let targetHeight = baseRowLength;
-         if (h !== null && h > 0 && typeof lInput !== "number") {
-             targetHeight = h;
-         }
-
-         if (rowRepeatActive && targetHeight > 0) {
-            stripL = targetHeight;
-            override_active = true;
-            overridenL = true;
-         }
-
-         if (rowRepeatActive && r !== null && r > 0 && typeof stripL === "number" && stripL > 0) {
-            stripL = repeatCutLength(stripL, r);
-            override_active = true;
-            overridenL = true;
-         }
-
-         const subtotal = stripL * actualQ;
-         calcTotalM = roundMeters(calcTotalM + roundMeters(subtotal));
-         calcTotalQty += actualQ;
-
-         return {
-            ...e,
-            base_length: baseRowLength,
-            derived_length: overridenL ? Number(stripL.toFixed(2)) : e.length_m,
-            derived_quantity: actualQ,
-            derived_subtotal: Number(subtotal.toFixed(2)),
-            isEditing: ovr.entryEditMode?.[idx] === true,
-            isRepeatActive: rowRepeatActive
-         };
+        const row = rows[idx], base = typeof elengths[idx] === "number" ? elengths[idx] as number : e.length_m;
+        if (!row.active) masterRepeatStatus = false;
+        const exact = comparison.strict.rows[idx]?.selected.perStripM ?? comparison.reference?.rows[idx]?.selected.perStripM;
+        const stripL = exact === null || exact === undefined ? base : Number(exact);
+        if (row.active || base !== e.length_m || row.quantity !== e.quantity) override_active = true;
+        const subtotal = stripL * row.quantity;
+        calcTotalM = roundMeters(calcTotalM + roundMeters(subtotal)); calcTotalQty += row.quantity;
+        return { ...e, base_length: base, derived_length: Number(stripL.toFixed(6)), derived_quantity: row.quantity,
+          derived_subtotal: Number(subtotal.toFixed(6)), isEditing: ovr.entryEditMode?.[idx] === true, isRepeatActive: row.active };
       });
 
       if (!item.entries || item.entries.length === 0) {
@@ -603,8 +593,15 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
           ? Math.max(0, Math.round(manualOrderQuantity))
           : calculatedOrderQuantity;
 
+      const confirmation = ovr.quantityConfirmation ?? item.quantity_confirmation;
+      const comparisonConfirmed = comparison.premisesAvailable && confirmation === comparison.fingerprint;
+      const required = comparison.strict.totals.selectedM ?? comparison.reference?.totals.selectedM ?? null;
+      const rawOrder = Object.prototype.hasOwnProperty.call(orderQuantityInputs, item.product_code) ? orderQuantityInputs[item.product_code] : item.order_quantity_input;
+      const quantityAssessment = assessProductOrder(rawOrder === undefined ? order_quantity : rawOrder, required, comparisonConfirmed);
       return {
         ...item,
+        measurement_basis: basis, pattern_match: match, quantity_confirmation: confirmation, order_quantity_input: rawOrder,
+        comparison, comparisonConfirmed, quantityAssessment,
         total_m: Number(calcTotalM.toFixed(2)),
         order_quantity,
         loss_rate_percent: lossRate,
@@ -617,7 +614,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
         derivedEntries
       };
     });
-  }, [items, overrides, lossRates, manualOrderQuantities]);
+  }, [items, overrides, lossRates, manualOrderQuantities, orderQuantityInputs]);
 
   const groups = useMemo(() => groupByManufacturer(derivedItems), [derivedItems]);
   const productCodes = useMemo(() => derivedItems.map((item) => item.product_code), [derivedItems]);
@@ -650,6 +647,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
         order_quantity: item.order_quantity,
         loss_rate_percent: item.loss_rate_percent,
         repeat_cm: item.repeat_cm, repeat_height_m: item.repeat_height_m, manual_order_quantity: item.manual_order_quantity,
+        measurement_basis: item.measurement_basis, pattern_match: item.pattern_match, quantity_confirmation: item.quantity_confirmation, order_quantity_input: item.order_quantity_input,
         entries: item.entries?.map((entry) => ({
           length_m: entry.length_m,
           quantity: entry.quantity,
@@ -664,7 +662,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
   }, [derivedItems, onItemsChange]);
 
   const copyOrderText = async () => {
-    if (!derivedItems.length) return;
+    if (!derivedItems.length || derivedItems.some(item => item.order_quantity_input !== undefined)) return;
     const text = buildOrderRequestText(derivedItems, siteName);
     try {
       await navigator.clipboard.writeText(text);
@@ -729,6 +727,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
           )}
           <Button 
             onClick={() => void copyOrderText()} 
+            disabled={derivedItems.some(item => item.order_quantity_input !== undefined)}
             className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 py-5 text-sm font-semibold shadow-lg transition-all duration-300 hover:from-indigo-700 hover:to-purple-700 hover:shadow-xl sm:py-6 sm:text-base"
           >
             <CopyIcon className="w-4 h-4 mr-2" />
@@ -742,6 +741,16 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
         </CardContent>
       </Card>
 
+      {sourceJobId && photoIndex !== null ? (
+        <Card><CardContent className="space-y-3 p-4">
+          <p className="font-semibold">照合する元写真 {photoIndex + 1}</p>
+          <Button type="button" variant="outline" onClick={() => setPhotoIndex(null)}>写真を閉じる</Button>
+          {photoError ? <p role="status">写真を取得できませんでした。通信とログイン状態を確認してください。</p> : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className="max-h-[70vh] w-full object-contain" alt={`解析元の写真 ${photoIndex + 1}`} src={`/api/analysis-jobs/${encodeURIComponent(sourceJobId)}/images/${photoIndex}`} onError={() => setPhotoError(true)} />
+          )}
+        </CardContent></Card>
+      ) : null}
       <Card className="border-none bg-gradient-to-r from-indigo-600/10 via-purple-600/10 to-indigo-600/5 shadow-lg ring-1 ring-inset ring-indigo-500/20 backdrop-blur-xl">
         <CardContent className="grid gap-3 px-3 py-4 sm:grid-cols-2 sm:px-6 sm:py-5">
           <div className="rounded-xl border border-indigo-500/10 bg-white/70 p-4 shadow-sm dark:bg-black/30">
@@ -779,10 +788,10 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
             return (
               <div
                 key={code}
-                className="flex min-w-0 items-center gap-2 rounded-lg border border-black/5 bg-black/[0.03] px-2 py-1.5 dark:border-white/5 dark:bg-white/[0.04] sm:px-3"
+                className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-black/5 bg-black/[0.03] px-2 py-1.5 dark:border-white/5 dark:bg-white/[0.04] sm:px-3"
               >
                 <p className="min-w-0 flex-1 truncate whitespace-nowrap text-xs font-semibold tabular-nums text-zinc-900 dark:text-zinc-100 sm:text-sm">
-                  ・{code} / 数量：{quantity}m
+                  ・{code} / 数量：{item.order_quantity_input === undefined ? `${quantity}m` : "入力を確認してください"}
                 </p>
                 <div className="flex shrink-0 items-center gap-1.5">
                   <Button
@@ -791,7 +800,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                     size="icon"
                     className="h-8 w-8 rounded-md bg-white p-0 dark:bg-black"
                     onClick={() => handleAdjustOrderQuantity(item.product_code, -1)}
-                    disabled={quantity <= 0}
+                    disabled={quantity <= 0 || item.order_quantity_input !== undefined}
                     aria-label={`${code} の発注数量を1m減らす`}
                   >
                     <Minus className="h-3.5 w-3.5" />
@@ -801,12 +810,14 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                     variant="outline"
                     size="icon"
                     className="h-8 w-8 rounded-md bg-white p-0 dark:bg-black"
+                    disabled={item.order_quantity_input !== undefined}
                     onClick={() => handleAdjustOrderQuantity(item.product_code, 1)}
                     aria-label={`${code} の発注数量を1m増やす`}
                   >
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </div>
+                <p className={`w-full text-xs ${item.quantityAssessment.showCheckmark ? "text-emerald-700 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300"}`} role="status" aria-label={`${code} の発注量チェック`}>{item.quantityAssessment.message}</p>
               </div>
             );
           })}
@@ -818,6 +829,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
           <Button
             type="button"
             className="min-h-11 w-full gap-2 bg-violet-600 px-4 font-bold hover:bg-violet-700 sm:w-auto"
+            disabled={derivedItems.some(item => item.order_quantity_input !== undefined)}
             onClick={() =>
               onAddAllToOrderDraft(
                 derivedItems.map((item) => dimensionItemToOrderDraftInput(item)),
@@ -880,6 +892,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                           type="button"
                           variant="outline"
                           className="h-11 shrink-0 gap-1.5 rounded-lg bg-white px-2.5 text-xs font-bold dark:bg-black"
+                          disabled={product.order_quantity_input !== undefined}
                           onClick={() => onAddToOrderDraft(dimensionItemToOrderDraftInput(product))}
                           title="発注リストに追加"
                         >
@@ -961,9 +974,9 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                           <span className="text-xs">要確認</span>
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="text-emerald-600 border-emerald-600/30 bg-emerald-500/10 gap-1 px-2 py-0.5 ml-1">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          <span className="text-xs">確証済</span>
+                        <Badge variant="outline" className={`gap-1 px-2 py-0.5 ml-1 ${product.comparisonConfirmed ? "text-emerald-600 border-emerald-600/30 bg-emerald-500/10" : "text-amber-600 border-amber-600/30 bg-amber-500/10"}`}>
+                          {product.comparisonConfirmed ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                          <span className="text-xs">{product.comparisonConfirmed ? "比較条件確認済" : "前提未確認"}</span>
                         </Badge>
                       )}
                     </div>
@@ -973,6 +986,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                           type="button"
                           variant="outline"
                           className="h-11 gap-2 rounded-lg bg-white px-3 text-xs font-bold dark:bg-black sm:text-sm"
+                          disabled={product.order_quantity_input !== undefined}
                           onClick={() => onAddToOrderDraft(dimensionItemToOrderDraftInput(product))}
                         >
                           <ListPlus className="h-4 w-4" />
@@ -1034,7 +1048,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                           size="icon"
                           className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
                           onClick={() => handleAdjustOrderQuantity(product.product_code, -1)}
-                          disabled={product.order_quantity <= 0}
+                          disabled={product.order_quantity <= 0 || product.order_quantity_input !== undefined}
                           aria-label={`${product.product_code} の発注数量を1m減らす`}
                         >
                           <Minus className="h-4 w-4" />
@@ -1044,8 +1058,8 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                           min="0"
                           step="1"
                           className="h-11 w-full bg-white px-2 text-center text-xl font-black tabular-nums leading-none text-indigo-600 dark:bg-black dark:text-indigo-400 sm:text-2xl"
-                          value={product.order_quantity}
-                          onChange={(e) => handleSetOrderQuantity(product.product_code, Number(e.target.value))}
+                          value={product.order_quantity_input ?? product.order_quantity}
+                          onChange={(e) => handleOrderQuantityInput(product.product_code, e.target.value)}
                           aria-label={`${product.product_code} の発注数量を入力`}
                         />
                         <span className="text-center text-sm font-semibold opacity-60">m</span>
@@ -1054,6 +1068,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                           variant="outline"
                           size="icon"
                           className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
+                          disabled={product.order_quantity_input !== undefined}
                           onClick={() => handleAdjustOrderQuantity(product.product_code, 1)}
                           aria-label={`${product.product_code} の発注数量を1m増やす`}
                         >
@@ -1109,7 +1124,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                         リピート・高さで一括計算
                       </div>
                       <div className="flex items-center gap-2">
-                        {product.rActive && product.override_active && (
+                        {product.rActive && product.override_active && product.comparison.strict.status === "calculated" && (
                            <Badge variant="default" className="text-[10px] px-2 py-0 bg-indigo-600 hover:bg-indigo-700 shadow border-none">適用中</Badge>
                         )}
                         <button
@@ -1123,9 +1138,29 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                       </div>
                     </div>
                     
+                    <div className="mb-3 grid gap-3 sm:grid-cols-2">
+                      <label className="text-xs">寸法の前提
+                        <select aria-label={`${product.product_code} の寸法区分`} className="mt-1 block w-full rounded border bg-background p-2" value={product.measurement_basis} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], measurementBasis: event.target.value as MemoProductItem["measurement_basis"] } }))}>
+                          <option value="unconfirmed">未確認</option><option value="trim-included">切り代込みの裁断長</option><option value="repeat-adjusted">既に柄調整済み（再計算しない）</option>
+                        </select>
+                      </label>
+                      <label className="text-xs">柄合わせ方式
+                        <select aria-label={`${product.product_code} の柄合わせ方式`} className="mt-1 block w-full rounded border bg-background p-2" value={product.pattern_match} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], patternMatch: event.target.value as MemoProductItem["pattern_match"] } }))}>
+                          <option value="unconfirmed">未確認</option><option value="straight">ストレートリピート</option><option value="other">半落ち・その他（要確認）</option>
+                        </select>
+                      </label>
+                    </div>
+                    <p className="mb-2 text-xs" aria-label={`${product.product_code} の無地と柄比較`}>
+                      元寸法 {product.comparison.strict.totals.originalM === null ? "要確認" : `${product.comparison.strict.totals.originalM}m`} ／ 無地（切り代込み） {product.comparison.strict.totals.plainM === null ? "要確認" : `${product.comparison.strict.totals.plainM}m`} ／ 柄合わせ {product.comparison.strict.totals.patternM === null ? "要確認" : `${product.comparison.strict.totals.patternM}m`}
+                    </p>
+                    {!product.comparison.premisesAvailable ? <p className="mb-2 text-xs text-amber-800 dark:text-amber-300">参考値です。寸法区分・柄合わせ・リピート値と写真の読み取りを確認してください。柄調整済み・半落ち等は推測計算しません。</p> : null}
+                    <label className="mb-3 flex items-start gap-2 text-xs">
+                      <input type="checkbox" aria-label={`${product.product_code} の必要量の前提を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.comparison.premisesAvailable} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.comparison.fingerprint : "" } }))} />
+                      採寸・切り代・柄合わせと読み取りを確認済み（変更すると再確認）
+                    </label>
                     <div className={`flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 transition-opacity duration-300 ${(product.derivedEntries || []).some((e: any) => e.isRepeatActive) ? 'opacity-100' : 'opacity-40'}`}>
                       <div className="flex-1">
-                        <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">壁の高さ (m)</label>
+                        <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">共通高さ (m・任意・全行上書き)</label>
                         <Input 
                           type="number" min="0"
                           step="0.1" 
@@ -1200,6 +1235,7 @@ export function OrderList({ items, sourceItems, notes, siteName = "", needs_revi
                              key={eidx}
                              className="group/row flex flex-col gap-1.5 rounded-lg border border-black/5 bg-white/50 px-1.5 py-1.5 text-[11px] font-medium transition-colors hover:bg-white/80 dark:border-white/5 dark:bg-black/50 dark:hover:bg-black/80 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-3 sm:py-2 sm:text-sm"
                            >
+                              {sourceJobId && Number.isInteger(e.source_image_index) ? <Button type="button" variant="outline" className="h-8 text-xs" aria-label={`${product.product_code} 明細${eidx + 1}の写真を確認`} onClick={() => { setPhotoError(false); setPhotoIndex(e.source_image_index); }}>写真{e.source_image_index + 1}・明細{e.source_entry_index + 1}を確認</Button> : null}
                               <div className="flex w-full min-w-0 items-center justify-between gap-1 sm:gap-2">
                                 <div className="flex min-w-0 flex-1 items-center gap-1 sm:gap-2">
                                   <button 

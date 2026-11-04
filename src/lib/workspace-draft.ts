@@ -14,12 +14,14 @@ function memo(value: unknown): boolean {
   if (value === null) return true;
   return object(value) && ["image_needs_review", "needs_review_any"].every((key) => value[key] === undefined || typeof value[key] === "boolean") && (value.notes === undefined || typeof value.notes === "string") && Array.isArray(value.items) && value.items.length <= 1000 && value.items.every((item: unknown) =>
     object(item) && (item.needs_review === undefined || typeof item.needs_review === "boolean") && typeof item.product_code === "string" && typeof item.manufacturer === "string" && number(item.total_m) && number(item.order_quantity) &&
-    ["notes", "spec", "catalog_name", "catalog_page_num", "source_url"].every((key) => item[key] === undefined || typeof item[key] === "string") &&
+    ["notes", "spec", "catalog_name", "catalog_page_num", "source_url", "quantity_confirmation", "order_quantity_input"].every((key) => item[key] === undefined || typeof item[key] === "string") &&
+    (item.measurement_basis === undefined || ["unconfirmed","trim-included","repeat-adjusted"].includes(item.measurement_basis)) &&
+    (item.pattern_match === undefined || ["unconfirmed","straight","other"].includes(item.pattern_match)) &&
     ["repeat_cm", "repeat_height_m", "manual_order_quantity", "loss_rate_percent"].every((key) => item[key] === undefined || number(item[key])) &&
     (!item.repeat_info || (object(item.repeat_info) && typeof item.repeat_info.from_product === "string")) &&
     (!item.tags || (Array.isArray(item.tags) && item.tags.every((tag: unknown) => typeof tag === "string"))) &&
     (!item.review_reasons || (Array.isArray(item.review_reasons) && item.review_reasons.every((reason: unknown) => typeof reason === "string"))) &&
-    Array.isArray(item.entries) && item.entries.length <= 10000 && item.entries.every((entry: unknown) => object(entry) && typeof entry.original_formula === "string" && number(entry.length_m) && number(entry.quantity) && number(entry.subtotal_m) && (entry.repeat_enabled === undefined || typeof entry.repeat_enabled === "boolean") && (entry.review_reason === undefined || typeof entry.review_reason === "string")));
+    Array.isArray(item.entries) && item.entries.length <= 10000 && item.entries.every((entry: unknown) => object(entry) && typeof entry.original_formula === "string" && number(entry.length_m) && number(entry.quantity) && number(entry.subtotal_m) && (entry.repeat_enabled === undefined || typeof entry.repeat_enabled === "boolean") && (entry.review_reason === undefined || typeof entry.review_reason === "string") && (entry.source_row_id === undefined || typeof entry.source_row_id === "string") && ["source_image_index","source_entry_index"].every(key => entry[key] === undefined || (number(entry[key]) && Number.isSafeInteger(entry[key])))));
 }
 
 /** Reject corrupt drafts before rendering, and let callers keep the original storage value intact. */
@@ -51,6 +53,15 @@ export function archiveWorkspaceDraft(storage: Pick<Storage, "getItem" | "setIte
 }
 
 export type WorkspaceArchive = { key: string; raw: string; draft: WorkspaceDraft | null };
+
+/** Explicit replacement consent: one atomic key update, with no new archive/history key. */
+export function replaceWorkspaceDraft(storage: Pick<Storage,"getItem"|"setItem">, key: string, expectedRaw: string | null, next: WorkspaceDraft): { raw: string; archives: WorkspaceArchive[] } {
+  const raw = JSON.stringify(next); readWorkspaceDraft(raw);
+  if (storage.getItem(key) !== expectedRaw) throw new Error("別の画面で保存内容が変わりました。上書きしていません。");
+  storage.setItem(key, raw);
+  if (storage.getItem(key) !== raw) throw new Error("保存結果を確認できませんでした。");
+  return { raw, archives: [] };
+}
 
 /** A remote seen receipt cannot remove this device's explicitly postponed result. */
 export function retainDeferredJobResult(

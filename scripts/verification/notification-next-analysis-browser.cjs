@@ -31,15 +31,14 @@ const original=item('A-CODE',20,1,23),draft={version:1,siteName:'Site A',parsed:
   if(initialRetryStatus===503)await page.evaluate(key=>{window.realArchiveSet=Storage.prototype.setItem;Storage.prototype.setItem=function(name,value){if(name.startsWith(key+':recovery:'))throw new DOMException('Synthetic archive quota','QuotaExceededError');return window.realArchiveSet.call(this,name,value);};},key);
   await button.click();await page.getByText('解析を受け付けました',{exact:true}).waitFor();assert.equal(created,true);assert.equal(await page.evaluate(k=>localStorage.getItem(k),pointer),b);await wait(()=>resumesA>=1);checks++;
   if(initialRetryStatus===503){assert.equal((await read()).parsed.items[0].order_quantity,69);await page.evaluate(()=>{Storage.prototype.setItem=window.realArchiveSet;});}
-  else assert.equal((await read()).parsed,null);checks++;
+  else assert.equal((await read()).parsed.items[0].order_quantity,69);checks++;
   failAReadOnce=true;await wait(()=>transientAReadObserved);assert.equal(await page.evaluate(k=>localStorage.getItem(k),pointer),b);assert.equal(await button.isDisabled(),true);checks++;
   recoverA=true;await page.evaluate(()=>window.advanceNotificationClock(31_000));await wait(()=>statusA==='accepted');await page.getByText('Site A: LINE受付済み',{exact:true}).waitFor();
   assert.equal(await page.evaluate(k=>localStorage.getItem(k),pointer),b);assert.equal(await button.isDisabled(),true);assert.ok(resumesA>=2&&readsA>=3);checks++;
-  const whileB=await read();assert.equal(whileB.parsed?.items[0]?.product_code??null,initialRetryStatus===503?'A-CODE':null);checks++;
+  const whileB=await read();assert.equal(whileB.parsed?.items[0]?.product_code??null,'A-CODE');checks++;
   doneB=true;
-  if(initialRetryStatus===503){await page.getByText('別の解析結果があります',{exact:true}).waitFor();assert.equal((await read()).parsed.items[0].order_quantity,69);assert.equal(seenB,0);checks++;await page.getByRole('button',{name:'今の下書きを退避して別の結果を開く',exact:true}).click();}
   await page.getByLabel('B-CODE の発注数量を入力',{exact:true}).waitFor();await wait(()=>button.isEnabled());assert.equal(statusB,'failed');assert.equal((await read()).parsed.items[0].order_quantity,12);checks++;
-  assert.ok(await page.evaluate(({key,a})=>Object.keys(localStorage).filter(k=>k.startsWith(key+':recovery:')).some(k=>{const d=JSON.parse(localStorage.getItem(k));return d.resultJobId===a&&d.parsed.items[0].order_quantity===69;}),{key,a}));checks++;
+  assert.equal(await page.evaluate(key=>Object.keys(localStorage).filter(k=>k.startsWith(key+':recovery:')).length,key),0);checks++;
   await page.reload();await page.getByLabel('B-CODE の発注数量を入力',{exact:true}).waitFor();await page.getByText('LINE通知を再確認しています。',{exact:false}).waitFor();await upload();await wait(()=>page.getByRole('button',{name:'1枚の画像を解析する',exact:true}).isEnabled());
   assert.equal((await read()).resultJobId,b);assert.equal((await read()).parsed.items[0].order_quantity,12);assert.ok(resumesB>=1);assert.equal(statusB,'failed');checks++;
   await context.close();
@@ -65,7 +64,7 @@ const original=item('A-CODE',20,1,23),draft={version:1,siteName:'Site A',parsed:
   const button=page.getByRole('button',{name:'1枚の画像を解析する',exact:true});await wait(()=>button.isEnabled());assert.equal(seenB,0);checks++;
   await button.click();await page.getByText('解析を受け付けました',{exact:true}).waitFor();assert.ok(created);assert.equal(await page.evaluate(k=>localStorage.getItem(k),pointer),c);checks++;
   const before=reads;releaseOld=true;await wait(()=>reads>before);assert.equal(await button.isDisabled(),true);assert.equal(await page.getByText('別の解析結果があります',{exact:true}).count(),0);
-  assert.equal(await page.evaluate(k=>JSON.parse(localStorage.getItem(k)).parsed,key),null);assert.equal(seenB,0);assert.equal(await page.evaluate(k=>localStorage.getItem(k),pointer),c);checks++;
+  assert.equal(await page.evaluate(k=>JSON.parse(localStorage.getItem(k)).parsed.items[0].order_quantity,key),46);assert.equal(seenB,0);assert.equal(await page.evaluate(k=>localStorage.getItem(k),pointer),c);checks++;
   await context.close();
  }
  console.log(`PASS: ${checks} notification/new-analysis browser checks; 202/503, result lookup failure, A recovery during B, reload and draft safety; no external requests.`);

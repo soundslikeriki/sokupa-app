@@ -1,0 +1,5 @@
+export type LengthInput = { value: string | number; unit: "m" | "cm" | "mm" };
+export type RepeatRow = { id: string; sourceLength: LengthInput; stripCount: number | string; lengthKind: "measured" | "trim-included" | "repeat-adjusted" | "unknown"; applyRepeat?: boolean; trim?: { top?: LengthInput; bottom?: LengthInput } };
+export type CalculationColumn = { status: "calculated" | "review" | "invalid"; perStripM: string | null; totalM: string | null; issues: { code: string; message: string; severity: string }[] };
+export type MultiHeightResult = { status: "calculated" | "review" | "invalid"; rows: { id: string | null; index: number; original: CalculationColumn; plain: CalculationColumn; pattern: CalculationColumn; selected: CalculationColumn; selectedMode: string }[]; totals: { originalM: string | null; plainM: string | null; patternM: string | null; selectedM: string | null }; issues: { code: string; message: string; severity: string }[] };
+export function calculateMultiHeightRepeat(input: { productCode: string; repeat: { enabled: boolean; matchType: string; vertical?: LengthInput }; rows: RepeatRow[] }): MultiHeightResult;
