@@ -935,7 +935,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">編集・リピート</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("quantity")}>数量に戻る</Button></div>
         <label className="block text-sm font-semibold">編集する品番<select aria-label="編集する品番" data-workspace-navigation className="mt-1 min-h-11 w-full rounded-lg border bg-background px-3" value={activeProductCode} onChange={event => setSelectedProductCode(event.target.value)}>{groups.map(group => <optgroup key={group.label} label={group.label}>{group.rows.map(product => <option key={product.product_code} value={product.product_code}>{product.product_code}</option>)}</optgroup>)}</select></label>
       <details className="rounded-xl border bg-background p-3 text-sm" aria-label="読み取り・計算の説明">
-        <summary className="min-h-6 cursor-pointer font-medium">説明・注意を表示{needs_review_any || reviewReasonGroups.length ? "（読み取り確認あり）" : ""}</summary>
+        <summary data-workspace-navigation className="min-h-6 cursor-pointer font-medium">説明・注意を表示{needs_review_any || reviewReasonGroups.length ? "（読み取り確認あり）" : ""}</summary>
         <div className="mt-3 space-y-2 text-xs text-muted-foreground">
           <p>自動計算は予備分を加えて1m単位に切り上げます。調整済み・手動指定の発注量には再上乗せしません。</p>
           {reviewReasonGroups.length ? <ul className="space-y-2 break-words text-amber-800 dark:text-amber-200">{reviewReasonGroups.map(({reason,codes}) => <li key={reason}><span className="font-semibold">{codes.join("・")}</span> — {reason}</li>)}</ul> : null}
@@ -975,6 +975,17 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
             <CardContent className="p-0">
               {group.rows.map((product, idx) => {
                 const isCollapsed = collapsedCodes.has(product.product_code);
+                const commonHeightInput = overrides[product.product_code]?.heightM ?? product.repeat_height_input;
+                const commonHeightInvalid = typeof commonHeightInput === "string" && commonHeightInput !== "";
+                const individualHeightRows = product.derivedEntries.filter((entry: any) => entry.isRepeatActive && entry.configured_repeat_use_row_length).length;
+                const activeRepeatRows = product.derivedEntries.filter((entry: any) => entry.isRepeatActive).length;
+                const heightStatus = commonHeightInvalid ? `共通高さの入力を確認${!activeRepeatRows ? "（リピートOFF・未使用）" : ""}`
+                  : product.repeat_height_m && product.repeat_height_m > 0
+                    ? !activeRepeatRows ? `共通高さ ${product.repeat_height_m}m（リピートOFF）`
+                      : individualHeightRows === activeRepeatRows ? `各行の個別寸法で計算（共通高さ ${product.repeat_height_m}m は未使用）`
+                        : `共通高さ ${product.repeat_height_m}m${individualHeightRows ? `・個別寸法${individualHeightRows}行を優先` : "を使用"}`
+                    : "各行の寸法で計算";
+                const repeatDetailsId = `${navId}-repeat-${encodeURIComponent(product.product_code)}`;
                 return (
                 <div hidden={product.product_code !== activeProductCode} id={`material-${encodeURIComponent(product.product_code)}`} key={product.product_code} className={`print:block px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
                   {isCollapsed ? (
@@ -1193,7 +1204,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                   {product.readingReviews.length ? <section aria-label={`${product.product_code} の訂正・取消の確認`} className="mb-3 w-full space-y-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
                     <p className="flex items-center gap-2 font-bold"><AlertTriangle className="h-4 w-4 shrink-0" />訂正・取消を確認</p>
                     <details aria-label={`${product.product_code} の読み取り詳細`}>
-                      <summary className="min-h-8 cursor-pointer text-xs font-medium">読み取りの詳細を表示</summary>
+                      <summary data-workspace-navigation className="min-h-8 cursor-pointer text-xs font-medium">読み取りの詳細を表示</summary>
                       <div className="mt-2 space-y-2 break-words text-xs">{compactReadingReviews(product.readingReviews).map((review, index) => <div key={index}>
                         <p>{review.reason}</p>
                         {review.candidate_formulas.length ? <ul className="list-inside list-disc font-semibold">{review.candidate_formulas.map(formula => <li key={formula}>{formula}</li>)}</ul> : <p>訂正箇所を原画像で確認してください。</p>}
@@ -1216,25 +1227,51 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         全行に適用<span className={`flex h-6 w-11 items-center rounded-full p-1 ${product.rActive ? "bg-indigo-600" : "bg-zinc-300"}`}><span className={`h-4 w-4 rounded-full bg-white transition-transform ${product.rActive ? "translate-x-5" : ""}`} /></span>
                       </button>
                     </div>
+                    <div className="py-1">
+                      <div className="max-w-xs">
+                        <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">リピート (cm)</label>
+                        <Input
+                          type="number" min="0"
+                          step="0.1"
+                          placeholder="例: 32"
+                          className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
+                          aria-label={`${product.product_code} のリピート (cm)`}
+                          value={overrides[product.product_code]?.repeatCm ?? product.repeat_cm_input ?? product.repeat_cm ?? ""}
+                          onChange={(e) => handleOverrideChange(product.product_code, "repeatCm", e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <p className="text-xs font-medium" aria-label={`${product.product_code} の高さの適用状態`}>{heightStatus}</p>
+                    {product.order_mode === "pattern" ? <button type="button" data-workspace-navigation className="min-h-11 text-left text-xs underline" aria-controls={repeatDetailsId} aria-label={`${product.product_code} のリピート条件を確認`} onClick={() => {
+                      const details = document.getElementById(repeatDetailsId);
+                      if (details instanceof HTMLDetailsElement) { details.open = true; details.querySelector("summary")?.focus({ preventScroll: true }); details.scrollIntoView({ block: "nearest" }); }
+                    }}>{product.orderReady ? "詳細設定を開く" : `${shortOrderStatus(product)}・設定を開く`}</button> : null}
                     {product.order_mode === "memo" ? <label className="block pt-2 text-sm">予備分の扱い
                       <select aria-label={`${product.product_code} の予備分の扱い`} className="mt-1 min-h-11 w-full rounded border bg-background p-2" value={product.memo_allowance} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], memoAllowance: event.target.value as MemoProductItem["memo_allowance"], quantityConfirmation: "", readingReviewConfirmation: "" } }))}>
                         <option value="add">メモの数量に予備分を加える</option>
                         <option value="included">メモは発注量まで調整済み（上乗せしない）</option>
                       </select>
                     </label> : null}
-                    <p className="text-sm font-semibold tabular-nums" aria-label={`${product.product_code} の数量の計算内訳`}>
-                      {product.order_mode === "memo" ? "メモ合計" : product.canConfirm ? "柄合わせ後の必要量" : "参考量（柄合わせ条件を確認）"} {product.total_m}m → {product.allowanceIncluded ? "予備分は調整済み・追加0%" : `予備分 ${product.loss_rate_percent}%`} → 自動計算 {product.automaticQuantity}m（1m単位に切り上げ）
-                    </p>
+
                     {product.manualQuantityActive ? <div className="space-y-2 text-sm">
                       <p>発注数量は手動指定 {product.order_quantity}m を保持しています。柄合わせ・予備分は再上乗せしません。</p>
                       <Button type="button" variant="outline" className="min-h-11" onClick={() => { clearManualOrderQuantity(product.product_code); setOrderQuantityInputs(previous => ({ ...previous, [product.product_code]: undefined })); }}>自動計算の数量に戻す</Button>
                     </div> : null}
-                    <details><summary className="cursor-pointer text-xs text-muted-foreground">計算・予備分の説明</summary><p className="mt-2 text-xs">メモに柄合わせや予備分が含まれるか不明なときは職人さんに確認してください。</p></details>
+                    <details aria-label={`${product.product_code} の計算説明`}><summary data-workspace-navigation className="min-h-11 cursor-pointer text-xs text-muted-foreground">計算・予備分の説明</summary>
+                    <p className="mt-2 text-xs font-semibold tabular-nums" aria-label={`${product.product_code} の数量の計算内訳`}>
+                      {product.order_mode === "memo" ? "メモ合計" : product.canConfirm ? "柄合わせ後の必要量" : "参考量（柄合わせ条件を確認）"} {product.total_m}m → {product.allowanceIncluded ? "予備分は調整済み・追加0%" : `予備分 ${product.loss_rate_percent}%`} → 自動計算 {product.automaticQuantity}m（1m単位に切り上げ）
+                    </p>
+                      <p className="mt-2 text-xs">メモに柄合わせや予備分が含まれるか不明なときは職人さんに確認してください。</p>
+                    </details>
+                    {product.order_mode === "pattern" && !basicView ? <label className="flex min-h-11 items-start gap-2 py-2 text-sm">
+                      <input type="checkbox" className="mt-1" aria-label={`${product.product_code} の必要量の前提を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.canConfirm} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.confirmationFingerprint : "" } }))} />
+                      元メモと発注数量を確認した（変更時は再確認）
+                    </label> : null}
                     {product.order_mode === "memo" || basicView ? <label className="flex min-h-11 items-start gap-2 py-2 text-sm">
                       <input type="checkbox" className="mt-1" aria-label={`${product.product_code} のメモと発注数量を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.canConfirm} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.confirmationFingerprint : "" } }))} />
                       元メモと発注数量を確認した（変更時は再確認）
                     </label> : null}
-                    <details className={`text-xs ${orderCheckColor(product.orderReady, basicView)}`}><summary className="cursor-pointer">{shortOrderStatus(product)}</summary><p role="status" className="mt-2">{orderCheckMessage(product, basicView)}</p></details>
+                    <details className={`text-xs ${orderCheckColor(product.orderReady, basicView)}`}><summary data-workspace-navigation className="cursor-pointer">{shortOrderStatus(product)}</summary><p role="status" className="mt-2">{orderCheckMessage(product, basicView)}</p></details>
                   </fieldset>
 
 
@@ -1271,21 +1308,23 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     </Button>
                   </div>
 
-                  {product.order_mode === "pattern" ? <div className="mb-6 mt-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-3 shadow-sm transition-colors dark:border-indigo-900/30 dark:bg-indigo-900/10 sm:p-4">
-                    <div className="text-xs font-bold uppercase tracking-wider text-indigo-800/60 dark:text-indigo-300/60 mb-3 flex items-center justify-between">
-                      <div className="flex items-center gap-1.5 text-indigo-900 dark:text-indigo-100 font-semibold text-[11px]">
-                        <Layers className="w-3.5 h-3.5" />
-                        リピート・高さで一括計算
+                  {product.order_mode === "pattern" ? <details id={repeatDetailsId} aria-label={`${product.product_code} のリピート詳細設定`} className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/30 p-3 dark:border-indigo-900/30 dark:bg-indigo-900/10">
+                    <summary data-workspace-navigation className="min-h-11 cursor-pointer text-sm font-semibold" aria-label={`${product.product_code} の詳細設定・確認`}>詳細設定・確認</summary>
+                    <div className="mt-3 space-y-3">
+                      <div className="flex-1">
+                        <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">共通高さ (m・任意・個別指定を除く)</label>
+                        <Input
+                          type="number" min="0"
+                          step="0.1"
+                          placeholder="例: 2.4"
+                          className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
+                          aria-label={`${product.product_code} の壁の高さ (m)`}
+                          value={overrides[product.product_code]?.heightM ?? product.repeat_height_input ?? product.repeat_height_m ?? ""}
+                          onChange={(e) => handleOverrideChange(product.product_code, "heightM", e.target.value)}
+                        />
                       </div>
-                      <div className="flex items-center gap-2">
-                        {product.rActive && product.override_active && product.comparison.strict.status === "calculated" && (
-                           <Badge variant="default" className="text-[10px] px-2 py-0 bg-indigo-600 hover:bg-indigo-700 shadow border-none">適用中</Badge>
-                        )}
-
-                      </div>
-                    </div>
-                    
-                    {!basicView ? <><div className="mb-3 grid gap-3 sm:grid-cols-2">
+                    <p className="text-xs text-muted-foreground">未入力なら各行の寸法を使用します。個別に編集した行は、その寸法を優先します。</p>
+                    <div className="mb-3 grid gap-3 sm:grid-cols-2">
                       <label className="text-xs">寸法の前提
                         <select aria-label={`${product.product_code} の寸法区分`} className="mt-1 block w-full rounded border bg-background p-2" value={product.measurement_basis} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: "", readingReviewConfirmation: "", measurementBasis: event.target.value as MemoProductItem["measurement_basis"] } }))}>
                           <option value="unconfirmed">未確認</option><option value="trim-included">切り代込みの裁断長</option><option value="repeat-adjusted">既に柄調整済み（再計算しない）</option>
@@ -1297,42 +1336,14 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         </select>
                       </label>
                     </div>
+                    {!basicView ? <>
                     <p className="mb-2 text-xs" aria-label={`${product.product_code} の無地と柄比較`}>
-                      元寸法 {product.comparison.strict.totals.originalM === null ? "要確認" : `${product.comparison.strict.totals.originalM}m`} ／ 無地（切り代込み） {product.comparison.strict.totals.plainM === null ? "要確認" : `${product.comparison.strict.totals.plainM}m`} ／ 柄合わせ {product.comparison.strict.totals.patternM === null ? "要確認" : `${product.comparison.strict.totals.patternM}m`}
+                      計算前 {product.comparison.strict.totals.originalM === null ? "要確認" : `${product.comparison.strict.totals.originalM}m`} ／ 無地（切り代込み） {product.comparison.strict.totals.plainM === null ? "要確認" : `${product.comparison.strict.totals.plainM}m`} ／ 柄合わせ {product.comparison.strict.totals.patternM === null ? "要確認" : `${product.comparison.strict.totals.patternM}m`}
                     </p>
                     {!product.comparison.premisesAvailable ? <p className="mb-2 text-xs text-amber-800 dark:text-amber-300">参考値です。寸法区分・柄合わせ・リピート値と写真の読み取りを確認してください。柄調整済み・半落ち等は推測計算しません。</p> : null}
-                    <label className="mb-3 flex items-start gap-2 text-xs">
-                      <input type="checkbox" aria-label={`${product.product_code} の必要量の前提を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.canConfirm} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.confirmationFingerprint : "" } }))} />
-                      採寸・切り代・柄合わせ・予備分と発注数量を確認しました（変更すると再確認）
-                    </label>
                     </> : null}
-                    <div className={`flex flex-col sm:flex-row items-stretch sm:items-center gap-3 sm:gap-4 transition-opacity duration-300 ${(product.derivedEntries || []).some((e: any) => e.isRepeatActive) ? 'opacity-100' : 'opacity-40'}`}>
-                      <div className="flex-1">
-                        <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">共通高さ (m・任意・全行上書き)</label>
-                        <Input 
-                          type="number" min="0"
-                          step="0.1" 
-                          placeholder="例: 2.4" 
-                          className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
-                          aria-label={`${product.product_code} の壁の高さ (m)`}
-                          value={overrides[product.product_code]?.heightM ?? product.repeat_height_input ?? product.repeat_height_m ?? ""}
-                          onChange={(e) => handleOverrideChange(product.product_code, "heightM", e.target.value)}
-                        />
-                      </div>
-                      <div className="flex-1">
-                        <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">リピート (cm)</label>
-                        <Input 
-                          type="number" min="0"
-                          step="0.1" 
-                          placeholder="例: 32" 
-                          className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
-                          aria-label={`${product.product_code} のリピート (cm)`}
-                          value={overrides[product.product_code]?.repeatCm ?? product.repeat_cm_input ?? product.repeat_cm ?? ""}
-                          onChange={(e) => handleOverrideChange(product.product_code, "repeatCm", e.target.value)}
-                        />
-                      </div>
                     </div>
-                  </div> : null}
+                  </details> : null}
 
                   {((product.source_url && product.source_url.trim() !== "null") || product.confidence != null || product.catalog_name) && (
                     <div className="flex flex-wrap items-center gap-4 mb-6 px-1">
@@ -1449,7 +1460,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                         title="タップして式を編集"
                                       >
                                         <span className={`min-w-0 shrink-0 truncate tabular-nums ${typeof rawLen === "number" && rawLen !== e.length_m ? "font-bold text-indigo-600 dark:text-indigo-400" : ""}`}>
-                                          {e.length_input !== undefined ? "未入力" : `${e.derived_length}m`}
+                                          {e.length_input !== undefined ? "未入力" : <>{e.base_length !== e.derived_length ? <span className="mr-0.5 text-[10px] font-normal text-muted-foreground">{e.base_length}→</span> : null}{e.derived_length}m</>}
                                         </span>
                                         <span className="shrink-0 text-muted-foreground mx-px">×</span>
                                         <span className={`min-w-[1.25rem] shrink-0 text-center font-bold tabular-nums sm:w-[2.5rem] ${typeof rawQty === "number" && rawQty !== e.quantity ? "text-indigo-600 dark:text-indigo-400" : ""}`}>

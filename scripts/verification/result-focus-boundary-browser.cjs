@@ -20,9 +20,12 @@ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4n
   return {context,page,input,read,begin,errors,unexpected};
  };
  for(const basic of [false,true])for(const profile of ['default','null','ancestor']){
-  for(const target of ['tab','menu-trigger','menu-choice','source-photo']){
-   const h=await fixture(profile,basic),{page}=h;await h.begin('UNCOMMITTED');check(await h.input().evaluate(el=>el===document.activeElement),`${profile}/${basic}/${target}: code input focused before direct navigation`);
+  for(const target of ['tab','menu-trigger','menu-choice','source-photo','repeat-details','condition-shortcut','calculation-explanation']){
+   const h=await fixture(profile,basic),{page}=h;if(['repeat-details','condition-shortcut','calculation-explanation'].includes(target))await page.getByLabel('SYNA 1行目のリピート計算',{exact:true}).click();await h.begin('UNCOMMITTED');check(await h.input().evaluate(el=>el===document.activeElement),`${profile}/${basic}/${target}: code input focused before direct navigation`);
    if(target==='tab')await page.getByRole('tab',{name:'数量',exact:true}).click();
+   if(target==='repeat-details')await page.getByLabel('SYNA の詳細設定・確認',{exact:true}).click();
+   if(target==='condition-shortcut')await page.getByLabel('SYNA のリピート条件を確認',{exact:true}).click();
+   if(target==='calculation-explanation')await page.getByLabel('SYNA の計算説明',{exact:true}).locator('summary').click();
    if(target.startsWith('menu')){await page.getByRole('button',{name:'計測・発注メニュー',exact:true}).click();if(target==='menu-choice')await page.getByRole('group',{name:'既存機能へ切り替え'}).getByRole('button',{name:/実寸計測/}).click();else await page.keyboard.press('Escape');}
    if(target==='source-photo')await page.getByRole('button',{name:basic?'SYNA の訂正候補の写真 1を確認':'SYNA 明細1の写真を確認',exact:true}).click();
    check((await h.read()).code==='SYNA'&&(await h.read()).posts===0,`${profile}/${basic}/${target}: one navigation never commits or posts`);

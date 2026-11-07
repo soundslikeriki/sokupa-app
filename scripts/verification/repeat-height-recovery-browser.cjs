@@ -37,13 +37,13 @@ const until = async fn => { for (let i=0;i<200;i++) { if(await fn()) return; awa
    check(await page.getByLabel(`${code} の発注数量を入力`,{exact:true}).inputValue()===String(order),label);
    await saved();
   };
-  const reload=async()=>{await saved();await page.reload();await ui.edit(page);};
+  const reload=async()=>{await saved();await page.reload();await ui.edit(page);await ui.repeatSettings(page,code);};
   const editRow=async(index,value)=>{
    const field=page.getByLabel(`${code} ${index}行目の長さ (m)`,{exact:true});
    if(!(await field.isVisible()))await page.locator('[data-preserve-editor-input]').nth(index-1).getByTitle('タップして式を編集',{exact:true}).click();
    await field.fill(value);return field;
   };
-  await page.goto(base);await ui.edit(page);await observe(12.6,15,'legacy common-height draft remains unchanged');
+  await page.goto(base);await ui.edit(page);await ui.repeatSettings(page,code);await observe(12.6,15,'legacy common-height draft remains unchanged');
   await editRow(2,'0.71');await editRow(2,'0.7');await observe(6.6,8,'explicit short height wins before reload');
   check((await item()).entries[1].repeat_use_row_length===true,'explicit precedence is persisted');
   check((await item()).entries[0].repeat_use_row_length!==true,'untouched row retains common-height behavior');

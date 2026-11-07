@@ -52,7 +52,7 @@ const wait=async(fn)=>{const end=Date.now()+20000;while(Date.now()<end){if(await
  await page.reload();await workspace.edit(page, 'HEIGHT'); await page.getByLabel('HEIGHT の発注数量を入力',{exact:true}).waitFor();await saved();check(await page.getByLabel('HEIGHT の発注数量を入力',{exact:true}).inputValue()==='','incomplete editor input survives reload');
  await page.getByLabel('HEIGHT の発注数量を入力',{exact:true}).fill('10');await saved();
  await page.getByRole('switch',{name:'HEIGHT の一括リピート計算',exact:true}).click();
- await page.getByLabel('HEIGHT の寸法区分',{exact:true}).selectOption('trim-included');
+ await workspace.repeatSettings(page, 'HEIGHT'); await page.getByLabel('HEIGHT の寸法区分',{exact:true}).selectOption('trim-included');
  await page.getByLabel('HEIGHT のリピート (cm)',{exact:true}).fill('60');
  await wait(()=>draft().then(d=>d.parsed.items[0].total_m===10.2));checks++;
  check(!(await page.getByLabel('HEIGHT の必要量の前提を確認済みにする',{exact:true}).isChecked()),'repeat change invalidates old confirmation');

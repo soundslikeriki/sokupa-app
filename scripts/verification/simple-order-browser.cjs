@@ -52,9 +52,11 @@ const until = async predicate => { for (let n = 0; n < 200; n++) { if (await pre
     const { page, read, saved, ack, quantity, copy } = h;
     const bulk = page.getByRole('button', { name: 'すべて発注リストへ追加（2品番）', exact: true, includeHidden: true });
     check(await quantity('MEMO').inputValue() === '23', '20m retains the initial 15% reserve and 23m order');
-    check((await page.getByLabel('MEMO の数量の計算内訳').innerText()).includes('メモ合計 20m → 予備分 15% → 自動計算 23m'), 'plain visible relationship');
+    await workspace.disclosure(page, '計算・予備分の説明');
+    check((await page.getByLabel('MEMO の数量の計算内訳').innerText()).includes('メモ合計 20m → 予備分 15% → 自動計算 23m'), 'unchanged calculation relationship is accessible in the explanation');
+    await page.getByLabel('MEMO の計算説明', { exact: true }).locator('summary').click();
     check(await page.getByLabel('MEMO の寸法区分', { exact: true }).count() === 0, 'technical measurement selector hidden initially');
-    check(await page.getByLabel('MEMO のリピート (cm)', { exact: true }).count() === 0, 'repeat inputs hidden initially');
+    check(await page.getByLabel('MEMO のリピート (cm)', { exact: true }).isVisible(), 'simple repeat input is directly available without enabling any row');
     check(await page.getByLabel('MEMO 1行目のリピート計算',{exact:true}).getAttribute('aria-pressed') === 'false', 'old-style row repeat toggle is available and initially OFF');
     check(await copy().isDisabled() && await bulk.isDisabled(), 'copy and bulk transfer blocked before acknowledgement');
     check(await page.getByRole('button', { name: '発注リストに追加', exact: true }).first().isDisabled(), 'individual transfer blocked before acknowledgement');
@@ -130,7 +132,7 @@ const until = async predicate => { for (let n = 0; n < 200; n++) { if (await pre
     await q.reload(); await workspace.edit(q, 'HEIGHT'); await p.quantity('HEIGHT').waitFor();
     check(await q.getByLabel('HEIGHT のリピート (cm)', { exact: true }).inputValue() === '-1' && await p.copy().isDisabled(), 'invalid repeat input restores without losing the saved value or output gate');
     await q.getByLabel('HEIGHT のリピート (cm)', { exact: true }).fill('60');
-    await q.getByLabel('HEIGHT の壁の高さ (m)', { exact: true }).fill('0');
+    await workspace.repeatSettings(q, 'HEIGHT'); await q.getByLabel('HEIGHT の壁の高さ (m)', { exact: true }).fill('0');
     await until(() => p.read().then(draft => draft.parsed.items[0].repeat_height_input === '0'));
     check(await advancedAck().isDisabled() && await p.copy().isDisabled(), 'an explicit zero common height cannot silently act like an empty optional height');
     await q.getByLabel('HEIGHT の壁の高さ (m)', { exact: true }).fill('2.4');
@@ -152,7 +154,7 @@ const until = async predicate => { for (let n = 0; n < 200; n++) { if (await pre
     await q.reload(); await workspace.edit(q, 'HEIGHT'); await p.quantity('HEIGHT').waitFor(); await p.saved();
     check(await q.getByLabel('HEIGHT の寸法区分', { exact: true }).count() === 0 && (await p.read()).parsed.items[0].repeat_cm === 60, 'simple mode and hidden repeat settings restore together');
     await q.getByRole('switch',{name:'HEIGHT の一括リピート計算',exact:true}).click();
-    await q.getByLabel('HEIGHT の寸法区分', { exact: true }).selectOption('trim-included'); await p.saved();
+    await workspace.repeatSettings(q, 'HEIGHT'); await q.getByLabel('HEIGHT の寸法区分', { exact: true }).selectOption('trim-included'); await p.saved();
     await until(() => p.read().then(draft => draft.parsed.items[0].total_m === 10.2));
     check((await p.read()).parsed.items[0].total_m === 10.2, 'return to pattern restores calculations exactly once');
     await q.getByRole('switch', { name: 'HEIGHT の一括リピート計算', exact: true }).click();
