@@ -39,7 +39,7 @@ async function uploadEdit(browser){
   return false;
  });
  try{const {page,saved,read}=h;await h.upload();await page.getByRole('button',{name:'1枚の画像を解析する',exact:true}).click();await wait(()=>waiting);
-  await page.getByLabel('現場名（任意）',{exact:true}).first().fill('Edit during upload');await saved();check((await read()).siteName==='Edit during upload','upload-time edit is saved before reception');
+  await page.getByLabel('現場名（任意）',{exact:true}).first().fill('Edit during upload');await wait(()=>read().then(d=>d.siteName==='Edit during upload'));await saved();check((await read()).siteName==='Edit during upload','upload-time edit is saved before reception');
   release();await wait(()=>created);await page.getByText('解析を受け付けました',{exact:true}).waitFor();done=true;await page.getByText('別の解析結果があります',{exact:true}).waitFor();
   check((await read()).resultJobId===a&&(await read()).siteName==='Edit during upload','completion never silently replaces upload-time edits');
   await page.reload();await page.getByText('別の解析結果があります',{exact:true}).waitFor();check((await read()).siteName==='Edit during upload','replacement conflict and edits survive reload');

@@ -34,7 +34,7 @@ function Fixture() {
   const [job, setJob] = useState<string | null>(state.noJob ? null : "00000000-0000-4000-8000-00000000000a");
   const [site, setSite] = useState("Synthetic");
   useLayoutEffect(() => {
-    state.items = items; state.job = job;
+    state.items = items; state.job = job; state.site = site;
     state.change = (kind: string) => {
       if (kind === "restore") { setItems(structuredClone(originals)); return; }
       if (kind === "job") { setJob("00000000-0000-4000-8000-00000000000b"); return; }
@@ -46,7 +46,7 @@ function Fixture() {
         : kind === "code" ? { ...item, product_code: "CHANGED" }
           : { ...item, entries: item.entries.map((entry,entryIndex) => entryIndex ? entry : kind === "image" ? { ...entry, source_image_index: 1 } : { ...entry, quantity: entry.quantity + 1 }) }));
     };
-  }, [items,job,originals]);
+  }, [items,job,site,originals]);
   return <OrderList basicView={Boolean(state.basic)} items={items} sourceItems={originals} siteName={site}
     sourceJobId={state.basic ? null : job} readingReviewSourceJobId={job} onItemsChange={setItems} />;
 }

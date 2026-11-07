@@ -138,6 +138,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const privatePhotoJobId = sourceJobId ?? readingReviewSourceJobId;
   const [copyReviewOpen, setCopyReviewOpen] = useState(false);
   const [copyReviewSession, setCopyReviewSession] = useState(0);
+  const [quantityReviewError, setQuantityReviewError] = useState("");
+  const quantityReviewIntent = useRef<{ id: string; token: string; batch: string } | null>(null);
   const copyReviewOpenRef = useRef(false);
   const reviewAfterClose = useRef<(() => void) | null>(null);
   const copyPhotoRef = useRef<HTMLDetailsElement>(null);
@@ -216,12 +218,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       const id = window.requestAnimationFrame(() => { frames.delete(id); callback(); });
       frames.add(id);
     };
-    const clear = () => { generation++; blurIntentRef.current = { navigation: false, row: false }; };
+    const clear = () => { generation++; blurIntentRef.current = { navigation: false, row: false }; quantityReviewIntent.current = null; };
     // Record intent before a non-focusing button can blur an input (Safari may
     // supply null or an ancestor as relatedTarget). New interaction resets it.
     const record = (event: Event) => {
       generation++;
       const target = event.target instanceof Element ? event.target : null;
+      quantityReviewIntent.current = null;
       blurIntentRef.current = {
         navigation: Boolean(target?.closest("[data-workspace-navigation]")),
         row: Boolean(target?.closest("[data-preserve-editor-input]")),
@@ -825,15 +828,23 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
   const copyCollection = JSON.stringify({ job: privatePhotoJobId, siteName, products: derivedItems.map(item => ({ code: item.product_code,
     sources: item.entries.map(entry => ({ id: entry.source_row_id, image: entry.source_image_index, index: entry.source_entry_index, formula: entry.original_formula })) })) });
-  const [copyReviewScope, setCopyReviewScope] = useState(copyCollection);
+  const currentReviewScope = { collection: copyCollection,
+    identity: JSON.stringify({ job: privatePhotoJobId, siteName, products: derivedItems.map(item => item.product_code) }),
+    sources: Object.fromEntries(derivedItems.map(item => [item.product_code, JSON.stringify(item.entries.map(entry => ({
+      id: entry.source_row_id, image: entry.source_image_index, index: entry.source_entry_index, formula: entry.original_formula }))) ])),
+    filled: derivedItems.length > 0 };
+  const [copyReviewScope, setCopyReviewScope] = useState(currentReviewScope);
   // An in-progress whole-list review cannot carry acknowledgements into a different result/list.
   // This guarded same-component reset runs before commit, rather than granting a stale frame.
-  if (copyReviewOpen && copyReviewScope !== copyCollection) {
-    setCopyReviewScope(copyCollection);
-    setOverrides(previous => ({ ...previous, ...Object.fromEntries(derivedItems.map(item => [item.product_code,
+  if (!copyReviewScope.filled && derivedItems.length > 0) {
+    setCopyReviewScope(currentReviewScope);
+  } else if (copyReviewScope.filled && copyReviewScope.collection !== copyCollection) {
+    const all = copyReviewOpen || copyReviewScope.identity !== currentReviewScope.identity;
+    setCopyReviewScope(currentReviewScope);
+    setOverrides(previous => ({ ...previous, ...Object.fromEntries(derivedItems.filter(item => all || copyReviewScope.sources[item.product_code] !== currentReviewScope.sources[item.product_code]).map(item => [item.product_code,
       { ...previous[item.product_code], quantityConfirmation: "", readingReviewConfirmation: "" }])) }));
   }
-  const copyReviewRows = useMemo(() => copyReviewOpen ? derivedItems.map((item, index) => {
+  const copyReviewRows = useMemo(() => derivedItems.map((item, index) => {
     const id = `${index}:${item.product_code}`;
     const context = { sourceJobId: privatePhotoJobId ?? null, siteName, itemKey: id, collectionKey: copyCollection };
     const review = inspectCopyReview(item.copyReviewInput, context);
@@ -842,15 +853,16 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       quantityIncomplete: item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined,
       token: review.token, ready: item.orderReady && !duplicate,
       confirmable: review.confirmable && !duplicate, blockedMessage: duplicate ? "品番が重複しています。編集して確認してください。" : review.blockedMessage,
-      reviews: review.plan.readingReviews, imageIndexes: readingReviewImageIndexes(item), input: item.copyReviewInput, context };
-  }) : [], [copyReviewOpen, derivedItems, privatePhotoJobId, siteName, copyCollection]);
+      reviews: review.plan.readingReviews, imageIndexes: [...new Set([...readingReviewImageIndexes(item),
+        ...item.entries.map(entry => entry.source_image_index).filter((index): index is number => Number.isSafeInteger(index) && index !== undefined && index >= 0)])], input: item.copyReviewInput, context };
+  }), [derivedItems, privatePhotoJobId, siteName, copyCollection]);
   const copyBatchToken = JSON.stringify(copyReviewRows.map(row => ({ id: row.id, token: row.token })));
-  const liveCopyReview = useRef({ rows: copyReviewRows, batch: copyBatchToken, items: derivedItems, siteName });
-  useLayoutEffect(() => { liveCopyReview.current = { rows: copyReviewRows, batch: copyBatchToken, items: derivedItems, siteName }; }, [copyReviewRows, copyBatchToken, derivedItems, siteName]);
+  const liveCopyReview = useRef({ rows: copyReviewRows, batch: copyBatchToken, items: derivedItems, siteName, view: resultView });
+  useLayoutEffect(() => { liveCopyReview.current = { rows: copyReviewRows, batch: copyBatchToken, items: derivedItems, siteName, view: resultView }; }, [copyReviewRows, copyBatchToken, derivedItems, siteName, resultView]);
   const openCopyReview = () => {
     if (copyReviewOpenRef.current) return;
     copyReviewOpenRef.current = true;
-    setCopyReviewScope(copyCollection);
+    setCopyReviewScope(currentReviewScope);
     window.history.pushState({ ...(window.history.state ?? {}), sokupaCopyReview: workspaceId }, "");
     setCopyReviewSession(value => value + 1);
     setCopyReviewOpen(true);
@@ -875,9 +887,10 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     window.addEventListener("popstate", restore);
     return () => window.removeEventListener("popstate", restore);
   }, [workspaceId]);
-  const applyCopyReview = (selections: { id: string; token: string }[], batch: string) => {
+  const applyReviewConfirmations = (selections: { id: string; token: string }[], batch: string, fromQuantity = false) => {
     const current = liveCopyReview.current;
-    if (!copyReviewOpenRef.current || batch !== current.batch || !selections.length || new Set(selections.map(row => row.id)).size !== selections.length) return false;
+    if ((fromQuantity ? copyReviewOpenRef.current || current.view !== "quantity" : !copyReviewOpenRef.current)
+      || batch !== current.batch || !selections.length || new Set(selections.map(row => row.id)).size !== selections.length) return false;
     const changes = selections.map(selection => {
       const row = current.rows.find(row => row.id === selection.id);
       if (!row || !row.confirmable || row.token !== selection.token) return null;
@@ -893,6 +906,19 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       return next;
     });
     return true;
+  };
+  const applyCopyReview = (selections: { id: string; token: string }[], batch: string) => applyReviewConfirmations(selections, batch);
+  const changeQuantityReview = (id: string, token: string, batch: string, checked: boolean) => {
+    const current = liveCopyReview.current;
+    const row = current.rows.find(row => row.id === id);
+    if (copyReviewOpenRef.current || current.view !== "quantity" || batch !== current.batch || !row || row.token !== token
+      || (checked && !applyReviewConfirmations([{ id, token }], batch, true))) {
+      setQuantityReviewError("内容が変わりました。表示中の候補と数量を確認して、もう一度チェックしてください。"); return;
+    }
+    if (!checked) {
+      setOverrides(previous => ({ ...previous, [row.code]: { ...previous[row.code], quantityConfirmation: "", readingReviewConfirmation: "" } }));
+    }
+    setQuantityReviewError("");
   };
   const copyOrderText = async (expectedBatch: string) => {
     const current = liveCopyReview.current;
@@ -950,12 +976,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-1.5 px-3 pb-4 pt-0 sm:px-6 sm:pb-5">
-          {derivedItems.map((item) => {
+          {derivedItems.map((item, index) => {
             const code = String(item.product_code ?? "").trim() || "不明";
             const quantity = toFiniteNumber(item.order_quantity);
+            const review = copyReviewRows[index];
             return (
               <div
-                key={code}
+                key={review.id}
                 className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-black/5 bg-black/[0.03] px-2 py-1.5 dark:border-white/5 dark:bg-white/[0.04] sm:px-3"
               >
                 <p className="min-w-0 flex-1 break-words text-sm font-bold text-zinc-900 dark:text-zinc-100">{code}</p>
@@ -988,11 +1015,38 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                   <p className={`text-xs ${orderCheckColor(item.orderReady, basicView)}`} role="status" aria-label={`${code} の発注量チェック`}>{shortOrderStatus(item)}{item.orderReady || item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined ? "" : "・参考値"}</p>
                   <button type="button" className="min-h-11 text-xs underline" aria-label={`${code} を確認・編集`} data-workspace-navigation onClick={() => { setCollapsedCodes(current => { const next = new Set(current); next.delete(code); return next; }); selectView("edit", code); }}>確認・編集</button>
                 </div>
+                <label data-workspace-navigation className="flex min-h-11 w-full items-center gap-2 text-xs"
+                  onPointerDownCapture={() => { quantityReviewIntent.current = { id: review.id, token: review.token, batch: copyBatchToken }; }}
+                  onMouseDownCapture={() => { quantityReviewIntent.current = { id: review.id, token: review.token, batch: copyBatchToken }; }}
+                  onKeyDownCapture={event => { if (event.key === " ") quantityReviewIntent.current = { id: review.id, token: review.token, batch: copyBatchToken }; }}>
+                  <input type="checkbox" className="h-5 w-5 shrink-0" aria-label={`${code} の一覧で${review.reviews.length ? "訂正・取消と発注数量" : "元メモと発注数量"}を確認した`}
+                    checked={review.ready} disabled={!review.confirmable && !review.ready}
+                    onChange={event => { const intent = quantityReviewIntent.current ?? { id: review.id, token: review.token, batch: copyBatchToken }; quantityReviewIntent.current = null;
+                      changeQuantityReview(intent.id, intent.token, intent.batch, event.target.checked); }} />
+                  {review.reviews.length ? "訂正・取消と発注数量を確認した" : "元メモと発注数量を確認した"}
+                </label>
+                {!review.confirmable && !review.ready ? <p className="w-full text-xs text-amber-800 dark:text-amber-200">{review.blockedMessage}</p> : null}
+                <details className="w-full text-xs" aria-label={`${code} の一覧確認詳細`}>
+                  <summary data-workspace-navigation className="min-h-11 cursor-pointer content-center underline">{review.reviews.length ? `訂正候補 ${review.reviews.length}件・元写真` : "元写真"}</summary>
+                  <div className="space-y-2 break-words rounded-lg bg-amber-500/10 p-2">
+                    {review.reviews.length ? <p className="font-semibold">対象：{code}（候補は自動加算しません）</p> : null}
+                    {review.reviews.map((evidence, evidenceIndex) => <div key={evidenceIndex}>
+                      {evidence.reason.length > 140 ? <details><summary data-workspace-navigation className="min-h-11 cursor-pointer">{evidence.reason.slice(0, 100)}…（全文）</summary><p>{evidence.reason}</p></details> : <p>{evidence.reason}</p>}
+                      {evidence.candidate_formulas.length ? <p className="font-semibold">候補：{evidence.candidate_formulas.join(" ／ ")}</p> : null}
+                      <p>{evidence.source_image_index === undefined ? "写真の対応も照合してください" : `写真${evidence.source_image_index + 1}`}</p>
+                    </div>)}
+                    {privatePhotoJobId && review.imageIndexes.length ? <div className="flex flex-wrap gap-2">{review.imageIndexes.map(imageIndex => <Button key={imageIndex} type="button" variant="outline" data-workspace-navigation className="min-h-11 text-xs" aria-label={`${code} の一覧から写真${imageIndex + 1}を確認`} onClick={() => openPhoto(imageIndex)}>写真{imageIndex + 1}を確認</Button>)}</div>
+                      : privatePhotoJobId ? <Button type="button" variant="outline" data-workspace-navigation className="min-h-11 text-xs" aria-label={`${code} の一覧から元写真を確認`} onClick={() => openPhoto(0)}>元写真を確認</Button>
+                        : <p>お手元の元写真と照合してください。</p>}
+                  </div>
+                </details>
               </div>
             );
           })}
         </CardContent>
       </Card>
+
+      {quantityReviewError ? <p role="alert" className="px-2 text-xs text-amber-800 dark:text-amber-200">{quantityReviewError}</p> : null}
 
       <p className="px-2 text-xs text-muted-foreground">合計 {formatSummaryNumber(orderSummary.totalOrderQuantity, 0)}m ／ {formatSummaryNumber(orderSummary.totalSquareMeters)}㎡{derivedItems.some(item => !item.orderReady) ? "（確認前の参考値を含む）" : ""}</p>
       {onAddAllToOrderDraft && derivedItems.length > 1 ? (
@@ -1638,8 +1692,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         ))}
       </div>
       </section>
-      <CopyReviewDialog key={copyReviewSession} open={copyReviewOpen} rows={copyReviewRows} batchToken={copyBatchToken} siteName={siteName}
-        copyReady={derivedItems.length > 0 && derivedItems.every(item => item.orderReady)} onClose={() => closeCopyReview()}
+      <CopyReviewDialog key={copyReviewSession} open={copyReviewOpen} rows={copyReviewOpen ? copyReviewRows : []} batchToken={copyBatchToken} siteName={siteName}
+        copyReady={copyReviewRows.length > 0 && copyReviewRows.every(row => row.ready)} onClose={() => closeCopyReview()}
         onApply={applyCopyReview} onCopy={copyOrderText}
         onEdit={id => { const row = liveCopyReview.current.rows.find(row => row.id === id); if (row) closeCopyReview(() => {
           setCollapsedCodes(current => { const next = new Set(current); next.delete(row.code); return next; }); selectView("edit", row.code);
