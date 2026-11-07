@@ -4,5 +4,5 @@ const edit = async (page, code) => { if (code) await page.getByLabel(`${code} �
 const mode = async (page, name) => { await page.getByRole('button', { name: '計測・発注メニュー', exact: true }).click(); await page.getByRole('group', { name: '既存機能へ切り替え' }).getByRole('button', { name: new RegExp(name) }).click(); };
 const disclosure = async (page, text) => { const summary = page.locator('summary').filter({ hasText: text }).first(); if (await summary.locator('..').getAttribute('open') === null) await summary.click(); };
 const repeatSettings = async (page, code) => { const details = page.getByLabel(`${code} のリピート詳細設定`, { exact: true }); if (await details.getAttribute('open') === null) await details.locator('summary').click(); };
-const copy = async page => { await view(page, '数量'); await page.getByRole('button', { name: '発注用テキストをコピー', exact: true }).click(); await edit(page); };
+const copy = async page => { await view(page, '数量'); await page.getByRole('button', { name: '確認してコピー', exact: true }).click(); const dialog=page.getByRole('dialog',{name:'発注内容を確認してコピー',exact:true}); await dialog.getByRole('button', { name: '発注用テキストをコピー', exact: true }).click(); await dialog.getByRole('button',{name:'戻る',exact:true}).click(); await dialog.waitFor({state:'hidden'}); await edit(page); };
 module.exports = { view, edit, mode, disclosure, repeatSettings, copy };

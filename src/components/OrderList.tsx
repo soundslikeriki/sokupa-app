@@ -2,6 +2,8 @@
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { CopyReviewDialog } from "@/components/CopyReviewDialog";
+import { inspectCopyReview, prepareCopyReviewConfirmation, type CopyReviewInput } from "@/lib/copy-review";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -134,6 +136,12 @@ function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
 
 export function OrderList({ basicView = false, items, sourceItems, sourceJobId, readingReviewSourceJobId, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft }: OrderListProps) {
   const privatePhotoJobId = sourceJobId ?? readingReviewSourceJobId;
+  const [copyReviewOpen, setCopyReviewOpen] = useState(false);
+  const [copyReviewSession, setCopyReviewSession] = useState(0);
+  const copyReviewOpenRef = useRef(false);
+  const reviewAfterClose = useRef<(() => void) | null>(null);
+  const copyPhotoRef = useRef<HTMLDetailsElement>(null);
+  const [photoMetadataJobId, setPhotoMetadataJobId] = useState<string | null>(null);
   const [photoIndex, setPhotoIndex] = useState<number | null>(null);
   const [photoError, setPhotoError] = useState(false);
   const currentPhotoRef = useRef("");
@@ -147,7 +155,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const componentId = useId();
   const workspaceId = `${componentId}:${privatePhotoJobId ?? "legacy-workspace"}`;
   const navId = `result-${workspaceId}`;
-  const photoKey = `${privatePhotoJobId}:${photoIndex}:${photoRequest}`;
+  const photoKey = `${privatePhotoJobId}:${photoIndex}:${photoRequest}:${copyReviewOpen ? "copy" : "photo"}`;
+  const boundPhotoCount = photoMetadataJobId === privatePhotoJobId ? photoCount : null;
   useLayoutEffect(() => { currentPhotoRef.current = photoKey; }, [photoKey]);
   const views = [{ value: "quantity", label: "数量" }, { value: "edit", label: "編集・リピート" }, { value: "photo", label: "元写真" }] as const;
   const selectView = (view: typeof resultView, code = selectedProductCode, record = true) => {
@@ -185,15 +194,16 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     return () => viewport?.removeEventListener("resize", resize);
   }, []);
   useEffect(() => {
-    if (resultView !== "photo" || !privatePhotoJobId || photoCount !== null) return;
+    if ((resultView !== "photo" && !copyReviewOpen) || !privatePhotoJobId || boundPhotoCount !== null) return;
     const abort = new AbortController(); setPhotoCountError(false);
     void fetch(`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}`, { cache: "no-store", signal: abort.signal }).then(async response => {
       const json = await response.json(); const count = json.data?.total_images;
       if (!response.ok || !Number.isInteger(count) || count < 1 || count > 5 || (json.data?.id && json.data.id !== privatePhotoJobId)) throw new Error("Invalid image metadata");
-      if (!abort.signal.aborted) { setPhotoCount(count); setPhotoIndex(index => index ?? 0); }
+      if (!abort.signal.aborted) { setPhotoMetadataJobId(privatePhotoJobId); setPhotoCount(count); setPhotoIndex(index => index ?? 0); }
     }).catch(() => { if (!abort.signal.aborted) setPhotoCountError(true); });
     return () => abort.abort();
-  }, [resultView, privatePhotoJobId, photoCount, photoRequest]);
+  }, [resultView, copyReviewOpen, privatePhotoJobId, boundPhotoCount, photoRequest]);
+  useEffect(() => { setPhotoCount(null); setPhotoMetadataJobId(null); setPhotoIndex(null); setPhotoCountError(false); setPhotoError(false); }, [privatePhotoJobId]);
   const [rowResetError, setRowResetError] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
@@ -276,7 +286,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const canonicalizeDerivedItem = (item: any): MemoProductItem => {
-    const { derivedEntries, override_active, rActive, total_quantity, comparison, comparisonConfirmed, quantityAssessment, incompleteMeasurements, incompleteSettings, orderReady, confirmationFingerprint, canConfirm, automaticQuantity, manualQuantityActive, allowanceIncluded, readingReviews, readingReviewFingerprint, readingReviewConfirmed, canConfirmReadingReview, ...base } = item;
+    const { copyReviewInput, derivedEntries, override_active, rActive, total_quantity, comparison, comparisonConfirmed, quantityAssessment, incompleteMeasurements, incompleteSettings, orderReady, confirmationFingerprint, canConfirm, automaticQuantity, manualQuantityActive, allowanceIncluded, readingReviews, readingReviewFingerprint, readingReviewConfirmed, canConfirmReadingReview, ...base } = item;
     return {
       ...base,
       entries: (derivedEntries ?? item.entries ?? []).map((entry: any) => {
@@ -716,7 +726,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       const confirmation = ovr.quantityConfirmation ?? item.quantity_confirmation;
       const readingReviewConfirmation = ovr.readingReviewConfirmation ?? item.reading_review_confirmation;
       const rawOrder = Object.prototype.hasOwnProperty.call(orderQuantityInputs, item.product_code) ? orderQuantityInputs[item.product_code] : item.order_quantity_input;
-      const plan = planMemoOrder({ item: planningItem, rows, repeatCm: r, basis, match, lossRate, manualQuantity: manualOrderQuantity, rawOrder, confirmation, readingReviewConfirmation, globalNotes: notes });
+      const copyReviewInput: CopyReviewInput = { item: planningItem, rows, repeatCm: r, basis, match, lossRate, manualQuantity: manualOrderQuantity, rawOrder, confirmation, readingReviewConfirmation, globalNotes: notes };
+      const plan = planMemoOrder(copyReviewInput);
       const { comparison } = plan;
       const derivedEntries = (item.entries || []).map((e: any, idx: number) => {
         const row = rows[idx], base = typeof elengths[idx] === "number" ? elengths[idx] as number : e.length_m;
@@ -741,6 +752,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
       return {
         ...planningItem,
+        copyReviewInput,
         measurement_basis: basis, pattern_match: match, quantity_confirmation: confirmation, order_quantity_input: rawOrder,
         reading_reviews: plan.readingReviews.length || item.reading_reviews ? plan.readingReviews : undefined, reading_review_confirmation: readingReviewConfirmation,
         readingReviews: plan.readingReviews, readingReviewFingerprint: plan.readingReviewFingerprint, readingReviewConfirmed: plan.readingReviewConfirmed, canConfirmReadingReview: plan.canConfirmReadingReview,
@@ -811,16 +823,98 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     onItemsChange(canonicalItems);
   }, [derivedItems, onItemsChange]);
 
-  const copyOrderText = async () => {
-    if (!derivedItems.length || derivedItems.some(item => !item.orderReady)) return;
-    const text = buildOrderRequestText(derivedItems, siteName);
+  const copyCollection = JSON.stringify({ job: privatePhotoJobId, siteName, products: derivedItems.map(item => ({ code: item.product_code,
+    sources: item.entries.map(entry => ({ id: entry.source_row_id, image: entry.source_image_index, index: entry.source_entry_index, formula: entry.original_formula })) })) });
+  const [copyReviewScope, setCopyReviewScope] = useState(copyCollection);
+  // An in-progress whole-list review cannot carry acknowledgements into a different result/list.
+  // This guarded same-component reset runs before commit, rather than granting a stale frame.
+  if (copyReviewOpen && copyReviewScope !== copyCollection) {
+    setCopyReviewScope(copyCollection);
+    setOverrides(previous => ({ ...previous, ...Object.fromEntries(derivedItems.map(item => [item.product_code,
+      { ...previous[item.product_code], quantityConfirmation: "", readingReviewConfirmation: "" }])) }));
+  }
+  const copyReviewRows = useMemo(() => copyReviewOpen ? derivedItems.map((item, index) => {
+    const id = `${index}:${item.product_code}`;
+    const context = { sourceJobId: privatePhotoJobId ?? null, siteName, itemKey: id, collectionKey: copyCollection };
+    const review = inspectCopyReview(item.copyReviewInput, context);
+    const duplicate = derivedItems.filter(other => other.product_code === item.product_code).length > 1;
+    return { id, code: item.product_code, quantity: item.order_quantity,
+      quantityIncomplete: item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined,
+      token: review.token, ready: item.orderReady && !duplicate,
+      confirmable: review.confirmable && !duplicate, blockedMessage: duplicate ? "品番が重複しています。編集して確認してください。" : review.blockedMessage,
+      reviews: review.plan.readingReviews, imageIndexes: readingReviewImageIndexes(item), input: item.copyReviewInput, context };
+  }) : [], [copyReviewOpen, derivedItems, privatePhotoJobId, siteName, copyCollection]);
+  const copyBatchToken = JSON.stringify(copyReviewRows.map(row => ({ id: row.id, token: row.token })));
+  const liveCopyReview = useRef({ rows: copyReviewRows, batch: copyBatchToken, items: derivedItems, siteName });
+  useLayoutEffect(() => { liveCopyReview.current = { rows: copyReviewRows, batch: copyBatchToken, items: derivedItems, siteName }; }, [copyReviewRows, copyBatchToken, derivedItems, siteName]);
+  const openCopyReview = () => {
+    if (copyReviewOpenRef.current) return;
+    copyReviewOpenRef.current = true;
+    setCopyReviewScope(copyCollection);
+    window.history.pushState({ ...(window.history.state ?? {}), sokupaCopyReview: workspaceId }, "");
+    setCopyReviewSession(value => value + 1);
+    setCopyReviewOpen(true);
+  };
+  const closeCopyReview = (after?: () => void) => {
+    if (!copyReviewOpenRef.current) return;
+    copyReviewOpenRef.current = false; setCopyReviewOpen(false);
+    if (typeof window.history.state?.sokupaCopyReview === "string") { reviewAfterClose.current = after ?? null; window.history.back(); }
+    else after?.();
+  };
+  useEffect(() => {
+    if (!copyReviewOpenRef.current && typeof window.history.state?.sokupaCopyReview === "string") {
+      const state = { ...window.history.state }; delete state.sokupaCopyReview;
+      window.history.replaceState(state, "");
+    }
+    const restore = (event: PopStateEvent) => {
+      const opened = event.state?.sokupaCopyReview === workspaceId;
+      if (opened && !copyReviewOpenRef.current) setCopyReviewSession(value => value + 1);
+      copyReviewOpenRef.current = opened; setCopyReviewOpen(opened);
+      if (!opened) { const after = reviewAfterClose.current; reviewAfterClose.current = null; after?.(); }
+    };
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, [workspaceId]);
+  const applyCopyReview = (selections: { id: string; token: string }[], batch: string) => {
+    const current = liveCopyReview.current;
+    if (!copyReviewOpenRef.current || batch !== current.batch || !selections.length || new Set(selections.map(row => row.id)).size !== selections.length) return false;
+    const changes = selections.map(selection => {
+      const row = current.rows.find(row => row.id === selection.id);
+      if (!row || !row.confirmable || row.token !== selection.token) return null;
+      const acknowledgement = prepareCopyReviewConfirmation(row.input, row.context, selection.token);
+      return acknowledgement ? { code: row.code, acknowledgement } : null;
+    });
+    if (changes.some(row => row === null)) return false;
+    setOverrides(previous => {
+      const next = { ...previous };
+      for (const change of changes) if (change) next[change.code] = { ...previous[change.code],
+        readingReviewConfirmation: change.acknowledgement.readingReviewConfirmation ?? previous[change.code]?.readingReviewConfirmation,
+        quantityConfirmation: change.acknowledgement.quantityConfirmation };
+      return next;
+    });
+    return true;
+  };
+  const copyOrderText = async (expectedBatch: string) => {
+    const current = liveCopyReview.current;
+    if (!copyReviewOpenRef.current || expectedBatch !== current.batch || !current.items.length || current.items.some(item => !item.orderReady)
+      || new Set(current.items.map(item => item.product_code)).size !== current.items.length) return false;
+    const text = buildOrderRequestText(current.items, current.siteName);
     try {
+      // No await/state update before this call: preserve iOS's explicit user gesture.
       await navigator.clipboard.writeText(text);
-      alert("発注用テキストをコピーしました！");
+      alert("発注用テキストをコピーしました！"); return true;
     } catch {
-      alert("コピーに失敗しました。");
+      alert("コピーに失敗しました。"); return false;
     }
   };
+  const sourcePhoto = (review = false) => !privatePhotoJobId ? <p role="status">この結果には元写真の参照がありません。お手元の写真と照合してください。</p> : photoCountError ? <div role="alert"><p>元写真の一覧を取得できませんでした。結果と編集は保持しています。</p><Button type="button" variant="outline" onClick={() => { setPhotoCountError(false); setPhotoRequest(value => value + 1); }}>写真一覧を再取得</Button></div> : boundPhotoCount === null ? <p role="status">元写真を確認中…</p> : <>
+    <div className="flex flex-wrap gap-2" role="group" aria-label="元写真を選択">{Array.from({ length: boundPhotoCount }, (_, index) => <Button key={index} type="button" variant={photoIndex === index ? "default" : "outline"} aria-pressed={photoIndex === index} data-workspace-navigation onClick={() => { if (review) { setPhotoError(false); setPhotoIndex(index); } else openPhoto(index); }}>写真 {index + 1}</Button>)}</div>
+    {photoIndex !== null && (photoIndex < 0 || photoIndex >= boundPhotoCount) ? <p role="alert">指定された元写真が見つかりません。上の写真番号から選び直してください。</p> : photoError ? <div role="alert"><p>写真を取得できませんでした。通信とログイン状態を確認してください。</p><Button type="button" variant="outline" onClick={() => { setPhotoError(false); setPhotoRequest(value => value + 1); }}>写真を再取得</Button></div> : <>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img key={photoKey} className={`${review ? "max-h-[45dvh]" : "max-h-[70dvh]"} w-full rounded-lg object-contain`} alt={`解析元の写真 ${(photoIndex ?? 0) + 1}`} src={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex ?? 0}`} onError={() => { if (currentPhotoRef.current === photoKey) setPhotoError(true); }} />
+      <a className="inline-block min-h-11 content-center text-sm underline" href={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex ?? 0}`} target="_blank" rel="noopener noreferrer">写真を別画面で拡大</a>
+    </>}
+  </>;
 
   if (items.length === 0) return null;
 
@@ -841,11 +935,11 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 p-3">
           <CardTitle className="text-xl font-bold">発注数量</CardTitle>
           <Badge variant="secondary">予備 {DEFAULT_LOSS_RATE_PERCENT}%</Badge>
-          <Button aria-label="発注用テキストをコピー" aria-describedby={`${navId}-copy-status`} onClick={() => void copyOrderText()} disabled={derivedItems.some(item => !item.orderReady)} className="min-h-11 gap-2">
-            <CopyIcon className="h-4 w-4" />コピー
+          <Button type="button" aria-label="確認してコピー" data-workspace-navigation aria-describedby={`${navId}-copy-status`} onClick={openCopyReview} className="min-h-11 gap-2">
+            <CopyIcon className="h-4 w-4" />確認してコピー
           </Button>
         </CardHeader>
-        <CardContent id={`${navId}-copy-status`} className="px-3 pb-3 pt-0 text-xs text-muted-foreground">{derivedItems.some(item => !item.orderReady) ? "要確認の数量は参考値です。" : "確認済みの数量をコピーできます。"}</CardContent>
+        <CardContent id={`${navId}-copy-status`} className="px-3 pb-3 pt-0 text-xs text-muted-foreground">{derivedItems.some(item => !item.orderReady) ? "候補・写真・数量をまとめて確認できます。" : "確認済みの数量をコピーできます。"}</CardContent>
       </Card>
 
       <Card className="border-none bg-white/70 shadow-lg ring-1 ring-inset ring-indigo-500/15 backdrop-blur-xl dark:bg-zinc-900/70">
@@ -922,14 +1016,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       </section>
       <section id={`${navId}-photo`} data-result-panel="photo" role="tabpanel" aria-labelledby={`${navId}-photo-tab`} tabIndex={-1} hidden={resultView !== "photo"} className="scroll-mt-4 space-y-3 outline-none print:hidden">
         <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">元写真</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("edit", activeProductCode)}>編集に戻る</Button></div>
-        {!privatePhotoJobId ? <p role="status">この結果には元写真の参照がありません。お手元の写真と照合してください。</p> : photoCountError ? <div role="alert"><p>元写真の一覧を取得できませんでした。結果と編集は保持しています。</p><Button type="button" variant="outline" onClick={() => { setPhotoCountError(false); setPhotoRequest(value => value + 1); }}>写真一覧を再取得</Button></div> : photoCount === null ? <p role="status">元写真を確認中…</p> : <>
-          <div className="flex flex-wrap gap-2" role="group" aria-label="元写真を選択">{Array.from({ length: photoCount }, (_, index) => <Button key={index} type="button" variant={photoIndex === index ? "default" : "outline"} aria-pressed={photoIndex === index} data-workspace-navigation onClick={() => openPhoto(index)}>写真 {index + 1}</Button>)}</div>
-          {photoIndex !== null && (photoIndex < 0 || photoIndex >= photoCount) ? <p role="alert">指定された元写真が見つかりません。上の写真番号から選び直してください。</p> : photoError ? <div role="alert"><p>写真を取得できませんでした。通信とログイン状態を確認してください。</p><Button type="button" variant="outline" onClick={() => { setPhotoError(false); setPhotoRequest(value => value + 1); }}>写真を再取得</Button></div> : <>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img key={photoKey} className="max-h-[70dvh] w-full rounded-lg object-contain" alt={`解析元の写真 ${(photoIndex ?? 0) + 1}`} src={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex ?? 0}`} onError={() => { if (currentPhotoRef.current === photoKey) setPhotoError(true); }} />
-            <a className="inline-block min-h-11 content-center text-sm underline" href={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex ?? 0}`} target="_blank" rel="noopener noreferrer">写真を別画面で拡大</a>
-          </>}
-        </>}
+        {!copyReviewOpen ? sourcePhoto() : null}
       </section>
       <section id={`${navId}-edit`} data-result-panel="edit" role="tabpanel" aria-labelledby={`${navId}-edit-tab`} tabIndex={-1} hidden={resultView !== "edit"} className="scroll-mt-4 space-y-3 outline-none print:block">
         <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">編集・リピート</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("quantity")}>数量に戻る</Button></div>
@@ -1551,6 +1638,14 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         ))}
       </div>
       </section>
+      <CopyReviewDialog key={copyReviewSession} open={copyReviewOpen} rows={copyReviewRows} batchToken={copyBatchToken} siteName={siteName}
+        copyReady={derivedItems.length > 0 && derivedItems.every(item => item.orderReady)} onClose={() => closeCopyReview()}
+        onApply={applyCopyReview} onCopy={copyOrderText}
+        onEdit={id => { const row = liveCopyReview.current.rows.find(row => row.id === id); if (row) closeCopyReview(() => {
+          setCollapsedCodes(current => { const next = new Set(current); next.delete(row.code); return next; }); selectView("edit", row.code);
+        }); }}
+        onPhoto={index => { setPhotoError(false); setPhotoIndex(index); if (copyPhotoRef.current) { copyPhotoRef.current.open = true; copyPhotoRef.current.scrollIntoView({ block: "start" }); } }}
+        photo={copyReviewOpen ? <details ref={copyPhotoRef} open className="space-y-2 rounded-xl border p-3"><summary className="min-h-11 cursor-pointer font-semibold">元写真（この結果）</summary>{sourcePhoto(true)}</details> : null} />
       <div role="tablist" data-workspace-navigation aria-label="解析結果の表示" hidden={keyboardOpen} className="fixed inset-x-0 bottom-0 z-30 mx-auto grid max-w-5xl grid-cols-3 gap-1 border-t bg-background px-2 pt-2 shadow-lg print:hidden" style={{ display: keyboardOpen ? "none" : undefined, paddingBottom: "calc(.5rem + env(safe-area-inset-bottom))" }} onKeyDown={event => {
         const index = views.findIndex(view => view.value === resultView);
         const next = event.key === "ArrowRight" ? (index + 1) % views.length : event.key === "ArrowLeft" ? (index + views.length - 1) % views.length : event.key === "Home" ? 0 : event.key === "End" ? views.length - 1 : -1;

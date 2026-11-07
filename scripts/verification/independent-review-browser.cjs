@@ -2,6 +2,7 @@
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
+const ui = require('./result-workspace-helpers.cjs');
 const base = process.env.SOKUPA_TEST_URL || 'http://127.0.0.1:3317';
 const key = 'sokupa:workspace:v1:synthetic-user';
 const original = {product_code:'VS2067',manufacturer:'サンゲツ',entries:[{original_formula:'2.7×6',length_m:2.7,quantity:6,subtotal_m:16.2},{original_formula:'3.8×1',length_m:3.8,quantity:1,subtotal_m:3.8}],total_m:20,order_quantity:23};
@@ -27,7 +28,7 @@ const draft = {version:1,siteName:'Synthetic',parsed:{items:[original]},original
  };
  try{
   const {context,page}=await contextFor(JSON.stringify(draft));
-  await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).waitFor();
+  await ui.edit(page,'VS2067');
   assert.equal(await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).inputValue(),'23');checks++;
   assert.equal(await page.evaluate(key=>JSON.parse(localStorage.getItem(key)).parsed.items[0].order_quantity,key),23);checks++;
   await page.getByTitle('タップして式を編集').first().click();
@@ -35,9 +36,9 @@ const draft = {version:1,siteName:'Synthetic',parsed:{items:[original]},original
   assert.equal(await page.getByLabel('VS2067 1行目の幅数',{exact:true}).inputValue(),'-1');checks++;
   await page.getByLabel('VS2067 1行目の長さ (m)',{exact:true}).fill('-1');
   assert.equal(await page.getByLabel('VS2067 1行目の長さ (m)',{exact:true}).inputValue(),'-1');checks++;
-  assert.equal(await page.getByRole('button',{name:'発注用テキストをコピー',exact:true}).isDisabled(),true);checks++;
+  assert.equal(await page.getByRole('button',{name:'発注用テキストをコピー',exact:true,includeHidden:true}).isDisabled(),true);checks++;
   await page.reload();
-  await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).waitFor();
+  await ui.edit(page,'VS2067');
   assert.equal(await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).inputValue(),'23');checks++;
   await context.close();
   const broken=structuredClone(draft);broken.parsed.items[0].entries[0].quantity=-1;broken.parsed.items[0].entries[0].subtotal_m=-2.7;

@@ -1,6 +1,7 @@
 // Regression for the independent review: synthetic APIs, no remote requests or real images.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
+const ui = require('./result-workspace-helpers.cjs');
 const base = process.env.SOKUPA_TEST_URL || 'http://127.0.0.1:3318';
 const a='00000000-0000-4000-8000-00000000000a', b='00000000-0000-4000-8000-00000000000b';
 let checks=0;
@@ -25,8 +26,8 @@ async function setup(browser,name,initial,handler){
  });
  const saved=()=>wait(()=>page.getByLabel('結果の保存状態').innerText().then(s=>s.includes('保存済み')));
  const read=()=>page.evaluate(k=>JSON.parse(localStorage.getItem(k)),key);
- const upload=async()=>{const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=4;return c.toDataURL('image/png').split(',')[1];});await page.locator('input[type=file]').setInputFiles({name:'synthetic.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await page.getByAltText('プレビュー 1',{exact:true}).waitFor();};
- await page.goto(base);await page.getByLabel(`${initial.items[0].product_code} の発注数量を入力`,{exact:true}).waitFor();await saved();
+ const upload=async()=>{await ui.disclosure(page,'画像・現場名');const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=4;return c.toDataURL('image/png').split(',')[1];});await page.locator('input[type=file]').setInputFiles({name:'synthetic.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await page.getByAltText('プレビュー 1',{exact:true}).waitFor();};
+ await page.goto(base);await ui.edit(page,initial.items[0].product_code);await saved();
  return {context,page,key,latestKey,saved,read,upload};
 }
 async function uploadEdit(browser){
@@ -42,7 +43,7 @@ async function uploadEdit(browser){
   release();await wait(()=>created);await page.getByText('解析を受け付けました',{exact:true}).waitFor();done=true;await page.getByText('別の解析結果があります',{exact:true}).waitFor();
   check((await read()).resultJobId===a&&(await read()).siteName==='Edit during upload','completion never silently replaces upload-time edits');
   await page.reload();await page.getByText('別の解析結果があります',{exact:true}).waitFor();check((await read()).siteName==='Edit during upload','replacement conflict and edits survive reload');
-  await page.getByRole('button',{name:'最新1件に上書きして開く（今の結果と置換）',exact:true}).click();await page.getByLabel('B の発注数量を入力',{exact:true}).waitFor();await saved();check((await read()).resultJobId===b,'only explicit replacement opens B');
+  await page.getByRole('button',{name:'最新1件に上書きして開く（今の結果と置換）',exact:true}).click();await ui.edit(page,'B');await saved();check((await read()).resultJobId===b,'only explicit replacement opens B');
  }finally{release();await h.context.close();}
 }
 async function incompleteMeasurements(browser){
@@ -52,11 +53,11 @@ async function incompleteMeasurements(browser){
   for(const field of ['length','quantity']){
    await page.getByTitle('タップして式を編集').first().click();const label=field==='length'?'CHECK 1行目の長さ (m)':'CHECK 1行目の幅数';const prop=field==='length'?'length_input':'quantity_input';
    await page.getByLabel(label,{exact:true}).fill('');await wait(()=>read().then(d=>d.parsed.items[0].entries[0][prop]===''));await saved();
-   check(!(await page.getByLabel('CHECK の発注量チェック').innerText()).includes('✅'),'blank '+field+' has no green check');check(!(await confirm.isChecked()),'blank '+field+' invalidates confirmation');
-   check(await page.getByRole('button',{name:'発注用テキストをコピー',exact:true}).isDisabled(),'blank '+field+' cannot be copied');check(await page.getByRole('button',{name:'発注リストに追加',exact:true}).isDisabled(),'blank '+field+' cannot be transferred');
+   check(!(await page.getByLabel('CHECK の発注量チェック').getAttribute('class')).includes('text-emerald-')&&!(await page.getByLabel('CHECK の発注量チェック').innerText()).includes('確認済み'),'blank '+field+' has no green or confirmed status');check(!(await confirm.isChecked()),'blank '+field+' invalidates confirmation');
+   check(await page.getByRole('button',{name:'発注用テキストをコピー',exact:true,includeHidden:true}).isDisabled(),'blank '+field+' cannot be copied');check(await page.getByRole('button',{name:'発注リストに追加',exact:true}).isDisabled(),'blank '+field+' cannot be transferred');
    check((await read()).parsed.items[0].entries[0][prop]==='','blank '+field+' stored independently from last valid number');
    check(await page.evaluate(({k,prop})=>JSON.parse(localStorage.getItem(k)).latest.snapshot.parsed.items[0].entries[0][prop]==='',{k:h.latestKey,prop}),'latest snapshot retains blank '+field);
-   await page.reload();await page.getByTitle('タップして式を編集').first().click();check(await page.getByLabel(label,{exact:true}).inputValue()==='','blank '+field+' restores after reload');
+   await page.reload();await ui.edit(page,'CHECK');await page.getByTitle('タップして式を編集').first().click();check(await page.getByLabel(label,{exact:true}).inputValue()==='','blank '+field+' restores after reload');
    await page.getByLabel(label,{exact:true}).fill(field==='length'?'20':'1');await saved();check(!(await confirm.isChecked()),'completing '+field+' does not silently reconfirm');
    await confirm.check();await wait(()=>page.getByLabel('CHECK の発注量チェック').innerText().then(t=>t.includes('確認済み')));checks++;
   }
@@ -67,7 +68,7 @@ async function resetAfterDelete(browser,provenance){
  const h=await setup(browser,provenance?'reset-source':'reset-legacy',initial);
  try{const {page,read,saved}=h;await page.getByRole('button',{name:'この数式を削除',exact:true}).first().click();await wait(()=>read().then(d=>d.parsed.items[0].entries.length===1));
   for(let attempt=0;attempt<2;attempt++){
-   if(attempt){await page.reload();await page.getByLabel('ROWS の発注数量を入力',{exact:true}).waitFor();}
+   if(attempt){await page.reload();await ui.edit(page,'ROWS');}
    await page.getByTitle('タップして式を編集').first().click();await page.getByLabel('ROWS 1行目の長さ (m)',{exact:true}).fill('9');await page.getByLabel('ROWS 1行目の幅数',{exact:true}).fill('7');await saved();
    await page.getByTitle('この行の編集を元に戻す').click();await wait(()=>read().then(d=>d.parsed.items[0].entries[0].length_m===3.8));await saved();const entry=(await read()).parsed.items[0].entries[0];
    check(entry.length_m===3.8&&entry.quantity===1,'reset restores surviving row, including after reload');
