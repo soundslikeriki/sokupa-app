@@ -66,6 +66,7 @@ const fixture = (mode, legacy, included) => {
       const bulk = () => page.getByRole('button', { name: 'すべて発注リストへ追加（2品番）', exact: true });
       const region = () => page.getByRole('region', { name: 'REVIEW の訂正・取消の確認', exact: true });
       await page.goto(base); await review().waitFor(); await saved();
+      for (const code of ['REVIEW','SAFE']) { const detail=page.locator(`details[aria-label="${code} の読み取り詳細"]`); if(await detail.count()) await detail.locator('summary').click(); }
       if (mixedGlobal || globalNotesOnly) {
         for (const code of ['REVIEW', 'SAFE']) {
           const warning = page.getByRole('region', { name: `${code} の訂正・取消の確認`, exact: true });
@@ -120,7 +121,9 @@ const fixture = (mode, legacy, included) => {
       const snapshot = (await item()).reading_review_confirmation;
       await page.reload(); await review().waitFor(); await saved();
       check(await review().isChecked() && await general().isChecked() && await copy().isEnabled(), 'both acknowledgements restore after reload');
-      check((await item()).reading_review_confirmation === snapshot && (await region().innerText()).includes('1.5×3'), 'reload keeps the review fingerprint and candidate record');
+      check((await item()).reading_review_confirmation === snapshot && (await item()).reading_reviews.some(review => review.candidate_formulas.includes('1.5×3')), 'reload keeps the review fingerprint and candidate record');
+      await page.locator('details[aria-label="REVIEW の読み取り詳細"]').locator('summary').click();
+      check((await region().innerText()).includes('1.5×3'), 'preserved candidate is visible when the user expands its explanation');
       await page.getByRole('button', { name: '発注リストに追加', exact: true }).first().click();
       await until(() => read().then(value => value.orderDraftItems.length === 1));
       check((await read()).orderDraftItems[0].quantity === finalQuantity, 'individual draft transfer does not apply the candidate or reserve twice');

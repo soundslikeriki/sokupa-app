@@ -1,8 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { buildOrderRequestText } from "@/lib/order-text";
+import { buildAnalysisCompletionMessages } from "@/lib/analysis-notification";
 
 import type { ParsedMemoPayload } from "@/types";
-import { mergeParsedPayloads, requiresMemoReview } from "@/lib/memo-calculation";
+import { mergeParsedPayloads } from "@/lib/memo-calculation";
 import { parseMemoBody } from "@/lib/parseMemo";
 import { MEMO_BUCKET, memoObjectPath, MAX_MEMO_BYTES } from "@/lib/memo-storage";
 import { sendLineMessages } from "@/lib/line-notification";
@@ -36,12 +36,7 @@ async function notifyCompletion(admin: SupabaseClient, job: any, result: ParsedM
       const { error } = await admin.from("analysis_jobs").update({ notification_attempted_at: new Date().toISOString() }).eq("id", job.id).is("notification_attempted_at", null);
       if (error) throw new NotificationStateError("notification attempt recording failed");
     }
-    const messages = [{ type: "text", text: `✅ ソクパ解析が完了しました！${job.site_name ? `\n現場：${job.site_name}` : ""}\nアプリを開いて結果を確認してください。` }];
-    // Uncertain calculations must be reviewed in the app before presenting an order text.
-    if (!requiresMemoReview(result)) {
-      const orderText = buildOrderRequestText(result.items, job.site_name);
-      if (orderText.length <= 4900) messages.push({ type: "text", text: orderText });
-    }
+    const messages = buildAnalysisCompletionMessages(result, job.site_name);
     await sendLineMessages(job.line_user_id, messages, job.id);
     const { error } = await admin.from("analysis_jobs").update({ notification_status: "accepted", notification_error: null, notified_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", job.id);
     if (error) throw new NotificationStateError("notification state update failed");

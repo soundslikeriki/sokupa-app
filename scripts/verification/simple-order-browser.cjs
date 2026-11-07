@@ -54,7 +54,7 @@ const until = async predicate => { for (let n = 0; n < 200; n++) { if (await pre
     check((await page.getByLabel('MEMO の数量の計算内訳').innerText()).includes('メモ合計 20m → 予備分 15% → 自動計算 23m'), 'plain visible relationship');
     check(await page.getByLabel('MEMO の寸法区分', { exact: true }).count() === 0, 'technical measurement selector hidden initially');
     check(await page.getByLabel('MEMO のリピート (cm)', { exact: true }).count() === 0, 'repeat inputs hidden initially');
-    check(await page.getByRole('button', { name: 'この行にリピート計算を適用する' }).count() === 0, 'row repeat controls hidden initially');
+    check(await page.getByLabel('MEMO 1行目のリピート計算',{exact:true}).getAttribute('aria-pressed') === 'false', 'old-style row repeat toggle is available and initially OFF');
     check(await copy().isDisabled() && await bulk.isDisabled(), 'copy and bulk transfer blocked before acknowledgement');
     check(await page.getByRole('button', { name: '発注リストに追加', exact: true }).first().isDisabled(), 'individual transfer blocked before acknowledgement');
     if (process.env.SOKUPA_SCREENSHOT) {
@@ -118,7 +118,7 @@ const until = async predicate => { for (let n = 0; n < 200; n++) { if (await pre
 
     const p = await fixture([legacy], 1280);
     const q = p.page, advancedAck = () => q.getByLabel('HEIGHT の必要量の前提を確認済みにする', { exact: true });
-    check(await q.getByRole('radio', { name: '柄合わせを考慮して計算する', exact: true }).isChecked(), 'legacy active-repeat draft opens pattern mode');
+    check(await q.getByRole('switch',{name:'HEIGHT の一括リピート計算',exact:true}).getAttribute('aria-checked') === 'true', 'legacy active-repeat draft opens with the master toggle ON');
     check(await p.quantity('HEIGHT').inputValue() === '15', 'legacy manual amount stays 15m');
     check((await p.read()).parsed.items[0].entries.map(e => e.length_m).join(',') === '2.7,3.8', 'two original heights preserved');
     await advancedAck().check(); await p.saved(); await p.copy().click();
@@ -144,24 +144,23 @@ const until = async predicate => { for (let n = 0; n < 200; n++) { if (await pre
     await q.getByLabel('HEIGHT の柄合わせ方式', { exact: true }).selectOption('straight');
     await q.getByLabel('HEIGHT の寸法区分', { exact: true }).selectOption('repeat-adjusted'); await p.saved();
     check(await advancedAck().isDisabled() && await p.copy().isDisabled(), 'already pattern-adjusted dimensions cannot be recalculated');
-    await q.getByRole('radio', { name: 'メモの数量を使う（予備分を確認）', exact: true }).check(); await p.saved();
-    check((await p.read()).parsed.items[0].entries.every(e => e.repeat_enabled), 'simple mode preserves latent repeat toggles');
+    await q.getByRole('switch',{name:'HEIGHT の一括リピート計算',exact:true}).click();
+    await until(() => p.read().then(draft => draft.parsed.items[0].order_mode === 'memo' && draft.parsed.items[0].entries.every(e => !e.repeat_enabled))); await p.saved();
+    check((await p.read()).parsed.items[0].entries.every(e => !e.repeat_enabled), 'master OFF clears the row repeat toggles like the old UI');
     check((await p.read()).parsed.items[0].total_m === 9.2, 'simple mode uses source quantities without repeating them');
     await q.reload(); await p.quantity('HEIGHT').waitFor(); await p.saved();
     check(await q.getByLabel('HEIGHT の寸法区分', { exact: true }).count() === 0 && (await p.read()).parsed.items[0].repeat_cm === 60, 'simple mode and hidden repeat settings restore together');
-    await q.getByRole('radio', { name: '柄合わせを考慮して計算する', exact: true }).check();
+    await q.getByRole('switch',{name:'HEIGHT の一括リピート計算',exact:true}).click();
     await q.getByLabel('HEIGHT の寸法区分', { exact: true }).selectOption('trim-included'); await p.saved();
     await until(() => p.read().then(draft => draft.parsed.items[0].total_m === 10.2));
     check((await p.read()).parsed.items[0].total_m === 10.2, 'return to pattern restores calculations exactly once');
     await q.getByRole('switch', { name: 'HEIGHT の一括リピート計算', exact: true }).click();
     await until(() => p.read().then(draft => draft.parsed.items[0].entries.every(entry => !entry.repeat_enabled)));
-    await q.getByRole('radio', { name: 'メモの数量を使う（予備分を確認）', exact: true }).check();
-    await q.getByRole('radio', { name: '柄合わせを考慮して計算する', exact: true }).check();
-    await until(() => p.read().then(draft => draft.parsed.items[0].order_mode === 'pattern' && draft.parsed.items[0].pattern_rows_configured && draft.parsed.items[0].entries.every(entry => !entry.repeat_enabled))); await p.saved();
+    await until(() => p.read().then(draft => draft.parsed.items[0].order_mode === 'memo' && draft.parsed.items[0].entries.every(entry => !entry.repeat_enabled))); await p.saved();
     check(await q.getByRole('switch', { name: 'HEIGHT の一括リピート計算', exact: true }).getAttribute('aria-checked') === 'false', 'an intentional all-rows-OFF setting survives hiding and reopening the editor');
     await q.reload(); await p.quantity('HEIGHT').waitFor();
     check(await q.getByRole('switch', { name: 'HEIGHT の一括リピート計算', exact: true }).getAttribute('aria-checked') === 'false', 'intentional all-rows-OFF survives reload');
-    await advancedAck().check(); await p.saved();
+    await q.getByLabel('HEIGHT のメモと発注数量を確認済みにする',{exact:true}).check(); await p.saved();
     await q.getByTitle('この数式を削除').first().click(); await p.saved();
     await q.getByTitle('タップして式を編集').click();
     await q.getByLabel('HEIGHT 1行目の長さ (m)', { exact: true }).fill('4.4');

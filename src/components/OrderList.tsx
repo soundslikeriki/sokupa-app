@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ListPlus } from "lucide-react";
 import { roundMeters } from "@/lib/memo-calculation";
 import { orderModeForItem, planMemoOrder } from "@/lib/order-planning";
+import { compactReadingReviews, compactReviewReasons, shortOrderStatus } from "@/lib/order-presentation";
 import { findOriginalMemoEntry } from "@/lib/original-memo-entry";
 import { calculateOrderQuantity, DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import {
@@ -430,15 +431,17 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
       const prevOvr = prev[productCode] || {};
-      const prevRepeats = prevOvr.entryRepeatActive || {};
+      const item = items.find(item => item.product_code === productCode)!;
+      const enabled = (prevOvr.orderMode ?? orderModeForItem(item)) === "pattern";
+      const prevRepeats = Object.fromEntries(item.entries.map((entry, index) => [index, enabled && (prevOvr.entryRepeatActive?.[index] ?? entry.repeat_enabled ?? false)]));
+      const nextRepeats = { ...prevRepeats, [entryIndex]: !prevRepeats[entryIndex] };
       return {
         ...prev,
         [productCode]: {
           ...prevOvr,
-          entryRepeatActive: {
-            ...prevRepeats,
-            [entryIndex]: !(prevRepeats[entryIndex] ?? items.find((item) => item.product_code === productCode)?.entries[entryIndex]?.repeat_enabled ?? false)
-          }
+          entryRepeatActive: nextRepeats,
+          orderMode: Object.values(nextRepeats).some(Boolean) ? "pattern" : "memo",
+          patternRowsConfigured: true,
         }
       };
     });
@@ -456,21 +459,14 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         ...prev,
         [productCode]: {
           ...prevOvr,
-          entryRepeatActive: newRepeats
+          entryRepeatActive: newRepeats,
+          orderMode: currentMasterActive ? "memo" : "pattern",
+          patternRowsConfigured: true,
         }
       };
     });
   };
 
-  const handleOrderModeChange = (product: MemoProductItem, mode: "memo" | "pattern") => {
-    setOverrides(previous => {
-      const current = previous[product.product_code] ?? {};
-      const configured = current.patternRowsConfigured ?? product.pattern_rows_configured ?? product.entries.some((entry, index) => current.entryRepeatActive?.[index] ?? entry.repeat_enabled);
-      return { ...previous, [product.product_code]: { ...current, orderMode: mode, quantityConfirmation: "", readingReviewConfirmation: "",
-        patternRowsConfigured: configured || mode === "pattern",
-        ...(mode === "pattern" && !configured ? { entryRepeatActive: Object.fromEntries(product.entries.map((_, index) => [index, true])) } : {}) } };
-    });
-  };
 
   const handleToggleEntryEdit = (productCode: string, entryIndex: number) => {
     setOverrides((prev) => {
@@ -665,6 +661,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   }, [items, notes, overrides, lossRates, manualOrderQuantities, orderQuantityInputs]);
 
   const groups = useMemo(() => groupByManufacturer(derivedItems), [derivedItems]);
+  const reviewReasonGroups = useMemo(() => compactReviewReasons(derivedItems), [derivedItems]);
   const productCodes = useMemo(() => derivedItems.map((item) => item.product_code), [derivedItems]);
   const allCodesCollapsed = useMemo(
     () => areAllCodesCollapsed(collapsedCodes, productCodes),
@@ -725,7 +722,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   if (items.length === 0) return null;
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-6 duration-700">
+    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-6 duration-700">
       <div className="hidden print:block text-center text-black space-y-1">
         <p className="text-sm font-semibold">
           {APP_FORMAL_NAME}（{APP_PRODUCT_NAME}）— 発注・見積プレビュー
@@ -734,94 +731,15 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
           自動計算は予備分を加えて1m単位に切り上げます。調整済み・手動指定の発注量には再上乗せしません。
         </p>
       </div>
-      <Card className="border-none shadow-xl bg-gradient-to-br from-indigo-500/10 via-purple-500/5 to-transparent backdrop-blur-xl ring-1 ring-inset ring-indigo-500/20">
-        <CardHeader className="p-3 pb-3 sm:p-6 sm:pb-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4">
-            <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
-              <div className="shrink-0 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 p-2 shadow-lg text-white sm:p-2.5">
-                <Layers className="h-4 w-4 sm:h-5 sm:w-5" />
-              </div>
-              <div className="min-w-0">
-                <CardTitle className="text-xl font-bold leading-tight tracking-tight bg-gradient-to-r from-indigo-900 to-purple-900 bg-clip-text text-transparent sm:text-2xl dark:from-indigo-100 dark:to-purple-100">
-                  発注リスト
-                </CardTitle>
-                <CardDescription className="mt-1 text-xs font-medium text-indigo-900/60 dark:text-indigo-100/60 sm:text-sm">
-                  {APP_FORMAL_NAME} — メモの数量と予備分を確認し、必要なときだけ柄合わせを計算します
-                </CardDescription>
-              </div>
-            </div>
-            <Badge variant="secondary" className="rounded-lg bg-white/70 px-3 py-2 text-xs font-bold shadow-sm dark:bg-black/60 sm:text-sm">
-              初期ロス {DEFAULT_LOSS_RATE_PERCENT}%
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4 px-3 pb-4 pt-0 sm:space-y-5 sm:px-6 sm:pb-6">
-          <p className="max-w-3xl text-xs leading-relaxed text-indigo-900/85 dark:text-indigo-100/85 sm:text-sm">
-            自動計算は予備分を加えて1m単位に切り上げます。調整済み・手動指定の発注量には再上乗せしません。
-            <span className="text-[11px] text-muted-foreground sm:text-xs">（初期値 {DEFAULT_LOSS_RATE_PERCENT}%）確認前の数量は参考値です。確認するまでコピー・追加できません。</span>
-          </p>
-          {derivedItems.some((item) => item.review_reasons?.length) && (
-            <ul className="space-y-1 text-sm text-amber-800 dark:text-amber-200">
-              {derivedItems.flatMap((item) => (item.review_reasons ?? []).map((reason: string) => (
-                <li key={`${item.product_code}:${reason}`}>{item.product_code} — {reason}</li>
-              )))}
-            </ul>
-          )}
-          {needs_review_any && (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 shadow-inner sm:gap-3 sm:p-4">
-              <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" />
-              <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
-                黄色のバッジがついている推測結果は必ず現場メモ・見本帳と一致しているかご確認ください。
-              </p>
-            </div>
-          )}
-          <Button 
-            onClick={() => void copyOrderText()} 
-            disabled={derivedItems.some(item => !item.orderReady)}
-            className="w-full rounded-2xl bg-gradient-to-r from-indigo-600 to-purple-600 py-5 text-sm font-semibold shadow-lg transition-all duration-300 hover:from-indigo-700 hover:to-purple-700 hover:shadow-xl sm:py-6 sm:text-base"
-          >
-            <CopyIcon className="w-4 h-4 mr-2" />
-            発注用テキストをコピー
+      <Card className="border-none bg-white/70 shadow-md dark:bg-zinc-900/70">
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 p-3">
+          <CardTitle className="text-xl font-bold">発注リスト</CardTitle>
+          <Badge variant="secondary">初期ロス {DEFAULT_LOSS_RATE_PERCENT}%</Badge>
+          <Button onClick={() => void copyOrderText()} disabled={derivedItems.some(item => !item.orderReady)} className="min-h-11 gap-2">
+            <CopyIcon className="h-4 w-4" />発注用テキストをコピー
           </Button>
-          {notes && (
-            <div className="rounded-xl border border-black/5 bg-white/50 p-3 text-xs font-medium dark:border-white/5 dark:bg-black/20 sm:p-4 sm:text-sm">
-              <span className="opacity-70">メモ備考:</span> {notes}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {privatePhotoJobId && photoIndex !== null ? (
-        <Card><CardContent className="space-y-3 p-4">
-          <p className="font-semibold">照合する元写真 {photoIndex + 1}</p>
-          <Button type="button" variant="outline" onClick={() => setPhotoIndex(null)}>写真を閉じる</Button>
-          {photoError ? <p role="status">写真を取得できませんでした。通信とログイン状態を確認してください。</p> : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img className="max-h-[70vh] w-full object-contain" alt={`解析元の写真 ${photoIndex + 1}`} src={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex}`} onError={() => setPhotoError(true)} />
-          )}
-        </CardContent></Card>
-      ) : null}
-      <Card className="border-none bg-gradient-to-r from-indigo-600/10 via-purple-600/10 to-indigo-600/5 shadow-lg ring-1 ring-inset ring-indigo-500/20 backdrop-blur-xl">
-        <CardContent className="grid gap-3 px-3 py-4 sm:grid-cols-2 sm:px-6 sm:py-5">
-          <div className="rounded-xl border border-indigo-500/10 bg-white/70 p-4 shadow-sm dark:bg-black/30">
-            <p className="text-xs font-bold text-indigo-900/60 dark:text-indigo-100/60">{derivedItems.some(item => !item.orderReady) ? "合計発注数量（確認前の参考値を含む）" : "合計発注数量"}</p>
-            <div className="mt-2 flex items-baseline gap-2">
-              <span className="text-3xl font-black tabular-nums tracking-tight text-indigo-700 dark:text-indigo-300 sm:text-4xl">
-                {formatSummaryNumber(orderSummary.totalOrderQuantity, 0)}
-              </span>
-              <span className="text-base font-bold text-indigo-900/60 dark:text-indigo-100/60">m</span>
-            </div>
-          </div>
-          <div className="rounded-xl border border-purple-500/10 bg-white/70 p-4 shadow-sm dark:bg-black/30">
-            <p className="text-xs font-bold text-purple-900/60 dark:text-purple-100/60">合計平米数</p>
-            <div className="mt-2 flex items-baseline gap-2">
-              <span className="text-3xl font-black tabular-nums tracking-tight text-purple-700 dark:text-purple-300 sm:text-4xl">
-                {formatSummaryNumber(orderSummary.totalSquareMeters)}
-              </span>
-              <span className="text-base font-bold text-purple-900/60 dark:text-purple-100/60">㎡</span>
-            </div>
-          </div>
-        </CardContent>
+        </CardHeader>
+        <CardContent className="px-3 pb-3 pt-0 text-xs text-muted-foreground">未確認の数量は参考値です。確認後にコピー・追加できます。</CardContent>
       </Card>
 
       <Card className="border-none bg-white/70 shadow-lg ring-1 ring-inset ring-indigo-500/15 backdrop-blur-xl dark:bg-zinc-900/70">
@@ -840,9 +758,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                 key={code}
                 className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-black/5 bg-black/[0.03] px-2 py-1.5 dark:border-white/5 dark:bg-white/[0.04] sm:px-3"
               >
-                <p className="min-w-0 flex-1 truncate whitespace-nowrap text-xs font-semibold tabular-nums text-zinc-900 dark:text-zinc-100 sm:text-sm">
-                  ・{code} / 数量：{item.orderReady ? `${quantity}m` : `${quantity}m（確認前の参考値）`}
-                </p>
+                <p className="min-w-0 flex-1 break-words text-sm font-bold text-zinc-900 dark:text-zinc-100">{code}</p>
+                <p className="shrink-0 text-xl font-extrabold tabular-nums" aria-label={`${code} の一覧発注数量`}>{item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined || quantity <= 0 ? "未確定" : `${quantity}m`}</p>
                 <div className="flex shrink-0 items-center gap-1.5">
                   <Button
                     type="button"
@@ -867,12 +784,58 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </div>
-                <p className={`w-full text-xs ${orderCheckColor(item.orderReady, basicView)}`} role="status" aria-label={`${code} の発注量チェック`}>{orderCheckMessage(item, basicView)}</p>
+                <div className="flex w-full items-center justify-between gap-2">
+                  <p className={`text-xs ${orderCheckColor(item.orderReady, basicView)}`} role="status" aria-label={`${code} の発注量チェック`}>{shortOrderStatus(item)}{item.orderReady || item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined ? "" : "・参考値"}</p>
+                  <a href={`#material-${encodeURIComponent(code)}`} className="min-h-11 content-center text-xs underline" onClick={() => setCollapsedCodes(current => { const next = new Set(current); next.delete(code); return next; })}>確認・編集</a>
+                </div>
               </div>
             );
           })}
         </CardContent>
       </Card>
+
+      <details className="rounded-xl border bg-background p-3 text-sm" aria-label="読み取り・計算の説明">
+        <summary className="min-h-6 cursor-pointer font-medium">説明・注意を表示{needs_review_any || reviewReasonGroups.length ? "（読み取り確認あり）" : ""}</summary>
+        <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+          <p>自動計算は予備分を加えて1m単位に切り上げます。調整済み・手動指定の発注量には再上乗せしません。</p>
+          {reviewReasonGroups.length ? <ul className="space-y-2 break-words text-amber-800 dark:text-amber-200">{reviewReasonGroups.map(({reason,codes}) => <li key={reason}><span className="font-semibold">{codes.join("・")}</span> — {reason}</li>)}</ul> : null}
+          {notes && !reviewReasonGroups.some(row => row.reason.includes(notes.trim())) ? <p>メモ備考：{notes}</p> : null}
+        </div>
+      </details>
+
+      {privatePhotoJobId && photoIndex !== null ? (
+        <Card><CardContent className="space-y-3 p-4">
+          <p className="font-semibold">照合する元写真 {photoIndex + 1}</p>
+          <Button type="button" variant="outline" onClick={() => setPhotoIndex(null)}>写真を閉じる</Button>
+          {photoError ? <p role="status">写真を取得できませんでした。通信とログイン状態を確認してください。</p> : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img className="max-h-[70vh] w-full object-contain" alt={`解析元の写真 ${photoIndex + 1}`} src={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex}`} onError={() => setPhotoError(true)} />
+          )}
+        </CardContent></Card>
+      ) : null}
+      <Card className="border-none bg-gradient-to-r from-indigo-600/10 via-purple-600/10 to-indigo-600/5 shadow-lg ring-1 ring-inset ring-indigo-500/20 backdrop-blur-xl">
+        <CardContent className="grid grid-cols-2 gap-2 px-3 py-3 sm:px-6">
+          <div className="rounded-xl border border-indigo-500/10 bg-white/70 p-4 shadow-sm dark:bg-black/30">
+            <p className="text-xs font-bold text-indigo-900/60 dark:text-indigo-100/60">{derivedItems.some(item => !item.orderReady) ? "合計発注数量（確認前の参考値を含む）" : "合計発注数量"}</p>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-3xl font-black tabular-nums tracking-tight text-indigo-700 dark:text-indigo-300 sm:text-4xl">
+                {formatSummaryNumber(orderSummary.totalOrderQuantity, 0)}
+              </span>
+              <span className="text-base font-bold text-indigo-900/60 dark:text-indigo-100/60">m</span>
+            </div>
+          </div>
+          <div className="rounded-xl border border-purple-500/10 bg-white/70 p-4 shadow-sm dark:bg-black/30">
+            <p className="text-xs font-bold text-purple-900/60 dark:text-purple-100/60">合計平米数</p>
+            <div className="mt-2 flex items-baseline gap-2">
+              <span className="text-3xl font-black tabular-nums tracking-tight text-purple-700 dark:text-purple-300 sm:text-4xl">
+                {formatSummaryNumber(orderSummary.totalSquareMeters)}
+              </span>
+              <span className="text-base font-bold text-purple-900/60 dark:text-purple-100/60">㎡</span>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
 
       {onAddAllToOrderDraft && derivedItems.length > 1 ? (
         <div className="flex justify-end">
@@ -925,7 +888,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
               {group.rows.map((product, idx) => {
                 const isCollapsed = collapsedCodes.has(product.product_code);
                 return (
-                <div key={product.product_code} className={`px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
+                <div id={`material-${encodeURIComponent(product.product_code)}`} key={product.product_code} className={`px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
                   {isCollapsed ? (
                     <div className="flex min-w-0 items-center gap-3">
                       <div className="min-w-0 flex-1">
@@ -999,7 +962,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           <button
                             type="button"
                             onClick={() => beginEditCode(product.product_code)}
-                            className="min-w-0 text-left text-lg font-extrabold tracking-tight underline-offset-4 hover:underline sm:text-xl"
+                            className="min-w-0 break-all text-left text-lg font-extrabold tracking-tight underline-offset-4 hover:underline sm:text-xl"
                             title="タップして品番を編集"
                           >
                             {product.product_code}
@@ -1057,50 +1020,6 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         <ChevronUp className="h-5 w-5" />
                       </Button>
                     </div>
-                  {product.readingReviews.length ? <section aria-label={`${product.product_code} の訂正・取消の確認`} className="mb-4 w-full space-y-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
-                    <p className="flex items-center gap-2 font-bold"><AlertTriangle className="h-4 w-4 shrink-0" />訂正・取消の候補を原画像で確認してください</p>
-                    {product.readingReviews.map((review: MemoReadingReview, reviewIndex: number) => <div key={reviewIndex} className="space-y-1 break-words">
-                      <p>{review.reason}</p>
-                      {review.candidate_formulas.length ? <ul className="list-inside list-disc font-semibold tabular-nums">{review.candidate_formulas.map((formula, formulaIndex) => <li key={formulaIndex}>{formula}</li>)}</ul> : <p>候補式を特定できませんでした。原画像の訂正・取消を確認してください。</p>}
-                    </div>)}
-                    <p>候補は数量に自動加算していません。有効な訂正値は下の明細を編集・追加し、取消の場合は除外が正しいか確認してください。</p>
-                    {privatePhotoJobId && readingReviewImageIndexes(product).length ? <div className="flex flex-wrap gap-2">{readingReviewImageIndexes(product).map(index => <Button key={index} type="button" variant="outline" className="min-h-11 bg-background" aria-label={`${product.product_code} の訂正候補の写真 ${index + 1}を確認`} onClick={() => { setPhotoError(false); setPhotoIndex(index); }}>原画像 {index + 1}を確認</Button>)}</div> : <p className="text-xs">この結果に対応する原画像をアプリで開けません。お手元の元メモ・写真と照合してください。</p>}
-                    <label className="flex min-h-11 items-start gap-2 py-2">
-                      <input type="checkbox" className="mt-1" aria-label={`${product.product_code} の訂正・取消を確認済みにする`} checked={product.readingReviewConfirmed} disabled={!product.canConfirmReadingReview} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], readingReviewConfirmation: event.target.checked ? product.readingReviewFingerprint : "", quantityConfirmation: "" } }))} />
-                      候補を原画像と照合し、有効な訂正値を明細に反映しました。取消なら除外を確認しました（明細・数量を変えると再確認）
-                    </label>
-                    <p role="status" className={product.readingReviewConfirmed ? "text-xs text-muted-foreground" : "text-xs font-semibold"}>{product.readingReviewConfirmed ? "照合確認済み。候補は確認の記録として残します。" : "この確認が済むまで、発注用のコピー・追加は利用できません。"}</p>
-                  </section> : null}
-
-                  <fieldset className="mb-4 w-full space-y-2 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-800 dark:bg-indigo-950/30">
-                    <legend className="px-1 text-sm font-bold">{product.product_code} の数量の使い方</legend>
-                    {([ ["memo", "メモの数量を使う（予備分を確認）"], ["pattern", "柄合わせを考慮して計算する"] ] as const).map(([mode, label]) => (
-                      <label key={mode} className="flex min-h-11 items-center gap-2 text-sm">
-                        <input type="radio" name={`${product.product_code}-order-mode`} value={mode} checked={product.order_mode === mode} onChange={() => handleOrderModeChange(product, mode)} />
-                        {label}
-                      </label>
-                    ))}
-                    {product.order_mode === "memo" ? <label className="block pt-2 text-sm">予備分の扱い
-                      <select aria-label={`${product.product_code} の予備分の扱い`} className="mt-1 min-h-11 w-full rounded border bg-background p-2" value={product.memo_allowance} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], memoAllowance: event.target.value as MemoProductItem["memo_allowance"], quantityConfirmation: "", readingReviewConfirmation: "" } }))}>
-                        <option value="add">メモの数量に予備分を加える</option>
-                        <option value="included">メモは発注量まで調整済み（上乗せしない）</option>
-                      </select>
-                    </label> : null}
-                    <p className="text-sm font-semibold tabular-nums" aria-label={`${product.product_code} の数量の計算内訳`}>
-                      {product.order_mode === "memo" ? "メモ合計" : product.canConfirm ? "柄合わせ後の必要量" : "参考量（柄合わせ条件を確認）"} {product.total_m}m → {product.allowanceIncluded ? "予備分は調整済み・追加0%" : `予備分 ${product.loss_rate_percent}%`} → 自動計算 {product.automaticQuantity}m（1m単位に切り上げ）
-                    </p>
-                    {product.manualQuantityActive ? <div className="space-y-2 text-sm">
-                      <p>発注数量は手動指定 {product.order_quantity}m を保持しています。柄合わせ・予備分は再上乗せしません。</p>
-                      <Button type="button" variant="outline" className="min-h-11" onClick={() => { clearManualOrderQuantity(product.product_code); setOrderQuantityInputs(previous => ({ ...previous, [product.product_code]: undefined })); }}>自動計算の数量に戻す</Button>
-                    </div> : null}
-                    <p className="text-xs text-muted-foreground">メモに柄合わせや予備分が含まれるか不明なときは職人さんに確認してください。</p>
-                    {product.order_mode === "memo" || basicView ? <label className="flex min-h-11 items-start gap-2 py-2 text-sm">
-                      <input type="checkbox" className="mt-1" aria-label={`${product.product_code} のメモと発注数量を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.canConfirm} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.confirmationFingerprint : "" } }))} />
-                      元メモ・写真と照合し、必要な柄合わせ・切り代・予備分と発注数量を確認しました（変更すると再確認）
-                    </label> : null}
-                    <p role="status" className={`text-sm ${orderCheckColor(product.orderReady, basicView)}`}>{orderCheckMessage(product, basicView)}</p>
-                  </fieldset>
-
                     <div className="grid w-full gap-2 self-start sm:w-[25rem] sm:self-auto">
                       <div className="grid w-full grid-cols-[4.5rem_2.75rem_minmax(4.25rem,1fr)_1.5rem_2.75rem] items-center gap-2 rounded-xl border border-black/5 bg-black/5 p-1.5 dark:bg-white/5 sm:grid-cols-[5rem_2.75rem_minmax(5rem,1fr)_1.75rem_2.75rem]">
                         <span className="pl-2 text-[10px] font-medium opacity-60 sm:text-xs">予備分</span>
@@ -1182,6 +1101,54 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         </span>
                       </div>
                     </div>
+                  {product.readingReviews.length ? <section aria-label={`${product.product_code} の訂正・取消の確認`} className="mb-3 w-full space-y-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
+                    <p className="flex items-center gap-2 font-bold"><AlertTriangle className="h-4 w-4 shrink-0" />訂正・取消を確認</p>
+                    <details aria-label={`${product.product_code} の読み取り詳細`}>
+                      <summary className="min-h-8 cursor-pointer text-xs font-medium">読み取りの詳細を表示</summary>
+                      <div className="mt-2 space-y-2 break-words text-xs">{compactReadingReviews(product.readingReviews).map((review, index) => <div key={index}>
+                        <p>{review.reason}</p>
+                        {review.candidate_formulas.length ? <ul className="list-inside list-disc font-semibold">{review.candidate_formulas.map(formula => <li key={formula}>{formula}</li>)}</ul> : <p>訂正箇所を原画像で確認してください。</p>}
+                      </div>)}</div>
+                      <p className="mt-2 text-xs">候補は自動加算していません。有効な値は明細に反映してください。</p>
+                    </details>
+                    {privatePhotoJobId && readingReviewImageIndexes(product).length ? <div className="flex flex-wrap gap-2">{readingReviewImageIndexes(product).map(index => <Button key={index} type="button" variant="outline" className="min-h-11 bg-background" aria-label={`${product.product_code} の訂正候補の写真 ${index + 1}を確認`} onClick={() => { setPhotoError(false); setPhotoIndex(index); }}>原画像 {index + 1}を確認</Button>)}</div> : <p className="text-xs">お手元の元写真と照合してください。</p>}
+                    <label className="flex min-h-11 items-center gap-2 text-xs">
+                      <input type="checkbox" aria-label={`${product.product_code} の訂正・取消を確認済みにする`} checked={product.readingReviewConfirmed} disabled={!product.canConfirmReadingReview} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], readingReviewConfirmation: event.target.checked ? product.readingReviewFingerprint : "", quantityConfirmation: "" } }))} />
+                      原画像と訂正・取消を照合した（変更時は再確認）
+                    </label>
+                    <p role="status" className="text-xs">{product.readingReviewConfirmed ? "照合確認済み" : "確認するまでコピー・追加できません。"}</p>
+                  </section> : null}
+
+                  <fieldset className="mb-3 w-full space-y-2 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-800 dark:bg-indigo-950/30">
+                    <legend className="px-1 text-sm font-bold">数量・リピート</legend>
+                    <div className="flex min-h-11 items-center justify-between gap-2 text-sm">
+                      <span>リピート計算{product.order_mode === "pattern" && !product.rActive ? "（一部の行）" : ""}</span>
+                      <button type="button" role="switch" aria-checked={product.rActive} aria-label={`${product.product_code} の一括リピート計算`} onClick={() => handleToggleMasterRepeat(product.product_code, product.rActive, product.derivedEntries.length)} className={`flex min-h-11 items-center gap-2 rounded-lg px-2 text-xs ${product.rActive ? "text-indigo-700" : "text-muted-foreground"}`}>
+                        全行に適用<span className={`flex h-6 w-11 items-center rounded-full p-1 ${product.rActive ? "bg-indigo-600" : "bg-zinc-300"}`}><span className={`h-4 w-4 rounded-full bg-white transition-transform ${product.rActive ? "translate-x-5" : ""}`} /></span>
+                      </button>
+                    </div>
+                    {product.order_mode === "memo" ? <label className="block pt-2 text-sm">予備分の扱い
+                      <select aria-label={`${product.product_code} の予備分の扱い`} className="mt-1 min-h-11 w-full rounded border bg-background p-2" value={product.memo_allowance} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], memoAllowance: event.target.value as MemoProductItem["memo_allowance"], quantityConfirmation: "", readingReviewConfirmation: "" } }))}>
+                        <option value="add">メモの数量に予備分を加える</option>
+                        <option value="included">メモは発注量まで調整済み（上乗せしない）</option>
+                      </select>
+                    </label> : null}
+                    <p className="text-sm font-semibold tabular-nums" aria-label={`${product.product_code} の数量の計算内訳`}>
+                      {product.order_mode === "memo" ? "メモ合計" : product.canConfirm ? "柄合わせ後の必要量" : "参考量（柄合わせ条件を確認）"} {product.total_m}m → {product.allowanceIncluded ? "予備分は調整済み・追加0%" : `予備分 ${product.loss_rate_percent}%`} → 自動計算 {product.automaticQuantity}m（1m単位に切り上げ）
+                    </p>
+                    {product.manualQuantityActive ? <div className="space-y-2 text-sm">
+                      <p>発注数量は手動指定 {product.order_quantity}m を保持しています。柄合わせ・予備分は再上乗せしません。</p>
+                      <Button type="button" variant="outline" className="min-h-11" onClick={() => { clearManualOrderQuantity(product.product_code); setOrderQuantityInputs(previous => ({ ...previous, [product.product_code]: undefined })); }}>自動計算の数量に戻す</Button>
+                    </div> : null}
+                    <details><summary className="cursor-pointer text-xs text-muted-foreground">計算・予備分の説明</summary><p className="mt-2 text-xs">メモに柄合わせや予備分が含まれるか不明なときは職人さんに確認してください。</p></details>
+                    {product.order_mode === "memo" || basicView ? <label className="flex min-h-11 items-start gap-2 py-2 text-sm">
+                      <input type="checkbox" className="mt-1" aria-label={`${product.product_code} のメモと発注数量を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.canConfirm} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.confirmationFingerprint : "" } }))} />
+                      元メモと発注数量を確認した（変更時は再確認）
+                    </label> : null}
+                    <details className={`text-xs ${orderCheckColor(product.orderReady, basicView)}`}><summary className="cursor-pointer">{shortOrderStatus(product)}</summary><p role="status" className="mt-2">{orderCheckMessage(product, basicView)}</p></details>
+                  </fieldset>
+
+
                   </div>
 
                   <div className="mb-6 grid grid-cols-1 gap-2.5 md:grid-cols-2 md:gap-3">
@@ -1225,14 +1192,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         {product.rActive && product.override_active && product.comparison.strict.status === "calculated" && (
                            <Badge variant="default" className="text-[10px] px-2 py-0 bg-indigo-600 hover:bg-indigo-700 shadow border-none">適用中</Badge>
                         )}
-                        <button
-                          type="button" role="switch" aria-checked={product.rActive}
-                          aria-label={`${product.product_code} の一括リピート計算`}
-                          onClick={() => handleToggleMasterRepeat(product.product_code, product.rActive, product.derivedEntries?.length || 0)}
-                          className={`w-[34px] h-[20px] flex items-center rounded-full p-[2px] transition-colors ${product.rActive ? 'bg-indigo-600' : 'bg-black/20 dark:bg-white/20'}`}
-                        >
-                          <div className={`bg-white w-4 h-4 rounded-full shadow-sm transform transition-transform ${product.rActive ? 'translate-x-[14px]' : ''}`} />
-                        </button>
+
                       </div>
                     </div>
                     
@@ -1337,17 +1297,18 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                               {sourceJobId && Number.isInteger(e.source_image_index) ? <Button type="button" variant="outline" className="h-8 text-xs" aria-label={`${product.product_code} 明細${eidx + 1}の写真を確認`} onClick={() => { setPhotoError(false); setPhotoIndex(e.source_image_index); }}>写真{e.source_image_index + 1}・明細{e.source_entry_index + 1}を確認</Button> : null}
                               <div className="flex w-full min-w-0 items-center justify-between gap-1 sm:gap-2">
                                 <div className="flex min-w-0 flex-1 items-center gap-1 sm:gap-2">
-                                  {product.order_mode === "pattern" ? <button
+                                  {<button
                                     type="button"
                                     onClick={() => handleToggleEntryRepeat(product.product_code, eidx)}
                                     className="-ml-1 flex shrink-0 items-center justify-center p-1.5 sm:m-0 sm:p-0"
                                     title="この行にリピート計算を適用する"
                                     aria-pressed={e.isRepeatActive}
+                                    aria-label={`${product.product_code} ${eidx + 1}行目のリピート計算`}
                                   >
                                     <span className={`flex h-3.5 w-6 items-center rounded-full p-px transition-colors ${e.isRepeatActive ? 'bg-indigo-600' : 'bg-black/20 dark:bg-white/20'}`}>
                                       <span className={`h-2.5 w-2.5 rounded-full bg-white shadow-sm transition-transform ${e.isRepeatActive ? 'translate-x-[10px]' : ''}`} />
                                     </span>
-                                  </button> : null}
+                                  </button>}
 
                                   <div 
                                     className="flex w-full min-w-0"

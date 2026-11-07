@@ -95,15 +95,15 @@ test("unproven old pending completion is quarantined without sending LINE", asyn
   assert.equal(updates[0].notification_status, "legacy_unknown");
 });
 
-test("existing automatic order lists remain for clean OCR while correction evidence uses the existing review gate", async () => {
+test("automatic order lists retain quantities and label uncertain products without suppressing the list", async () => {
   const savedFetch = global.fetch, savedToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   process.env.LINE_CHANNEL_ACCESS_TOKEN = "synthetic-token";
   const item = { product_code: "ANON-A", manufacturer: "Synthetic", entries: [{ original_formula: "20×1", length_m: 20, quantity: 1, subtotal_m: 20 }], total_m: 20, order_quantity: 23 };
   const variants = [
     { item, expectedMessages: 2 },
-    { item: { ...item, notes: "1.00 x 12 は取り消し線があるため除外しました。", needs_review: false }, expectedMessages: 1 },
-    { item: { ...item, reading_reviews: [{ reason: "訂正候補を確認", candidate_formulas: ["1.00×12"] }] }, expectedMessages: 1 },
-    { item: { ...item, needs_review: true }, expectedMessages: 1 },
+    { item: { ...item, notes: "1.00 x 12 は取り消し線があるため除外しました。", needs_review: false }, expectedMessages: 2 },
+    { item: { ...item, reading_reviews: [{ reason: "訂正候補を確認", candidate_formulas: ["1.00×12"] }] }, expectedMessages: 2 },
+    { item: { ...item, needs_review: true }, expectedMessages: 2 },
   ];
   try {
     for (const variant of variants) {
@@ -156,7 +156,7 @@ test("expired lease resumes once, fences a late worker, and never duplicates the
     const url = new URL(String(input));
     const json = (data: unknown) => new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
     const body = init?.body ? JSON.parse(String(init.body)) : {};
-    if (url.hostname === "api.line.me") { notifications++; assert.equal(body.messages.length, 1); return json({}); }
+    if (url.hostname === "api.line.me") { notifications++; assert.equal(body.messages.length, 2); assert.match(body.messages[1].text,/要確認・参考値/); return json({}); }
     if (url.pathname.includes("/storage/")) return new Response(new Uint8Array([255,216,255,217]), { headers: { "Content-Type": "image/jpeg" } });
     if (url.pathname.endsWith("/claim_analysis_image")) {
       if (image.status === "done" || (image.status === "running" && !expired)) return json([]);
