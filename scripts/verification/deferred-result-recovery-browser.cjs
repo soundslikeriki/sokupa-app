@@ -1,3 +1,4 @@
+const workspace = require('./result-workspace-helpers.cjs');
 // Synthetic fixtures only. Every request outside the local app is aborted.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
@@ -51,8 +52,8 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
       return route.continue();
     });
     const read = () => page.evaluate(key => JSON.parse(localStorage.getItem(key)), key);
-    const upload = async () => { const png = await page.evaluate(() => { const canvas = document.createElement('canvas'); canvas.width = canvas.height = 4; return canvas.toDataURL('image/png').split(',')[1]; }); await page.locator('input[type=file]').setInputFiles({ name: 'next.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') }); await page.getByAltText('プレビュー 1', { exact: true }).waitFor(); };
-    await page.goto(base); await page.getByLabel('B-CODE の発注数量を入力', { exact: true }).waitFor();
+    const upload = async () => { const png = await page.evaluate(() => { const canvas = document.createElement('canvas'); canvas.width = canvas.height = 4; return canvas.toDataURL('image/png').split(',')[1]; }); await workspace.disclosure(page, '画像・現場名'); await page.locator('input[type=file]').setInputFiles({ name: 'next.png', mimeType: 'image/png', buffer: Buffer.from(png, 'base64') }); await page.getByAltText('プレビュー 1', { exact: true }).waitFor(); };
+    await page.goto(base); await workspace.edit(page, 'B-CODE'); await page.getByLabel('B-CODE の発注数量を入力', { exact: true }).waitFor();
     return { context, page, state, read, upload };
   }
   try {
@@ -66,10 +67,10 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
       state.remoteSeen = state.accepted = true;
       await page.getByText('Server A: LINE受付済み', { exact: true }).waitFor();
       assert.equal(await page.evaluate(k => localStorage.getItem(k), pointer), a); assert.equal((await f.read()).parsed.items[0].order_quantity, 46); checks++;
-      state.detailReady = false; await page.reload(); await page.getByText(/^退避した下書きを確認/).click();
+      state.detailReady = false; await page.reload(); await workspace.mode(page, '実寸計測'); await page.getByText(/^退避した下書きを確認/).click();
       await page.getByRole('button', { name: /「Server A」を復元/ }).first().click();
-      await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor();
-      assert.equal((await f.read()).resultJobId, a); assert.ok(state.seenA > 0); checks++;
+      await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor();
+      assert.equal((await f.read()).resultJobId, a); assert.ok(state.seenA > 0); assert.equal(await page.getByRole('tab',{name:'数量',exact:true}).isVisible(),true); checks++;
       assert.ok(await page.evaluate(({ key, b }) => Object.keys(localStorage).filter(k => k.startsWith(key + ':recovery:')).some(k => { const d = JSON.parse(localStorage.getItem(k)); return d.resultJobId === b && d.parsed.items[0].order_quantity === 46; }), { key, b })); checks++;
       await f.context.close();
     }
@@ -80,8 +81,8 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
       state.accepted = true; await page.getByText('Server A: LINE受付済み', { exact: true }).waitFor();
       assert.equal(await page.evaluate(k => localStorage.getItem(k), pointer), a); checks++;
       await page.reload(); await page.getByText('別の解析結果があります', { exact: true }).waitFor();
-      await page.getByRole('button', { name: '今の下書きを退避して別の結果を開く', exact: true }).click();
-      await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor(); assert.equal((await f.read()).resultJobId, a); checks++;
+      await workspace.mode(page, '発注リスト'); await page.getByRole('button', { name: '今の下書きを退避して別の結果を開く', exact: true }).click();
+      await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor(); assert.equal((await f.read()).resultJobId, a); checks++;
       await f.context.close();
     }
     // Failed new admission resumes the suspended old result read, without a reload.
@@ -107,16 +108,16 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
       await page.getByText('解析を受け付けました', { exact: true }).waitFor();
       assert.equal(await page.evaluate(k => localStorage.getItem(k), pointer), c); assert.equal(await page.evaluate(k => localStorage.getItem(k), cachedA), null); checks++;
       state.remoteSeen = state.accepted = state.doneC = true;
-      await page.getByLabel('C-CODE の発注数量を入力', { exact: true }).waitFor();
-      await page.reload(); await page.getByLabel('C-CODE の発注数量を入力', { exact: true }).waitFor();
-      await page.getByRole('button', { name: '保存済みの解析結果を探す', exact: true }).click();
+      await workspace.edit(page, 'C-CODE'); await page.getByLabel('C-CODE の発注数量を入力', { exact: true }).waitFor();
+      await page.reload(); await workspace.edit(page, 'C-CODE'); await page.getByLabel('C-CODE の発注数量を入力', { exact: true }).waitFor();
+      await workspace.disclosure(page, '保存済みの結果を開く'); await page.getByRole('button', { name: '保存済みの解析結果を探す', exact: true }).click();
       await page.getByText('保存済みの解析結果を取得できませんでした。', { exact: false }).waitFor(); assert.equal((await f.read()).resultJobId, c); checks++;
-      await page.getByRole('button', { name: '保存済みの解析結果を探す', exact: true }).click();
+      await workspace.disclosure(page, '保存済みの結果を開く'); await page.getByRole('button', { name: '保存済みの解析結果を探す', exact: true }).click();
       await page.getByRole('button', { name: 'さらに前の結果を探す', exact: true }).click();
       await page.getByRole('button', { name: '保存済み「Server A」の結果を確認', exact: true }).click();
       await page.getByText('別の解析結果があります', { exact: true }).waitFor(); assert.equal((await f.read()).resultJobId, c); assert.equal(state.seenA, 0); checks++;
       await page.getByRole('button', { name: '今の下書きを退避して別の結果を開く', exact: true }).click();
-      await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor(); assert.equal((await f.read()).resultJobId, a); assert.ok(state.historyReads >= 3); checks++;
+      await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor(); assert.equal((await f.read()).resultJobId, a); assert.ok(state.historyReads >= 3); checks++;
       assert.ok(await page.evaluate(({ key, c }) => Object.keys(localStorage).filter(k => k.startsWith(key + ':recovery:')).some(k => JSON.parse(localStorage.getItem(k)).resultJobId === c), { key, c })); checks++;
       await f.context.close();
     }

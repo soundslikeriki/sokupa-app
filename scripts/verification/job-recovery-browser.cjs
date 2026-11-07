@@ -1,3 +1,4 @@
+const workspace = require('./result-workspace-helpers.cjs');
 // Synthetic API fixtures; all non-localhost requests blocked.
 const{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),assert=require('node:assert/strict');
 const base=process.env.SOKUPA_TEST_URL||'http://127.0.0.1:3317',user='synthetic-user',id='00000000-0000-4000-8000-000000000001',pointer=`sokupa:lastJobId:${user}`;
@@ -32,7 +33,7 @@ const item={product_code:'VS2067',manufacturer:'Synthetic',entries:[{original_fo
     throw Error('Unexpected API '+url.pathname);
    });
    await sample.context.addInitScript(({key,id})=>{if(!sessionStorage.getItem('pointer-set')){localStorage.setItem(key,id);sessionStorage.setItem('pointer-set','true');}},{key:pointer,id});
-   await sample.page.goto(base);await sample.page.getByLabel('VS2067 の発注数量を入力',{exact:true}).waitFor();
+   await sample.page.goto(base);await workspace.edit(sample.page, 'VS2067'); await sample.page.getByLabel('VS2067 の発注数量を入力',{exact:true}).waitFor();
    await sample.page.getByText('LINE通知を再確認しています。',{exact:false}).waitFor();assert.equal(await sample.page.evaluate(k=>localStorage.getItem(k),pointer),id);checks++;
    // A repeated failed-notification poll must not overwrite edits already shown to the user.
    await sample.page.getByTitle('タップして式を編集').click();await sample.page.getByLabel('VS2067 1行目の幅数',{exact:true}).fill('2');

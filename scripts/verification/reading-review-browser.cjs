@@ -1,3 +1,4 @@
+const workspace = require('./result-workspace-helpers.cjs');
 // Correction/cancellation review gate. Anonymous structured fixtures, synthetic private photos only.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
@@ -5,7 +6,7 @@ const full = process.env.SOKUPA_TEST_URL || 'http://127.0.0.1:3323';
 const basic = process.env.SOKUPA_BASIC_URL || 'http://127.0.0.1:3324';
 for (const origin of [full, basic]) assert.equal(new URL(origin).hostname, '127.0.0.1');
 const job = '00000000-0000-4000-8000-00000000000a';
-const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=', 'base64');
 let checks = 0;
 const check = (value, label) => { assert.ok(value, label); checks++; if (process.env.SOKUPA_TEST_PROGRESS) console.log(`PASS ${checks}: ${label}`); };
 const until = async fn => { for (let n = 0; n < 300; n++) { if (await fn()) return; await new Promise(resolve => setTimeout(resolve, 50)); } throw Error('Correction-review condition timed out'); };
@@ -62,32 +63,33 @@ const fixture = (mode, legacy, included) => {
       const saved = () => until(() => page.getByLabel('結果の保存状態').innerText().then(text => text.includes('保存済み')));
       const review = () => page.getByLabel('REVIEW の訂正・取消を確認済みにする', { exact: true });
       const general = () => page.getByLabel(view === 'full' && mode === 'pattern' ? 'REVIEW の必要量の前提を確認済みにする' : 'REVIEW のメモと発注数量を確認済みにする', { exact: true });
-      const copy = () => page.getByRole('button', { name: '発注用テキストをコピー', exact: true });
-      const bulk = () => page.getByRole('button', { name: 'すべて発注リストへ追加（2品番）', exact: true });
-      const region = () => page.getByRole('region', { name: 'REVIEW の訂正・取消の確認', exact: true });
-      await page.goto(base); await review().waitFor(); await saved();
-      for (const code of ['REVIEW','SAFE']) { const detail=page.locator(`details[aria-label="${code} の読み取り詳細"]`); if(await detail.count()) await detail.locator('summary').click(); }
+      const copy = () => page.getByRole('button', { name: '発注用テキストをコピー', exact: true, includeHidden: true });
+      const bulk = () => page.getByRole('button', { name: 'すべて発注リストへ追加（2品番）', exact: true, includeHidden: true });
+      const region = () => page.getByRole('region', { name: 'REVIEW の訂正・取消の確認', exact: true, includeHidden: true });
+      await page.goto(base); await workspace.edit(page, 'REVIEW'); await review().waitFor(); await saved();
+      for (const code of ['REVIEW','SAFE']) { await workspace.edit(page, code); const detail=page.locator(`details[aria-label="${code} の読み取り詳細"]`); if(await detail.count()) await detail.locator('summary').click(); }
       if (mixedGlobal || globalNotesOnly) {
-        for (const code of ['REVIEW', 'SAFE']) {
+        for (const code of ['REVIEW', 'SAFE']) { await workspace.edit(page, code);
           const warning = page.getByRole('region', { name: `${code} の訂正・取消の確認`, exact: true });
           check((await warning.innerText()).includes('3×4'), `${view}: global exclusion evidence reaches ${code}`);
           check(await page.getByLabel(`${code} のメモと発注数量を確認済みにする`, { exact: true }).isDisabled(), 'global warning requires a dedicated acknowledgement for each item');
         }
-        if (mixedGlobal) check((await region().innerText()).includes('品番を書き直した') && !(await page.getByRole('region', { name: 'SAFE の訂正・取消の確認', exact: true }).innerText()).includes('品番を書き直した'), 'an unrelated local warning cannot hide or mis-scope the global exclusion');
+        if (mixedGlobal) check((await region().innerText()).includes('品番を書き直した') && !(await page.getByRole('region', { name: 'SAFE の訂正・取消の確認', exact: true, includeHidden: true }).innerText()).includes('品番を書き直した'), 'an unrelated local warning cannot hide or mis-scope the global exclusion');
         check(await copy().isDisabled() && await bulk().isDisabled(), 'global-only evidence blocks all calculated output');
         check((await item()).entries.length === 1 && (await item()).order_quantity === 6, 'a global candidate is not automatically added');
         await until(() => read().then(value => value.parsed.items.every(entry => entry.reading_reviews?.some(review => review.candidate_formulas.includes('3×4'))))); await saved();
-        await page.reload(); await review().waitFor();
+        await page.reload(); await workspace.edit(page, 'REVIEW'); await review().waitFor();
         check(await general().isDisabled() && await copy().isDisabled(), 'legacy global notes remain gated after normalization and reload');
         check((await read()).originalParsed.notes.includes('3×4'), 'original global notes remain unchanged');
         await context.close(); continue;
       }
+      await workspace.edit(page, 'REVIEW');
       if (view === 'basic') await page.getByText('基本表示中です。', { exact: false }).waitFor();
       check((await region().getAttribute('class')).includes('amber'), `${view}/${mode}: dedicated amber warning`);
       check((await region().innerText()).includes('1.5×3'), 'candidate formula remains visible');
       if (!legacy) check(await region().locator('b').count() === 0 && (await region().innerText()).includes('<b>原画像を照合</b>'), 'OCR reason is escaped React text');
       check((await item()).entries.length === (included ? 2 : 1) && (await item()).total_m === (included ? 9.3 : 4.8), 'candidate is never automatically added, including an already-present row');
-      await page.getByLabel('SAFE のメモと発注数量を確認済みにする', { exact: true }).check();
+      await workspace.edit(page, 'SAFE'); await page.getByLabel('SAFE のメモと発注数量を確認済みにする', { exact: true }).check(); await workspace.edit(page, 'REVIEW');
       check(await general().isDisabled() && await copy().isDisabled() && await bulk().isDisabled(), 'general acknowledgement cannot authorize an unresolved correction');
       check(await page.getByRole('button', { name: '発注リストに追加', exact: true }).first().isDisabled(), 'individual transfer uses the same correction gate');
       await page.getByLabel('REVIEW の詳細を省略', { exact: true }).click();
@@ -98,7 +100,7 @@ const fixture = (mode, legacy, included) => {
       await page.getByAltText(`解析元の写真 ${photoIndex + 1}`, { exact: true }).waitFor();
       check(photos.includes(photoIndex), 'candidate source index or entry-source fallback uses the private photo route');
       if (view === 'basic') check(await page.getByRole('button', { name: 'REVIEW 明細1の写真を確認', exact: true }).count() === 0, 'basic exposes only the necessary correction photo, not optional row-photo UI');
-      await page.getByRole('button', { name: '写真を閉じる', exact: true }).click();
+      await page.getByRole('button', { name: '編集に戻る', exact: true }).click();
       if (process.env.SOKUPA_REVIEW_SCREENSHOT && view === 'full' && mode === 'memo' && !included) await region().screenshot({ path: process.env.SOKUPA_REVIEW_SCREENSHOT });
       if (!included) {
         await page.getByLabel('REVIEW に追加する長さ (m)', { exact: true }).fill('1.5');
@@ -116,10 +118,10 @@ const fixture = (mode, legacy, included) => {
       await general().check(); await until(() => item().then(value => Boolean(value.reading_review_confirmation && value.quantity_confirmation))); await saved();
       check(await copy().isEnabled() && await bulk().isEnabled(), 'both acknowledgements release all calculated output');
       const finalQuantity = included ? 11 : 13;
-      await copy().click(); check((await page.evaluate(() => window.copied.at(-1))).includes(`品番：REVIEW / 数量：${finalQuantity}m`), 'copy includes the reviewed corrected quantity exactly once');
+      await workspace.copy(page); check((await page.evaluate(() => window.copied.at(-1))).includes(`品番：REVIEW / 数量：${finalQuantity}m`), 'copy includes the reviewed corrected quantity exactly once');
       check((await item()).reading_reviews[0].candidate_formulas.includes('1.5×3'), 'candidate evidence is retained after confirmation');
       const snapshot = (await item()).reading_review_confirmation;
-      await page.reload(); await review().waitFor(); await saved();
+      await page.reload(); await workspace.edit(page, 'REVIEW'); await review().waitFor(); await saved();
       check(await review().isChecked() && await general().isChecked() && await copy().isEnabled(), 'both acknowledgements restore after reload');
       check((await item()).reading_review_confirmation === snapshot && (await item()).reading_reviews.some(review => review.candidate_formulas.includes('1.5×3')), 'reload keeps the review fingerprint and candidate record');
       await page.locator('details[aria-label="REVIEW の読み取り詳細"]').locator('summary').click();
@@ -127,12 +129,12 @@ const fixture = (mode, legacy, included) => {
       await page.getByRole('button', { name: '発注リストに追加', exact: true }).first().click();
       await until(() => read().then(value => value.orderDraftItems.length === 1));
       check((await read()).orderDraftItems[0].quantity === finalQuantity, 'individual draft transfer does not apply the candidate or reserve twice');
-      await page.getByRole('tab').first().click(); await bulk().click();
+      await workspace.mode(page, 'メモ計測'); await workspace.edit(page); await workspace.view(page, '数量'); await bulk().click();
       await page.getByText('REVIEW はすでに発注リストにあります', { exact: true }).waitFor();
       await page.getByRole('button', { name: '別項目で追加', exact: true }).click();
       await until(() => read().then(value => value.orderDraftItems.length === 3));
       check((await read()).orderDraftItems.map(value => value.quantity).join(',') === `${finalQuantity},${finalQuantity},3`, 'bulk transfer uses the same reviewed final quantities');
-      await page.getByRole('tab').first().click();
+      await workspace.mode(page, 'メモ計測'); await workspace.edit(page);
       await page.getByLabel('REVIEW の発注数量を入力', { exact: true }).fill(String(finalQuantity + 1));
       await until(() => item().then(value => value.reading_review_confirmation === '' && value.quantity_confirmation === '')); await saved();
       check(!(await review().isChecked()) && await general().isDisabled() && await copy().isDisabled() && await bulk().isDisabled(), 'later final-quantity edits invalidate both acknowledgements and every output gate');

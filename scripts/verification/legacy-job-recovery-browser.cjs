@@ -1,3 +1,4 @@
+const workspace = require('./result-workspace-helpers.cjs');
 // Old unfinished work must never be replayed automatically or lock a fresh analysis.
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),assert=require('node:assert/strict');
 const base=process.env.SOKUPA_TEST_URL||'http://127.0.0.1:3317',user='synthetic-legacy-owner',old='00000000-0000-4000-8000-000000000001',fresh='00000000-0000-4000-8000-000000000002';
@@ -19,10 +20,10 @@ const pointer=`sokupa:lastJobId:${user}`;
   });
   await page.goto(base);await page.getByText('以前の未完了解析は保存されています。',{exact:false}).waitFor();assert.equal(resumeOld,0);checks++;
   const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=32;return c.toDataURL('image/png').split(',')[1];});
-  await page.locator('input[type=file]').setInputFiles({name:'new.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await page.getByAltText('プレビュー 1',{exact:true}).waitFor();
+  await workspace.disclosure(page, '画像・現場名'); await page.locator('input[type=file]').setInputFiles({name:'new.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await page.getByAltText('プレビュー 1',{exact:true}).waitFor();
   const button=page.getByRole('button',{name:'1枚の画像を解析する',exact:true});assert.equal(await button.isEnabled(),true);checks++;
   await button.click();await page.getByText('解析を受け付けました',{exact:true}).waitFor();assert.ok(created);assert.equal(await page.evaluate(k=>localStorage.getItem(k),pointer),fresh);assert.equal(resumeOld,0);checks++;
-  done=true;await page.getByLabel('FRESH の発注数量を入力',{exact:true}).waitFor();assert.equal(await page.getByLabel('FRESH の発注数量を入力',{exact:true}).inputValue(),'23');assert.equal(resumeOld,0);checks++;
+  done=true;await workspace.edit(page, 'FRESH'); await page.getByLabel('FRESH の発注数量を入力',{exact:true}).waitFor();assert.equal(await page.getByLabel('FRESH の発注数量を入力',{exact:true}).inputValue(),'23');assert.equal(resumeOld,0);checks++;
   await context.close();
  }
  console.log(`PASS: ${checks} legacy-job browser checks; no old replay, rolling metadata, fresh intake and completion; no external requests.`);

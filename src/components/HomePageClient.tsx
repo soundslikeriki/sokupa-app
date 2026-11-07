@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Calculator, CheckCircle2, ClipboardList, Loader2, Ruler, Upload, X } from "lucide-react";
+import { CheckCircle2, Loader2, Upload, X } from "lucide-react";
 
+import { WorkspaceModeMenu, type CalculationMode } from "@/components/WorkspaceModeMenu";
 import { AreaCalculator } from "@/components/AreaCalculator";
 import { OrderDraftList, type PendingOrderDraftDuplicate } from "@/components/OrderDraftList";
 import { OrderList } from "@/components/OrderList";
@@ -21,7 +22,6 @@ import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, 
 import { workspaceFingerprint, readReplacementConsent, writeReplacementConsent, forgetReplacementConsent, type ReplacementConsent } from "@/lib/replacement-consent";
 import { withWorkspaceLock, saveLatestWorkspaceSnapshot, restoreLatestWorkspaceSnapshot, rebuildLatestWorkspaceSnapshot } from "@/lib/latest-workspace";
 import { notificationRetryable, analysisBlocksIntake, mergeNotificationWatch, forgetJobPointerIfMatches, needsAnalysisRestoration, type NotificationWatch } from "@/lib/notification-watch";
-import { APP_FORMAL_NAME, APP_PRODUCT_NAME } from "@/lib/appMetadata";
 import { compressImageForUpload, convertAndResizeForPreview } from "@/lib/resizeImage";
 
 type ProcessedImage = {
@@ -37,7 +37,6 @@ import type { OrderDraftItem, OrderDraftItemInput, ParsedMemoPayload } from "@/t
 
 type HistoryJob = { id: string; site_name: string | null; created_at: string; notification_status: string };
 
-type CalculationMode = "dimensions" | "area" | "order-draft";
 
 function describeMemo(memo: ParsedMemoPayload | null): string {
   if (!memo?.items.length) return "解析結果なし";
@@ -191,9 +190,13 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const [historyJobs, setHistoryJobs] = useState<HistoryJob[] | null>(null);
   const [historyNext, setHistoryNext] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const historyPanelRef = useRef<HTMLDetailsElement>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [resultRetentionError, setResultRetentionError] = useState<string | null>(null);
+  useEffect(() => { if ((historyError || resultRetentionError) && historyPanelRef.current) historyPanelRef.current.open = true; }, [historyError, resultRetentionError]);
   const [resultJobId, setResultJobId] = useState<string | null>(null);
+  const [memoInputOpen, setMemoInputOpen] = useState(false);
+  const hasResult = Boolean(parsed?.items.length);
   const [calculationMode, setCalculationMode] = useState<CalculationMode>("dimensions");
   const [areaCalculatorMounted, setAreaCalculatorMounted] = useState(false);
   const [orderDraftItems, setOrderDraftItems] = useState<OrderDraftItem[]>([]);
@@ -334,7 +337,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           appliedJobRef.current = draft.parsed ? draft.resultJobId ?? null : null;
           setResultJobId(appliedJobRef.current);
           setSiteName(typeof draft.siteName === "string" ? draft.siteName : "");
-          setParsed(draft.parsed);
+          setMemoInputOpen(false); setParsed(draft.parsed);
           setOriginalParsed(draft.originalParsed ?? draft.parsed);
           setOrderDraftItems(draft.orderDraftItems);
         }
@@ -394,7 +397,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     persistedWorkspaceRef.current = switched.raw; currentWorkspaceRef.current = next;
     appliedJobRef.current = next.parsed ? next.resultJobId ?? null : null; restoredDraftRef.current = next;
     setSiteName(next.siteName); setParsed(next.parsed); setOriginalParsed(next.originalParsed ?? next.parsed);
-    setOrderDraftItems(next.orderDraftItems); setResultJobId(next.resultJobId ?? null);
+    setOrderDraftItems(next.orderDraftItems); setResultJobId(next.resultJobId ?? null); setCalculationMode("dimensions"); setMemoInputOpen(false);
     setJobAccepted(null); setJobUi(null); setError(null);
     try { setWorkspaceArchives(listWorkspaceArchives(localStorage, key)); }
     catch { setWorkspaceArchives((previous) => [...switched.archives, ...previous.filter((entry) => !switched.archives.some((saved) => saved.key === entry.key))]); }
@@ -450,6 +453,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       (f) => f.type.startsWith("image/") || /\.(heic|heif)$/i.test(f.name),
     );
     if (imageFiles.length === 0) return;
+    setMemoInputOpen(true);
 
     // 画像は最大5枚まで
     if (imageCount + imageFiles.length > 5) {
@@ -738,7 +742,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           if (!retainEdits) {
             if (acceptedReplacementRef.current?.jobId === jobId) acceptedReplacementRef.current = null;
             setSiteName(data.site_name ?? "");
-            setParsed(data.result as ParsedMemoPayload); setOriginalParsed(data.result as ParsedMemoPayload);
+            setMemoInputOpen(false); setParsed(data.result as ParsedMemoPayload); setOriginalParsed(data.result as ParsedMemoPayload);
           }
         }
       }
@@ -772,100 +776,23 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   }, [jobAccepted?.jobId, lineUserId, rememberNotification, trackNotification, analysisRecoveryEpoch, explicitSelectionEpoch]);
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-6 px-2 py-8 sm:gap-8 sm:px-4 sm:py-10 md:px-6 lg:px-8">
+    <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 px-2 py-4 sm:gap-4 sm:px-4 sm:py-6 md:px-6 lg:px-8">
       {basicView ? <p role="status" className="rounded-xl border border-amber-500/40 p-3 text-sm">基本表示中です。解析・編集・保存・発注の基本機能を使えます。数量は元メモと照合してください。</p> : null}
-      <header className="space-y-2">
-        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 sm:gap-x-3">
-          <p className="text-sm font-medium text-muted-foreground shrink-0">{APP_FORMAL_NAME}</p>
+      <header className="flex items-center justify-between gap-3">
+        <div className="min-w-0"><h1 className="text-xl font-bold">ソクパ <span className="text-xs font-normal text-muted-foreground">Sokupa</span></h1>
+          {parsed && siteName ? <p className="truncate text-xs text-muted-foreground">{siteName}</p> : null}
         </div>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground mb-2">ソクパ　- Sokupa -</h1>
-            <p className="mt-2 max-w-2xl text-muted-foreground">
-              計測メモ画像をアップロードすると、品番・計算式・実測合計を読み取り、メーカー別に整理します。発注数量は実測に
-              {DEFAULT_LOSS_RATE_PERCENT}%のロスを加えて切り上げています。
-              <span className="text-xs text-muted-foreground">（※ロス率変更可能）</span>
-            </p>
-          </div>
-          {!qaSynthetic ? <div className="shrink-0">
-            <a
-              href="https://lin.ee/Xr6sd53"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center justify-center rounded-full bg-[#06C755] px-4 py-2.5 text-sm font-bold text-white shadow-sm transition-colors hover:bg-[#05b34c]"
-            >
-              LINE通知を有効にする（友だち追加）
-            </a>
-            <p className="text-xs text-muted-foreground mt-1">※解析完了の通知を受け取るために必要です</p>
-            <p className="text-xs text-muted-foreground mt-1">※発注用テキストはアプリ上からもコピーできます</p>
-          </div> : null}
-        </div>
+        <WorkspaceModeMenu value={calculationMode} count={orderDraftItems.length} onChange={mode => {
+          if (mode === "area") setAreaCalculatorMounted(true);
+          setCalculationMode(mode);
+          window.scrollTo({ top: 0, behavior: "instant" });
+        }} />
       </header>
-
-      <div
-        role="tablist"
-        aria-label="クロス数量の計算方法"
-        className="grid grid-cols-3 gap-1 rounded-lg border border-black/5 bg-black/5 p-1 dark:border-white/5 dark:bg-white/5"
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={calculationMode === "dimensions"}
-          aria-controls="dimensions-calculator-panel"
-          className={cn(
-            "flex min-h-11 items-center justify-center gap-2 rounded-md px-2 text-xs font-bold transition-colors sm:text-sm",
-            calculationMode === "dimensions"
-              ? "bg-white text-foreground shadow-sm dark:bg-black"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-          onClick={() => setCalculationMode("dimensions")}
-        >
-          <Ruler className="h-4 w-4 shrink-0" />
-          <span className="sm:hidden">寸法計算</span>
-          <span className="hidden sm:inline">寸法から計算</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={calculationMode === "area"}
-          aria-controls="area-calculator-panel"
-          className={cn(
-            "flex min-h-11 items-center justify-center gap-2 rounded-md px-2 text-xs font-bold transition-colors sm:text-sm",
-            calculationMode === "area"
-              ? "bg-white text-foreground shadow-sm dark:bg-black"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-          onClick={() => {
-            setAreaCalculatorMounted(true);
-            setCalculationMode("area");
-          }}
-        >
-          <Calculator className="h-4 w-4 shrink-0" />
-          <span className="sm:hidden">㎡計算</span>
-          <span className="hidden sm:inline">㎡から計算</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={calculationMode === "order-draft"}
-          aria-controls="order-draft-panel"
-          className={cn(
-            "flex min-h-11 min-w-0 items-center justify-center gap-1.5 rounded-md px-1.5 text-xs font-bold transition-colors sm:gap-2 sm:px-2 sm:text-sm",
-            calculationMode === "order-draft"
-              ? "bg-white text-foreground shadow-sm dark:bg-black"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-          onClick={() => setCalculationMode("order-draft")}
-        >
-          <ClipboardList className="h-4 w-4 shrink-0" />
-          <span className="truncate">発注リスト</span>
-          {orderDraftItems.length > 0 ? (
-            <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-violet-600 px-1 text-[10px] text-white">
-              {orderDraftItems.length}
-            </span>
-          ) : null}
-        </button>
-      </div>
+      <details className="text-xs text-muted-foreground">
+        <summary className="min-h-6 cursor-pointer">使い方・LINE通知</summary>
+        <p className="mt-2">メモ画像の寸法を読み取り、必要量に予備分{DEFAULT_LOSS_RATE_PERCENT}%を加えて発注数量を計算します。予備分は変更できます。</p>
+        {!qaSynthetic ? <a href="https://lin.ee/Xr6sd53" target="_blank" rel="noopener noreferrer" className="mt-2 inline-block min-h-11 content-center font-semibold text-[#06C755]">LINE通知を有効にする（友だち追加）</a> : null}
+      </details>
 
       {orderDraftFeedback ? (
         <div
@@ -879,12 +806,15 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
 
       <section
         id="dimensions-calculator-panel"
-        role="tabpanel"
+        role="region"
+        aria-label="メモ計測"
         hidden={calculationMode !== "dimensions"}
         className="space-y-6 sm:space-y-8"
       >
 
-      <div className="space-y-8">
+      <details open={!hasResult || memoInputOpen} onToggle={event => { if (hasResult) setMemoInputOpen(event.currentTarget.open); }} className="text-sm">
+        <summary className="min-h-8 cursor-pointer font-semibold">画像・現場名{images.length ? `（選択中${images.length}枚）` : ""}</summary>
+      <div className="mt-3 space-y-5">
         <div>
           <label htmlFor={siteNameId} className="mb-1 block text-sm font-medium">
             現場名（任意）
@@ -998,6 +928,8 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           </a>
         </p> : null}
       </div>
+      </details>
+      </section>
 
       {notificationWatches.length ? (
         <Card>
@@ -1037,6 +969,8 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         </Card>
       ) : null}
 
+      <details ref={historyPanelRef} className="text-sm">
+        <summary className="min-h-8 cursor-pointer text-sm font-semibold">保存済みの結果を開く</summary>
       <Card>
         <CardHeader className="space-y-3">
           <CardTitle className="text-base">保存済みの解析結果</CardTitle>
@@ -1049,7 +983,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
             <div key={job.id} className="rounded border p-3 text-sm">
               <p>{job.site_name || "現場名なし"}（{new Date(job.created_at).toLocaleString("ja-JP")}）</p>
               <Button type="button" variant="outline" disabled={isAnalyzing || analysisBlocksIntake(jobAccepted)} aria-label={`保存済み「${job.site_name || "現場名なし"}」の結果を確認`} onClick={() => {
-                analysisSelectionVersionRef.current++; setJobUi(null); setError(null);
+                analysisSelectionVersionRef.current++; setJobUi(null); setError(null); setCalculationMode("dimensions");
                 setJobAccepted({ jobId: job.id, backgroundReady: false, status: "done" });
                 setExplicitSelectionEpoch((current) => current + 1);
               }}>結果を確認</Button>
@@ -1058,6 +992,8 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           {historyNext ? <Button type="button" variant="outline" disabled={historyLoading} onClick={() => void loadHistory(historyNext)}>さらに前の結果を探す</Button> : null}
         </CardHeader>
       </Card>
+
+      </details>
 
       {workspaceArchives.length ? (
         <Card>
@@ -1100,7 +1036,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
                 const next = latestRecoveryCandidate;
                 persistedWorkspaceRef.current = draftRecovery.raw; currentWorkspaceRef.current = next; restoredDraftRef.current = next;
                 appliedJobRef.current = next.resultJobId ?? null;
-                setSiteName(next.siteName); setParsed(next.parsed); setOriginalParsed(next.originalParsed ?? next.parsed); setOrderDraftItems(next.orderDraftItems); setResultJobId(next.resultJobId ?? null);
+                setSiteName(next.siteName); setParsed(next.parsed); setOriginalParsed(next.originalParsed ?? next.parsed); setOrderDraftItems(next.orderDraftItems); setResultJobId(next.resultJobId ?? null); setCalculationMode("dimensions"); setMemoInputOpen(false);
                 setDraftRecovery(null); setDraftReady(true); setError(null);
               } catch { setError("元データを保全できなかったため復元を止めました。書き出して保管してください。"); }
             }}>最新の保存結果から復元（元データは退避）</Button> : null}
@@ -1148,8 +1084,8 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         </Card>
       ) : null}
 
-      <p role="status" aria-label="結果の保存状態" className={`my-3 text-sm ${saveState === "error" ? "text-amber-800 dark:text-amber-300" : "text-muted-foreground"}`}>
-        {saveState === "saving" ? "最新結果と編集を保存中…" : saveState === "error" ? "保存を確認できません。内容を書き出して保管してください。" : parsed ? "最新結果と編集を端末に保存済み。次の解析が完了するまで復元できます。" : "入力内容を端末に保存済み。"}
+      <p role="status" aria-label="結果の保存状態" className={`my-1 text-xs ${saveState === "error" ? "text-amber-800 dark:text-amber-300" : "text-muted-foreground"}`}>
+        {saveState === "saving" ? "最新結果と編集を保存中…" : saveState === "error" ? "保存を確認できません。内容を書き出して保管してください。" : parsed ? "最新結果・編集を端末に保存済み" : "入力内容を端末に保存済み。"}
       </p>
       {saveState === "error" ? <div className="mb-3 flex flex-wrap gap-2">
         <Button type="button" variant="outline" onClick={() => { if (currentWorkspaceRef.current) downloadWorkspace(JSON.stringify(currentWorkspaceRef.current)); }}>保存できない現在の内容を書き出す</Button>
@@ -1166,6 +1102,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         }}>復元用保存を再作成（元の保存は退避）</Button>
       </div> : null}
       {parsed && analysisBlocksIntake(jobAccepted) ? <p className="mb-3 text-sm">前回の結果を表示しています。新しい解析はサーバー側で処理中です。</p> : null}
+      <section aria-label="メモの解析結果" hidden={calculationMode !== "dimensions"}>
       <OrderList
         key={resultJobId ?? "legacy-workspace"}
         items={parsed?.items ?? []}
@@ -1190,12 +1127,12 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       </section>
 
       {areaCalculatorMounted ? (
-        <section id="area-calculator-panel" role="tabpanel" hidden={calculationMode !== "area"}>
+        <section id="area-calculator-panel" role="region" aria-label="実寸計測（㎡から計算）" hidden={calculationMode !== "area"}>
           <AreaCalculator onAddToOrderDraft={requestAddToOrderDraft} />
         </section>
       ) : null}
 
-      <section id="order-draft-panel" role="tabpanel" hidden={calculationMode !== "order-draft"}>
+      <section id="order-draft-panel" role="region" aria-label="発注下書き" hidden={calculationMode !== "order-draft"}>
         <OrderDraftList
           items={orderDraftItems}
           siteName={siteName}

@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ListPlus } from "lucide-react";
+import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ListPlus, ImageIcon } from "lucide-react";
 import { roundMeters } from "@/lib/memo-calculation";
 import { orderModeForItem, planMemoOrder } from "@/lib/order-planning";
 import { compactReadingReviews, compactReviewReasons, shortOrderStatus } from "@/lib/order-presentation";
@@ -136,6 +136,64 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const privatePhotoJobId = sourceJobId ?? readingReviewSourceJobId;
   const [photoIndex, setPhotoIndex] = useState<number | null>(null);
   const [photoError, setPhotoError] = useState(false);
+  const currentPhotoRef = useRef("");
+  const [photoCount, setPhotoCount] = useState<number | null>(null);
+  const [photoCountError, setPhotoCountError] = useState(false);
+  const [photoRequest, setPhotoRequest] = useState(0);
+  const [resultView, setResultView] = useState<"quantity" | "edit" | "photo">("quantity");
+  const [selectedProductCode, setSelectedProductCode] = useState("");
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const resultRoot = useRef<HTMLDivElement>(null);
+  const componentId = useId();
+  const workspaceId = `${componentId}:${privatePhotoJobId ?? "legacy-workspace"}`;
+  const navId = `result-${workspaceId}`;
+  const photoKey = `${privatePhotoJobId}:${photoIndex}:${photoRequest}`;
+  useLayoutEffect(() => { currentPhotoRef.current = photoKey; }, [photoKey]);
+  const views = [{ value: "quantity", label: "数量" }, { value: "edit", label: "編集・リピート" }, { value: "photo", label: "元写真" }] as const;
+  const selectView = (view: typeof resultView, code = selectedProductCode, record = true) => {
+    if (view === resultView && code === selectedProductCode) return;
+    if (record && (view !== resultView || code !== selectedProductCode)) {
+      const previous = window.history.state ?? {};
+      if (previous.sokupaResult?.id !== workspaceId) window.history.replaceState({ ...previous, sokupaResult: { id: workspaceId, view: resultView, code: selectedProductCode } }, "");
+      window.history.pushState({ ...(window.history.state ?? {}), sokupaResult: { id: workspaceId, view, code } }, "");
+    }
+    setSelectedProductCode(code); setResultView(view);
+    window.requestAnimationFrame(() => {
+      const panel = resultRoot.current?.querySelector<HTMLElement>(`[data-result-panel="${view}"]`);
+      if (panel && panel.getClientRects().length && !document.activeElement?.matches("input,select,textarea")) { panel.focus({ preventScroll: true }); panel.scrollIntoView({ block: "start" }); }
+    });
+  };
+  const openPhoto = (index: number) => { setPhotoError(false); setPhotoIndex(index); selectView("photo"); };
+  useEffect(() => {
+    const restore = (event: PopStateEvent) => {
+      const state = event.state?.sokupaResult;
+      if (state?.id === workspaceId && ["quantity", "edit", "photo"].includes(state.view)) { setResultView(state.view); setSelectedProductCode(typeof state.code === "string" ? state.code : ""); }
+      else setResultView("quantity");
+      window.requestAnimationFrame(() => {
+        const view = state?.id === workspaceId && ["quantity", "edit", "photo"].includes(state.view) ? state.view : "quantity";
+        const panel = resultRoot.current?.querySelector<HTMLElement>(`[data-result-panel="${view}"]`);
+        if (panel?.getClientRects().length) panel.focus({ preventScroll: true });
+      });
+    };
+    window.addEventListener("popstate", restore);
+    return () => window.removeEventListener("popstate", restore);
+  }, [workspaceId]);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const resize = () => setKeyboardOpen(Boolean(viewport && window.innerHeight - viewport.height > 150));
+    resize(); viewport?.addEventListener("resize", resize);
+    return () => viewport?.removeEventListener("resize", resize);
+  }, []);
+  useEffect(() => {
+    if (resultView !== "photo" || !privatePhotoJobId || photoCount !== null) return;
+    const abort = new AbortController(); setPhotoCountError(false);
+    void fetch(`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}`, { cache: "no-store", signal: abort.signal }).then(async response => {
+      const json = await response.json(); const count = json.data?.total_images;
+      if (!response.ok || !Number.isInteger(count) || count < 1 || count > 5 || (json.data?.id && json.data.id !== privatePhotoJobId)) throw new Error("Invalid image metadata");
+      if (!abort.signal.aborted) { setPhotoCount(count); setPhotoIndex(index => index ?? 0); }
+    }).catch(() => { if (!abort.signal.aborted) setPhotoCountError(true); });
+    return () => abort.abort();
+  }, [resultView, privatePhotoJobId, photoCount, photoRequest]);
   const [rowResetError, setRowResetError] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
@@ -261,6 +319,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     const updatedItems = items.map((i) =>
       i.product_code === fromCode ? { ...i, product_code: toCode, quantity_confirmation: "", reading_review_confirmation: "" } : i,
     );
+    setSelectedProductCode(toCode);
+    setNewEntryInputs(previous => { const next = { ...previous, [toCode]: previous[fromCode] }; delete next[fromCode]; newEntryInputsRef.current = next; return next; });
     onItemsChange(updatedItems);
 
     // DBへ補正ログを保存（失敗してもUIは優先）
@@ -663,6 +723,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const groups = useMemo(() => groupByManufacturer(derivedItems), [derivedItems]);
   const reviewReasonGroups = useMemo(() => compactReviewReasons(derivedItems), [derivedItems]);
   const productCodes = useMemo(() => derivedItems.map((item) => item.product_code), [derivedItems]);
+  const activeProductCode = productCodes.includes(selectedProductCode) ? selectedProductCode : productCodes[0];
   const allCodesCollapsed = useMemo(
     () => areAllCodesCollapsed(collapsedCodes, productCodes),
     [collapsedCodes, productCodes],
@@ -722,7 +783,10 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   if (items.length === 0) return null;
 
   return (
-    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-6 duration-700">
+    <div ref={resultRoot} className="space-y-3 pb-[calc(5rem+env(safe-area-inset-bottom))] print:pb-0" onKeyDown={event => {
+      if (event.key === "Escape" && resultView !== "quantity" && !(event.target as HTMLElement).closest("input,select,textarea")) { event.preventDefault(); selectView("quantity"); }
+    }}>
+      <section id={`${navId}-quantity`} data-result-panel="quantity" role="tabpanel" aria-labelledby={`${navId}-quantity-tab`} tabIndex={-1} hidden={resultView !== "quantity"} className="scroll-mt-4 space-y-3 outline-none print:block">
       <div className="hidden print:block text-center text-black space-y-1">
         <p className="text-sm font-semibold">
           {APP_FORMAL_NAME}（{APP_PRODUCT_NAME}）— 発注・見積プレビュー
@@ -733,13 +797,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       </div>
       <Card className="border-none bg-white/70 shadow-md dark:bg-zinc-900/70">
         <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 p-3">
-          <CardTitle className="text-xl font-bold">発注リスト</CardTitle>
-          <Badge variant="secondary">初期ロス {DEFAULT_LOSS_RATE_PERCENT}%</Badge>
-          <Button onClick={() => void copyOrderText()} disabled={derivedItems.some(item => !item.orderReady)} className="min-h-11 gap-2">
-            <CopyIcon className="h-4 w-4" />発注用テキストをコピー
+          <CardTitle className="text-xl font-bold">発注数量</CardTitle>
+          <Badge variant="secondary">予備 {DEFAULT_LOSS_RATE_PERCENT}%</Badge>
+          <Button aria-label="発注用テキストをコピー" aria-describedby={`${navId}-copy-status`} onClick={() => void copyOrderText()} disabled={derivedItems.some(item => !item.orderReady)} className="min-h-11 gap-2">
+            <CopyIcon className="h-4 w-4" />コピー
           </Button>
         </CardHeader>
-        <CardContent className="px-3 pb-3 pt-0 text-xs text-muted-foreground">未確認の数量は参考値です。確認後にコピー・追加できます。</CardContent>
+        <CardContent id={`${navId}-copy-status`} className="px-3 pb-3 pt-0 text-xs text-muted-foreground">{derivedItems.some(item => !item.orderReady) ? "要確認の数量は参考値です。" : "確認済みの数量をコピーできます。"}</CardContent>
       </Card>
 
       <Card className="border-none bg-white/70 shadow-lg ring-1 ring-inset ring-indigo-500/15 backdrop-blur-xl dark:bg-zinc-900/70">
@@ -765,7 +829,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     type="button"
                     variant="outline"
                     size="icon"
-                    className="h-8 w-8 rounded-md bg-white p-0 dark:bg-black"
+                    className="h-11 w-11 rounded-md bg-white p-0 dark:bg-black"
                     onClick={() => handleAdjustOrderQuantity(item.product_code, -1)}
                     disabled={quantity <= 0 || (item.order_quantity_input !== undefined || item.incompleteMeasurements)}
                     aria-label={`${code} の発注数量を1m減らす`}
@@ -776,7 +840,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     type="button"
                     variant="outline"
                     size="icon"
-                    className="h-8 w-8 rounded-md bg-white p-0 dark:bg-black"
+                    className="h-11 w-11 rounded-md bg-white p-0 dark:bg-black"
                     disabled={(item.order_quantity_input !== undefined || item.incompleteMeasurements)}
                     onClick={() => handleAdjustOrderQuantity(item.product_code, 1)}
                     aria-label={`${code} の発注数量を1m増やす`}
@@ -786,7 +850,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                 </div>
                 <div className="flex w-full items-center justify-between gap-2">
                   <p className={`text-xs ${orderCheckColor(item.orderReady, basicView)}`} role="status" aria-label={`${code} の発注量チェック`}>{shortOrderStatus(item)}{item.orderReady || item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined ? "" : "・参考値"}</p>
-                  <a href={`#material-${encodeURIComponent(code)}`} className="min-h-11 content-center text-xs underline" onClick={() => setCollapsedCodes(current => { const next = new Set(current); next.delete(code); return next; })}>確認・編集</a>
+                  <button type="button" className="min-h-11 text-xs underline" aria-label={`${code} を確認・編集`} data-workspace-navigation onClick={() => { setCollapsedCodes(current => { const next = new Set(current); next.delete(code); return next; }); selectView("edit", code); }}>確認・編集</button>
                 </div>
               </div>
             );
@@ -794,49 +858,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         </CardContent>
       </Card>
 
-      <details className="rounded-xl border bg-background p-3 text-sm" aria-label="読み取り・計算の説明">
-        <summary className="min-h-6 cursor-pointer font-medium">説明・注意を表示{needs_review_any || reviewReasonGroups.length ? "（読み取り確認あり）" : ""}</summary>
-        <div className="mt-3 space-y-2 text-xs text-muted-foreground">
-          <p>自動計算は予備分を加えて1m単位に切り上げます。調整済み・手動指定の発注量には再上乗せしません。</p>
-          {reviewReasonGroups.length ? <ul className="space-y-2 break-words text-amber-800 dark:text-amber-200">{reviewReasonGroups.map(({reason,codes}) => <li key={reason}><span className="font-semibold">{codes.join("・")}</span> — {reason}</li>)}</ul> : null}
-          {notes && !reviewReasonGroups.some(row => row.reason.includes(notes.trim())) ? <p>メモ備考：{notes}</p> : null}
-        </div>
-      </details>
-
-      {privatePhotoJobId && photoIndex !== null ? (
-        <Card><CardContent className="space-y-3 p-4">
-          <p className="font-semibold">照合する元写真 {photoIndex + 1}</p>
-          <Button type="button" variant="outline" onClick={() => setPhotoIndex(null)}>写真を閉じる</Button>
-          {photoError ? <p role="status">写真を取得できませんでした。通信とログイン状態を確認してください。</p> : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img className="max-h-[70vh] w-full object-contain" alt={`解析元の写真 ${photoIndex + 1}`} src={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex}`} onError={() => setPhotoError(true)} />
-          )}
-        </CardContent></Card>
-      ) : null}
-      <Card className="border-none bg-gradient-to-r from-indigo-600/10 via-purple-600/10 to-indigo-600/5 shadow-lg ring-1 ring-inset ring-indigo-500/20 backdrop-blur-xl">
-        <CardContent className="grid grid-cols-2 gap-2 px-3 py-3 sm:px-6">
-          <div className="rounded-xl border border-indigo-500/10 bg-white/70 p-4 shadow-sm dark:bg-black/30">
-            <p className="text-xs font-bold text-indigo-900/60 dark:text-indigo-100/60">{derivedItems.some(item => !item.orderReady) ? "合計発注数量（確認前の参考値を含む）" : "合計発注数量"}</p>
-            <div className="mt-2 flex items-baseline gap-2">
-              <span className="text-3xl font-black tabular-nums tracking-tight text-indigo-700 dark:text-indigo-300 sm:text-4xl">
-                {formatSummaryNumber(orderSummary.totalOrderQuantity, 0)}
-              </span>
-              <span className="text-base font-bold text-indigo-900/60 dark:text-indigo-100/60">m</span>
-            </div>
-          </div>
-          <div className="rounded-xl border border-purple-500/10 bg-white/70 p-4 shadow-sm dark:bg-black/30">
-            <p className="text-xs font-bold text-purple-900/60 dark:text-purple-100/60">合計平米数</p>
-            <div className="mt-2 flex items-baseline gap-2">
-              <span className="text-3xl font-black tabular-nums tracking-tight text-purple-700 dark:text-purple-300 sm:text-4xl">
-                {formatSummaryNumber(orderSummary.totalSquareMeters)}
-              </span>
-              <span className="text-base font-bold text-purple-900/60 dark:text-purple-100/60">㎡</span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-
+      <p className="px-2 text-xs text-muted-foreground">合計 {formatSummaryNumber(orderSummary.totalOrderQuantity, 0)}m ／ {formatSummaryNumber(orderSummary.totalSquareMeters)}㎡{derivedItems.some(item => !item.orderReady) ? "（確認前の参考値を含む）" : ""}</p>
       {onAddAllToOrderDraft && derivedItems.length > 1 ? (
         <div className="flex justify-end">
           <Button
@@ -854,6 +876,30 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
           </Button>
         </div>
       ) : null}
+
+      </section>
+      <section id={`${navId}-photo`} data-result-panel="photo" role="tabpanel" aria-labelledby={`${navId}-photo-tab`} tabIndex={-1} hidden={resultView !== "photo"} className="scroll-mt-4 space-y-3 outline-none print:hidden">
+        <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">元写真</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("edit", activeProductCode)}>編集に戻る</Button></div>
+        {!privatePhotoJobId ? <p role="status">この結果には元写真の参照がありません。お手元の写真と照合してください。</p> : photoCountError ? <div role="alert"><p>元写真の一覧を取得できませんでした。結果と編集は保持しています。</p><Button type="button" variant="outline" onClick={() => { setPhotoCountError(false); setPhotoRequest(value => value + 1); }}>写真一覧を再取得</Button></div> : photoCount === null ? <p role="status">元写真を確認中…</p> : <>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="元写真を選択">{Array.from({ length: photoCount }, (_, index) => <Button key={index} type="button" variant={photoIndex === index ? "default" : "outline"} aria-pressed={photoIndex === index} data-workspace-navigation onClick={() => openPhoto(index)}>写真 {index + 1}</Button>)}</div>
+          {photoIndex !== null && (photoIndex < 0 || photoIndex >= photoCount) ? <p role="alert">指定された元写真が見つかりません。上の写真番号から選び直してください。</p> : photoError ? <div role="alert"><p>写真を取得できませんでした。通信とログイン状態を確認してください。</p><Button type="button" variant="outline" onClick={() => { setPhotoError(false); setPhotoRequest(value => value + 1); }}>写真を再取得</Button></div> : <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img key={photoKey} className="max-h-[70dvh] w-full rounded-lg object-contain" alt={`解析元の写真 ${(photoIndex ?? 0) + 1}`} src={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex ?? 0}`} onError={() => { if (currentPhotoRef.current === photoKey) setPhotoError(true); }} />
+            <a className="inline-block min-h-11 content-center text-sm underline" href={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex ?? 0}`} target="_blank" rel="noopener noreferrer">写真を別画面で拡大</a>
+          </>}
+        </>}
+      </section>
+      <section id={`${navId}-edit`} data-result-panel="edit" role="tabpanel" aria-labelledby={`${navId}-edit-tab`} tabIndex={-1} hidden={resultView !== "edit"} className="scroll-mt-4 space-y-3 outline-none print:block">
+        <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">編集・リピート</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("quantity")}>数量に戻る</Button></div>
+        <label className="block text-sm font-semibold">編集する品番<select aria-label="編集する品番" data-workspace-navigation className="mt-1 min-h-11 w-full rounded-lg border bg-background px-3" value={activeProductCode} onChange={event => setSelectedProductCode(event.target.value)}>{groups.map(group => <optgroup key={group.label} label={group.label}>{group.rows.map(product => <option key={product.product_code} value={product.product_code}>{product.product_code}</option>)}</optgroup>)}</select></label>
+      <details className="rounded-xl border bg-background p-3 text-sm" aria-label="読み取り・計算の説明">
+        <summary className="min-h-6 cursor-pointer font-medium">説明・注意を表示{needs_review_any || reviewReasonGroups.length ? "（読み取り確認あり）" : ""}</summary>
+        <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+          <p>自動計算は予備分を加えて1m単位に切り上げます。調整済み・手動指定の発注量には再上乗せしません。</p>
+          {reviewReasonGroups.length ? <ul className="space-y-2 break-words text-amber-800 dark:text-amber-200">{reviewReasonGroups.map(({reason,codes}) => <li key={reason}><span className="font-semibold">{codes.join("・")}</span> — {reason}</li>)}</ul> : null}
+          {notes && !reviewReasonGroups.some(row => row.reason.includes(notes.trim())) ? <p>メモ備考：{notes}</p> : null}
+        </div>
+      </details>
 
       <div className="flex items-center justify-between gap-3 rounded-xl border border-black/5 bg-white/60 px-3 py-2.5 shadow-sm dark:border-white/5 dark:bg-zinc-900/60 sm:px-4">
         <div className="min-w-0">
@@ -877,7 +923,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       {rowResetError ? <p role="alert" className="text-sm text-amber-800 dark:text-amber-300">{rowResetError}</p> : null}
       <div className="space-y-4 sm:space-y-6">
         {groups.map((group) => (
-          <Card key={group.label} className="border-none shadow-md overflow-hidden bg-white/60 dark:bg-zinc-900/60 backdrop-blur-md">
+          <Card key={group.label} hidden={!group.rows.some(product => product.product_code === activeProductCode)} className="border-none shadow-md overflow-hidden bg-white/60 print:block dark:bg-zinc-900/60 backdrop-blur-md">
             <CardHeader className="flex flex-row items-center justify-between border-b border-black/5 bg-black/5 px-3 py-3 dark:border-white/5 dark:bg-white/5 sm:px-6 sm:py-4">
               <CardTitle className="text-base font-bold tracking-tight sm:text-lg">{group.label}</CardTitle>
               <Badge variant="secondary" className="px-3 py-1 font-bold rounded-full bg-white dark:bg-black text-xs shadow-sm">
@@ -888,7 +934,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
               {group.rows.map((product, idx) => {
                 const isCollapsed = collapsedCodes.has(product.product_code);
                 return (
-                <div id={`material-${encodeURIComponent(product.product_code)}`} key={product.product_code} className={`px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
+                <div hidden={product.product_code !== activeProductCode} id={`material-${encodeURIComponent(product.product_code)}`} key={product.product_code} className={`print:block px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
                   {isCollapsed ? (
                     <div className="flex min-w-0 items-center gap-3">
                       <div className="min-w-0 flex-1">
@@ -941,7 +987,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                 [product.product_code]: { open: true, value: e.target.value },
                               }))
                             }
-                            onBlur={() => void saveCodeEdit(product.product_code)}
+                            onBlur={event => { if (!(event.relatedTarget as HTMLElement | null)?.closest("[data-workspace-navigation]")) void saveCodeEdit(product.product_code); }}
                             onKeyDown={(e) => {
                               if (e.key === "Enter") {
                                 e.preventDefault();
@@ -1111,7 +1157,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                       </div>)}</div>
                       <p className="mt-2 text-xs">候補は自動加算していません。有効な値は明細に反映してください。</p>
                     </details>
-                    {privatePhotoJobId && readingReviewImageIndexes(product).length ? <div className="flex flex-wrap gap-2">{readingReviewImageIndexes(product).map(index => <Button key={index} type="button" variant="outline" className="min-h-11 bg-background" aria-label={`${product.product_code} の訂正候補の写真 ${index + 1}を確認`} onClick={() => { setPhotoError(false); setPhotoIndex(index); }}>原画像 {index + 1}を確認</Button>)}</div> : <p className="text-xs">お手元の元写真と照合してください。</p>}
+                    {privatePhotoJobId && readingReviewImageIndexes(product).length ? <div className="flex flex-wrap gap-2">{readingReviewImageIndexes(product).map(index => <Button key={index} type="button" variant="outline" className="min-h-11 bg-background" aria-label={`${product.product_code} の訂正候補の写真 ${index + 1}を確認`} data-workspace-navigation onClick={() => openPhoto(index)}>原画像 {index + 1}を確認</Button>)}</div> : <p className="text-xs">お手元の元写真と照合してください。</p>}
                     <label className="flex min-h-11 items-center gap-2 text-xs">
                       <input type="checkbox" aria-label={`${product.product_code} の訂正・取消を確認済みにする`} checked={product.readingReviewConfirmed} disabled={!product.canConfirmReadingReview} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], readingReviewConfirmation: event.target.checked ? product.readingReviewFingerprint : "", quantityConfirmation: "" } }))} />
                       原画像と訂正・取消を照合した（変更時は再確認）
@@ -1292,9 +1338,10 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                          return (
                            <div
                              key={eidx}
+                             data-preserve-editor-input
                              className="group/row flex flex-col gap-1.5 rounded-lg border border-black/5 bg-white/50 px-1.5 py-1.5 text-[11px] font-medium transition-colors hover:bg-white/80 dark:border-white/5 dark:bg-black/50 dark:hover:bg-black/80 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-3 sm:py-2 sm:text-sm"
                            >
-                              {sourceJobId && Number.isInteger(e.source_image_index) ? <Button type="button" variant="outline" className="h-8 text-xs" aria-label={`${product.product_code} 明細${eidx + 1}の写真を確認`} onClick={() => { setPhotoError(false); setPhotoIndex(e.source_image_index); }}>写真{e.source_image_index + 1}・明細{e.source_entry_index + 1}を確認</Button> : null}
+                              {sourceJobId && Number.isInteger(e.source_image_index) ? <Button type="button" variant="outline" className="h-8 text-xs" aria-label={`${product.product_code} 明細${eidx + 1}の写真を確認`} data-workspace-navigation onClick={() => openPhoto(e.source_image_index)}>写真{e.source_image_index + 1}・明細{e.source_entry_index + 1}を確認</Button> : null}
                               <div className="flex w-full min-w-0 items-center justify-between gap-1 sm:gap-2">
                                 <div className="flex min-w-0 flex-1 items-center gap-1 sm:gap-2">
                                   {<button
@@ -1313,7 +1360,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                   <div 
                                     className="flex w-full min-w-0"
                                     onBlur={(ev) => {
-                                      if (!ev.currentTarget.contains(ev.relatedTarget)) {
+                                      if (!ev.currentTarget.contains(ev.relatedTarget) && !(ev.relatedTarget as HTMLElement | null)?.closest("[data-workspace-navigation],[data-preserve-editor-input]")) {
                                         setOverrides((prev) => {
                                           const po = prev[product.product_code];
                                           if (!po || !po.entryEditMode || !po.entryEditMode[eidx]) return prev;
@@ -1448,6 +1495,16 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
             </CardContent>
           </Card>
         ))}
+      </div>
+      </section>
+      <div role="tablist" data-workspace-navigation aria-label="解析結果の表示" hidden={keyboardOpen} className="fixed inset-x-0 bottom-0 z-30 mx-auto grid max-w-5xl grid-cols-3 gap-1 border-t bg-background px-2 pt-2 shadow-lg print:hidden" style={{ display: keyboardOpen ? "none" : undefined, paddingBottom: "calc(.5rem + env(safe-area-inset-bottom))" }} onKeyDown={event => {
+        const index = views.findIndex(view => view.value === resultView);
+        const next = event.key === "ArrowRight" ? (index + 1) % views.length : event.key === "ArrowLeft" ? (index + views.length - 1) % views.length : event.key === "Home" ? 0 : event.key === "End" ? views.length - 1 : -1;
+        if (next < 0) return; event.preventDefault(); selectView(views[next].value); window.requestAnimationFrame(() => document.getElementById(`${navId}-${views[next].value}-tab`)?.focus());
+      }}>
+        {views.map(({ value, label }) => <button key={value} id={`${navId}-${value}-tab`} role="tab" type="button" aria-selected={resultView === value} aria-controls={`${navId}-${value}`} tabIndex={resultView === value ? 0 : -1} className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-lg px-1 text-xs font-bold focus-visible:ring-2 focus-visible:ring-indigo-500 ${resultView === value ? "bg-indigo-950 text-white" : "text-muted-foreground"}`} onClick={() => selectView(value)}>
+          {value === "quantity" ? <Layers className="h-5 w-5" /> : value === "edit" ? <Edit3 className="h-5 w-5" /> : <ImageIcon className="h-5 w-5" />}{label}
+        </button>)}
       </div>
     </div>
   );
