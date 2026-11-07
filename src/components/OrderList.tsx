@@ -197,6 +197,43 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const [rowResetError, setRowResetError] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Record<string, ItemOverride>>({});
   const [editingCode, setEditingCode] = useState<Record<string, { open: boolean; value: string }>>({});
+  const completedCodeEditsRef = useRef(new Set<string>());
+  const blurIntentRef = useRef({ navigation: false, row: false });
+  useEffect(() => {
+    let generation = 0;
+    const frames = new Set<number>();
+    const frame = (callback: () => void) => {
+      const id = window.requestAnimationFrame(() => { frames.delete(id); callback(); });
+      frames.add(id);
+    };
+    const clear = () => { generation++; blurIntentRef.current = { navigation: false, row: false }; };
+    // Record intent before a non-focusing button can blur an input (Safari may
+    // supply null or an ancestor as relatedTarget). New interaction resets it.
+    const record = (event: Event) => {
+      generation++;
+      const target = event.target instanceof Element ? event.target : null;
+      blurIntentRef.current = {
+        navigation: Boolean(target?.closest("[data-workspace-navigation]")),
+        row: Boolean(target?.closest("[data-preserve-editor-input]")),
+      };
+    };
+    // Let navigation's own focus handoff finish, then expire the intent. A
+    // canceled pointer clears immediately, and cannot suppress a later save.
+    const finish = () => {
+      const current = generation;
+      frame(() => frame(() => { if (current === generation) clear(); }));
+    };
+    for (const type of ["pointerdown", "mousedown", "keydown"]) window.addEventListener(type, record, true);
+    for (const type of ["pointerup", "mouseup", "keyup"]) window.addEventListener(type, finish, true);
+    window.addEventListener("pointercancel", clear, true);
+    return () => {
+      for (const type of ["pointerdown", "mousedown", "keydown"]) window.removeEventListener(type, record, true);
+      for (const type of ["pointerup", "mouseup", "keyup"]) window.removeEventListener(type, finish, true);
+      window.removeEventListener("pointercancel", clear, true);
+      frames.forEach(id => window.cancelAnimationFrame(id));
+    };
+  }, []);
+  const navigationBlur = (target: EventTarget | null) => blurIntentRef.current.navigation || (target instanceof Element && Boolean(target.closest("[data-workspace-navigation]")));
   const [lossRates, setLossRates] = useState<Record<string, number | string>>({});
   const [newEntryInputs, setNewEntryInputs] = useState<Record<string, NewEntryInput>>({});
   const [orderQuantityInputs, setOrderQuantityInputs] = useState<Record<string,string | undefined>>({});
@@ -258,6 +295,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const beginEditCode = (code: string) => {
+    completedCodeEditsRef.current.delete(code);
     setEditingCode((prev) => ({
       ...prev,
       [code]: { open: true, value: code },
@@ -309,6 +347,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   }, [items]);
 
   const saveCodeEdit = async (fromCode: string) => {
+    if (completedCodeEditsRef.current.has(fromCode)) return;
+    completedCodeEditsRef.current.add(fromCode);
     const next = editingCode[fromCode];
     const toCode = (next?.value ?? "").trim().toUpperCase().replace(/[\s\-]+/g, "");
     setEditingCode((prev) => ({ ...prev, [fromCode]: { open: false, value: toCode || fromCode } }));
@@ -987,7 +1027,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                 [product.product_code]: { open: true, value: e.target.value },
                               }))
                             }
-                            onBlur={event => { if (!(event.relatedTarget as HTMLElement | null)?.closest("[data-workspace-navigation]")) void saveCodeEdit(product.product_code); }}
+                            onBlur={event => { if (!navigationBlur(event.relatedTarget)) void saveCodeEdit(product.product_code); }}
                             onKeyDown={(e) => {
                               if (e.key === "Enter") {
                                 e.preventDefault();
@@ -995,6 +1035,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                               }
                               if (e.key === "Escape") {
                                 e.preventDefault();
+                                completedCodeEditsRef.current.add(product.product_code);
                                 setEditingCode((prev) => ({
                                   ...prev,
                                   [product.product_code]: { open: false, value: product.product_code },
@@ -1360,7 +1401,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                   <div 
                                     className="flex w-full min-w-0"
                                     onBlur={(ev) => {
-                                      if (!ev.currentTarget.contains(ev.relatedTarget) && !(ev.relatedTarget as HTMLElement | null)?.closest("[data-workspace-navigation],[data-preserve-editor-input]")) {
+                                      if (!ev.currentTarget.contains(ev.relatedTarget) && !navigationBlur(ev.relatedTarget) && !blurIntentRef.current.row && !(ev.relatedTarget instanceof Element && ev.relatedTarget.closest("[data-preserve-editor-input]"))) {
                                         setOverrides((prev) => {
                                           const po = prev[product.product_code];
                                           if (!po || !po.entryEditMode || !po.entryEditMode[eidx]) return prev;

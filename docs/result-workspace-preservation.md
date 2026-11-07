@@ -7,6 +7,7 @@ Baseline: `67742d9cbc21e55eaee61ba944a1c2647f7a8077`. This is a local UI change;
 - The top-right menu selects existing functions. Memo measurement is the image/dimensions panel. Actual-dimension measurement is explicitly labelled as the existing square-metre calculator, not a new length/width measuring tool. The order list is the existing accumulated order draft.
 - The memo result has three views: quantity (default), editing/repeat for one selected product, and original photos.
 - Result views and main modes hide panels without remounting the editor or previously mounted calculators. The displayed result job remains the source of private photos, independent of a newer accepted job or upload preview.
+- Navigation intent is captured before input blur, including non-focusing buttons with null/ancestor focus targets. Pointer cancellation clears it; completed gestures expire it after the focus handoff. Explicit Enter/cancel and intentional non-navigation blur keep their existing meaning.
 - Result tabs add same-document view history. Browser Back restores that view; in-app return and Escape go to quantity. Existing main-mode selection remains a view switch, not a new route. A page reload starts at quantity and uses existing saved-workspace recovery.
 
 ## Preserved capabilities
