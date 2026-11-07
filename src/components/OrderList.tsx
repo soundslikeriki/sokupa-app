@@ -286,6 +286,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
           source_row_id: entry.source_row_id, source_image_index: entry.source_image_index, source_entry_index: entry.source_entry_index,
           original_formula: entry.original_formula || `${length_m} x ${quantity}`,
           repeat_enabled: entry.configured_repeat_enabled ?? entry.isRepeatActive ?? entry.repeat_enabled ?? false,
+          repeat_use_row_length: entry.configured_repeat_use_row_length ?? entry.repeat_use_row_length,
           needs_review: entry.needs_review, review_reason: entry.review_reason,
           length_m, quantity, length_input: entry.length_input, quantity_input: entry.quantity_input,
           subtotal_m: toFiniteNumber(entry.derived_subtotal ?? entry.subtotal_m, Number((length_m * quantity).toFixed(2))),
@@ -706,7 +707,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         const base = typeof elengths[idx] === "number" ? elengths[idx] as number : e.length_m;
         const active = mode === "pattern" && (eRepeats[idx] ?? e.repeat_enabled ?? false);
         // A common height is an explicit override. Otherwise preserve every row's own height.
-        return { id: e.source_row_id ?? `${item.product_code}:${idx}`, length: active && h !== null && h > 0 && typeof elengths[idx] !== "number" ? h : base,
+        return { id: e.source_row_id ?? `${item.product_code}:${idx}`, length: active && h !== null && h > 0 && typeof elengths[idx] !== "number" && !e.repeat_use_row_length ? h : base,
           quantity: typeof eqtys[idx] === "number" ? eqtys[idx] as number : e.quantity, active,
           lengthInput: typeof elengths[idx] === "string" ? elengths[idx] as string : typeof elengths[idx] === "number" ? undefined : e.length_input,
           quantityInput: typeof eqtys[idx] === "string" ? eqtys[idx] as string : typeof eqtys[idx] === "number" ? undefined : e.quantity_input };
@@ -728,6 +729,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         return { ...e, base_length: base, derived_length: Number(stripL.toFixed(6)), derived_quantity: row.quantity,
           length_input: row.lengthInput, quantity_input: row.quantityInput,
           configured_repeat_enabled: eRepeats[idx] ?? e.repeat_enabled ?? false,
+          configured_repeat_use_row_length: typeof elengths[idx] === "number" || e.repeat_use_row_length === true,
           derived_subtotal: Number(subtotal.toFixed(6)), isEditing: ovr.entryEditMode?.[idx] === true, isRepeatActive: row.active };
       });
 
@@ -799,7 +801,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         entries: item.entries?.map((entry) => ({
           length_m: entry.length_m,
           quantity: entry.quantity,
-          subtotal_m: entry.subtotal_m, repeat_enabled: entry.repeat_enabled, length_input: entry.length_input, quantity_input: entry.quantity_input,
+          subtotal_m: entry.subtotal_m, repeat_enabled: entry.repeat_enabled, repeat_use_row_length: entry.repeat_use_row_length, length_input: entry.length_input, quantity_input: entry.quantity_input,
         })),
       })),
     );

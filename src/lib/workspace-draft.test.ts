@@ -11,6 +11,20 @@ test("workspace round-trip retains edits, original measurements, repeat settings
   assert.equal(restored.originalParsed!.items[0].total_m, 5.4);
 });
 
+test("workspace retains explicit row-height precedence without changing legacy common-height drafts", () => {
+  const entry = { original_formula: "0.7×2", length_m: 0.7, quantity: 2, subtotal_m: 2.4, repeat_enabled: true, repeat_use_row_length: true };
+  const state = { version: 1, siteName: "Synthetic", parsed: { items: [{ product_code: "SYN", manufacturer: "Test", repeat_cm: 60, repeat_height_m: 3.8, total_m: 6.6, order_quantity: 8, entries: [entry] }] }, orderDraftItems: [] };
+  const restored = readWorkspaceDraft(JSON.stringify(state));
+  assert.deepEqual(restored, state);
+  assert.equal(restored.parsed!.items[0].entries[0].repeat_use_row_length, true);
+  assert.equal(restored.parsed!.items[0].entries[0].length_m, 0.7);
+  delete (entry as Partial<typeof entry>).repeat_use_row_length;
+  assert.equal(readWorkspaceDraft(JSON.stringify(state)).parsed!.items[0].entries[0].repeat_use_row_length, undefined);
+  for (const invalid of ["true", 1, null, {}]) {
+    assert.throws(() => readWorkspaceDraft(JSON.stringify({ ...state, parsed: { items: [{ ...state.parsed.items[0], entries: [{ ...entry, repeat_use_row_length: invalid }] }] } })), /復元できません/);
+  }
+});
+
 test("explicit job association survives reload; matching legacy OCR never proves identity", () => {
   const id = "00000000-0000-4000-8000-000000000001", other = "00000000-0000-4000-8000-000000000002";
   const original = { product_code: "VS2067", manufacturer: "Test", total_m: 20, order_quantity: 23, entries: [{ original_formula: "20×1", length_m: 20, quantity: 1, subtotal_m: 20 }] };

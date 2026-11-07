@@ -25,6 +25,8 @@ export type MemoEntry = {
   needs_review?: boolean;
   review_reason?: string;
   repeat_enabled?: boolean;
+  /** Explicit row edit keeps its own length ahead of a product common height, including after reload. */
+  repeat_use_row_length?: boolean;
 };
 
 /** OCR ambiguity about a correction, cancellation or excluded formula; never auto-add it. */
