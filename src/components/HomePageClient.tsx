@@ -916,7 +916,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         <h1 className="w-[120px] max-w-[46vw] rounded-md bg-white px-1 py-2"><img src="/sokupa-header-logo-small-wordmark.webp" alt="ソクパ SOKUPA" width={405} height={80} className="block h-auto w-full" /></h1>
           {parsed && resultSiteName ? <p className="truncate text-xs text-muted-foreground">{resultSiteName}</p> : null}
         </div>
-        <div className="flex shrink-0 items-center gap-4">{!qaSynthetic ? <LineNotificationEntry /> : null}
+        <div className="flex shrink-0 items-center gap-[13px]">{!qaSynthetic ? <LineNotificationEntry /> : null}
         <WorkspaceModeMenu help={<p>メモ画像の寸法を読み取り、必要量に予備分{DEFAULT_LOSS_RATE_PERCENT}%を加えて発注数量を計算します。予備分は変更できます。</p>} value={calculationMode} count={orderDraftItems.length} onChange={mode => {
           if (mode === "area") setAreaCalculatorMounted(true);
           setCalculationMode(mode);

@@ -8,7 +8,7 @@
     "mobileIconHeightPx": 40,
     "owner": "LY Corporation",
     "buttonSizePx": 56,
-    "clearSpaceCheck": "At least20px to neighbouring visible content; header margins provide24px in tested320/390 layouts.",
+    "clearSpaceCheck": "At least20px to neighbouring visible content;13px button gap plus inner padding provides about21px between icon and menu border in tested320/390 layouts.",
     "bubbleAlternative": "The supplied circular reference matches the official Android variant in shape and alpha. Use official distribution bytes, not a cropped bubble. User reference is preserved privately.",
     "additionalGuidelines": "https://www.lycbiz.com/sites/default/files/media/jp/logo/line_guideline.pdf",
     "variant": "Official circular Android app icon, original1001x1000 PNG; source file copied without alteration, aspect ratio retained."
