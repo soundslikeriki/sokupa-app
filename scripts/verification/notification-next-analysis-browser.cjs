@@ -1,4 +1,5 @@
 const workspace = require('./result-workspace-helpers.cjs');
+// Persist the synthetic31s advance through reload so the result-session clock never travels backwards.
 // No external calls. Notification A fails while a different analysis B is accepted and completed.
 const{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),assert=require('node:assert/strict');
 const base=process.env.SOKUPA_TEST_URL||'http://127.0.0.1:3317',user='synthetic-user',a='00000000-0000-4000-8000-00000000000a',b='00000000-0000-4000-8000-00000000000b',key=`sokupa:workspace:v1:${user}`,pointer=`sokupa:lastJobId:${user}`;
@@ -10,7 +11,7 @@ const original=item('A-CODE',20,1,23),draft={version:1,siteName:'Site A',parsed:
   const initialRetryStatus=scenario.status;let delayInitialA=scenario.delayed,releaseInitialA;const initialAGate=new Promise(resolve=>{releaseInitialA=resolve;});
   let statusA='failed',statusB='failed',created=false,doneB=false,recoverA=false,resumesA=0,resumesB=0,readsA=0,seenB=0,failAReadOnce=false,transientAReadObserved=false;
   const context=await browser.newContext(),page=await context.newPage();await workspace.freshResultFixtures(context);page.on('pageerror',e=>{throw e;});
-  await context.addInitScript(({key,pointer,a,draft})=>{if(!sessionStorage.getItem('seeded')){localStorage.setItem(key,JSON.stringify(draft));localStorage.setItem(pointer,a);sessionStorage.setItem('seeded','yes');}let offset=0;const realNow=Date.now;Date.now=()=>realNow()+offset;window.advanceNotificationClock=ms=>{offset+=ms;};},{key,pointer,a,draft});
+  await context.addInitScript(({key,pointer,a,draft})=>{if(!sessionStorage.getItem('seeded')){localStorage.setItem(key,JSON.stringify(draft));localStorage.setItem(pointer,a);sessionStorage.setItem('seeded','yes');}let offset=Number(sessionStorage.getItem('synthetic-notification-clock')||0);const realNow=Date.now;Date.now=()=>realNow()+offset;window.advanceNotificationClock=ms=>{offset+=ms;sessionStorage.setItem('synthetic-notification-clock',String(offset));};},{key,pointer,a,draft});
   await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==base)return route.abort();
    if(url.pathname==='/api/auth/session')return route.fulfill({json:{authenticated:true,line_user_id:user}});
    if(url.pathname==='/api/analysis-jobs'&&route.request().method()==='GET')return route.fulfill({json:{data:[...(created?[{id:b,status:doneB?'done':'running',site_name:'Site A',notification_status:statusB,client_result_seen_at:seenB?'stored':null}]:[]),...(statusA==='accepted'?[]:[{id:a,status:'done',site_name:'Site A',notification_status:statusA,client_result_seen_at:'stored'}])]}});
@@ -38,11 +39,11 @@ const original=item('A-CODE',20,1,23),draft={version:1,siteName:'Site A',parsed:
   assert.equal(await page.evaluate(k=>localStorage.getItem(k),pointer),b);assert.equal(await button.isDisabled(),true);assert.ok(resumesA>=2&&readsA>=3);checks++;
   const whileB=await read();assert.equal(whileB.parsed?.items[0]?.product_code??null,'A-CODE');checks++;
   doneB=true;
-  await workspace.edit(page,'B-CODE');await page.getByLabel('B-CODE の発注数量を入力',{exact:true}).waitFor();await wait(()=>button.isEnabled());assert.equal(statusB,'failed');assert.equal((await read()).parsed.items[0].order_quantity,12);checks++;
+  await workspace.edit(page,'B-CODE');await page.getByLabel('B-CODE の発注数量を入力',{exact:true}).waitFor();await workspace.disclosure(page,'画像・現場名');await wait(()=>button.isEnabled());assert.equal(statusB,'failed');assert.equal((await read()).parsed.items[0].order_quantity,12);checks++;
   assert.equal(await page.evaluate(key=>Object.keys(localStorage).filter(k=>k.startsWith(key+':recovery:')).length,key),0);checks++;
   await page.reload();await workspace.edit(page,'B-CODE');await page.getByLabel('B-CODE の発注数量を入力',{exact:true}).waitFor();await page.getByText('LINE通知を再確認しています。',{exact:false}).waitFor();await upload();await wait(()=>page.getByRole('button',{name:'1枚の画像を解析する',exact:true}).isEnabled());
   assert.equal((await read()).resultJobId,b);assert.equal((await read()).parsed.items[0].order_quantity,12);assert.ok(resumesB>=1);assert.equal(statusB,'failed');checks++;
-  await context.close();
+  console.log('PASS scenario',JSON.stringify(scenario),'checks',checks);await context.close();
  }
  // A completed job can have an unavailable result endpoint. Its metadata must not lock new intake.
  {const c='00000000-0000-4000-8000-00000000000c';let created=false,reads=0,releaseOld=false,seenB=0;
