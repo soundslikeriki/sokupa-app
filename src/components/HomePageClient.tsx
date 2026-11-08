@@ -20,7 +20,7 @@ import {
   removeOrderDraftItem,
   updateOrderDraftItem,
 } from "@/lib/order-draft";
-import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, listWorkspaceArchives, switchWorkspaceDraft, replaceWorkspaceDraft, retainDeferredJobResult, type ResultSession, type WorkspaceArchive, type WorkspaceDraft } from "@/lib/workspace-draft";
+import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, listWorkspaceArchives, switchWorkspaceDraft, retainDeferredJobResult, type ResultSession, type WorkspaceArchive, type WorkspaceDraft } from "@/lib/workspace-draft";
 import { activateResultSession, allowResultJob, commitResultTransition, hasUnfinishedResultInput, isObservationOnlyChange, resetResultDraft, restoreResultDraft, resultAgePolicy, resultMayApply, resumeResultDraft, stampResultSession } from "@/lib/result-session";
 import { workspaceFingerprint, readReplacementConsent, writeReplacementConsent, forgetReplacementConsent, type ReplacementConsent } from "@/lib/replacement-consent";
 import { withWorkspaceLock, saveLatestWorkspaceSnapshot, restoreLatestWorkspaceSnapshot, rebuildLatestWorkspaceSnapshot } from "@/lib/latest-workspace";
@@ -412,7 +412,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  const safelySwitchWorkspace = async (next: WorkspaceDraft, archive = true, validateSelection?: () => void) => {
+  const safelySwitchWorkspace = async (next: WorkspaceDraft, validateSelection?: () => void) => {
     if (!lineUserId || !currentWorkspaceRef.current) throw new Error("下書きの準備ができていません。");
     const key = `sokupa:workspace:v1:${lineUserId}`, current = currentWorkspaceRef.current;
     next = { ...next, resultSiteName: next.resultSiteName ?? next.siteName, resultSession: activateResultSession(current.resultSession) };
@@ -437,7 +437,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         // failed recovery write must not silently switch the visible result.
         await saveLatestWorkspaceSnapshot(localStorage, lineUserId, next);
         validate();
-        return archive ? switchWorkspaceDraft(localStorage, key, expected, current, next, suffix) : replaceWorkspaceDraft(localStorage, key, expected, next);
+        return switchWorkspaceDraft(localStorage, key, expected, current, next, suffix);
       } catch (error) {
         if (localStorage.getItem(key) === expected) {
           try { if (previousLatest === null) localStorage.removeItem(latestKey); else localStorage.setItem(latestKey, previousLatest); }
@@ -524,8 +524,12 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const deferPendingJobResult = async () => {
     const pending = pendingJobResultRef.current;
     if (!pending) return;
-    try { await retainPendingResult(pending); setResultChoiceDeferred(true); }
-    catch (error) { setError(`後回しにする結果を端末へ保管できませんでした。まだこの画面に保持しています。結果を書き出すか、保存領域を確保して再度お試しください。 ${getErrorDetail(error)}`); }
+    const selection = JSON.stringify(pending);
+    try {
+      await retainPendingResult(pending);
+      if (JSON.stringify(pendingJobResultRef.current) === selection) setResultChoiceDeferred(true);
+    }
+    catch (error) { setError(`選択したデータを端末へ保管できませんでした。今の編集はそのままです。保存領域を確保して再度お試しください。 ${getErrorDetail(error)}`); }
   };
 
   const loadHistory = async (before?: string) => {
@@ -541,15 +545,14 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     finally { setHistoryLoading(false); }
   };
 
-  const openPendingJobResult = async (overwrite = false, expectedJobId?: string) => {
+  const openPendingJobResult = async (expectedJobId?: string) => {
     const pending = pendingJobResultRef.current, current = currentWorkspaceRef.current;
     if (!pending || !current || pendingChoiceInFlight.current) return;
     if (expectedJobId && pending.jobId !== expectedJobId) { setError("選んだ結果が変わりました。表示を確認してから選び直してください。"); return; }
-    if (overwrite && !window.confirm(`今の編集を退避せず、選んだ結果に置き換えますか？\n今の編集：${(current.resultSiteName ?? current.siteName) || "現場名なし"}・${describeMemo(current.parsed)}\n選んだ結果：${pending.siteName || "現場名なし"}・${describeMemo(pending.result)}\n発注リスト・選択中の写真は残します。`)) return;
     pendingChoiceInFlight.current = true;
     const selection = JSON.stringify(pending);
     try {
-      await safelySwitchWorkspace({ ...current, siteName: pending.siteName ?? "", resultSiteName: pending.siteName ?? "", parsed: pending.result, originalParsed: pending.result, resultJobId: pending.jobId }, !overwrite,
+      await safelySwitchWorkspace({ ...current, siteName: pending.siteName ?? "", resultSiteName: pending.siteName ?? "", parsed: pending.result, originalParsed: pending.result, resultJobId: pending.jobId },
         () => { if (JSON.stringify(pendingJobResultRef.current) !== selection) throw new Error("選択中に別の結果が届きました。今の編集は保持しています。選び直してください。"); });
       appliedJobRef.current = pending.jobId; restoredDraftRef.current = null;
       if (lineUserId) void withWorkspaceLock(`sokupa:workspace:v1:${lineUserId}`, () => forgetReplacementConsent(localStorage, lineUserId, pending.jobId)).catch(() => undefined);
@@ -1107,26 +1110,12 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         <Card className="border-amber-500/50" aria-label="表示する結果を選ぶ">
           <CardHeader className="space-y-3">
             <CardTitle className="text-base">別の解析結果があります</CardTitle>
-            <CardDescription>今の編集「{(parsed ? resultSiteName : siteName) || "現場名なし"}」を残すか、保存済みの「{pendingJobResult.siteName || "現場名なし"}」を開くか選べます。</CardDescription>
-            <p className="text-sm">今の編集: {describeMemo(parsed)}</p>
-            <p className="text-sm">別の解析: {describeMemo(pendingJobResult.result)}</p>
-            {resultChoiceDeferred ? (
-              <Button type="button" variant="outline" onClick={() => setResultChoiceDeferred(false)}>別の結果を確認する</Button>
-            ) : (
-              <>
-                <Button type="button" variant="outline" className="min-h-11" data-workspace-navigation onClick={deferPendingJobResult}>今の編集を続ける</Button>
-                <Button type="button" className="h-auto min-h-11 max-w-full whitespace-normal py-2" data-workspace-navigation onClick={() => void openPendingJobResult(false, pendingJobResult.jobId)}>今の編集を残して選んだ結果を開く</Button>
-              </>
-            )}
-            <details aria-label="結果切替のその他の操作" className="text-sm">
-              <summary data-workspace-navigation className="min-h-11 cursor-pointer content-center underline">その他の操作</summary>
-              <div className="mt-2 grid gap-2">
-                <Button type="button" variant="outline" className="h-auto min-h-11 whitespace-normal py-2" data-workspace-navigation onClick={() => void openPendingJobResult(true, pendingJobResult.jobId)}>今の編集を上書きして開く（退避しない）</Button>
-            <Button type="button" variant="outline" data-workspace-navigation onClick={() => { if (currentWorkspaceRef.current) downloadWorkspace(JSON.stringify(currentWorkspaceRef.current)); }}>今の下書きを書き出す</Button>
-            <Button type="button" variant="outline" data-workspace-navigation onClick={() => downloadWorkspace(JSON.stringify({ version: 1, siteName: pendingJobResult.siteName ?? "", parsed: pendingJobResult.result, originalParsed: pendingJobResult.result, orderDraftItems: [], resultJobId: pendingJobResult.jobId }))}>別の解析結果を書き出す</Button>
-              </div>
-            </details>
-            {resultChoiceDeferred ? <p className="text-sm text-muted-foreground">後回しにした結果は「退避した下書き」からも開けます。</p> : null}
+            <CardDescription>復元する前に、今の編集を端末へ保存します。</CardDescription>
+            <p className="text-sm">今の編集「{(parsed ? resultSiteName : siteName) || "現場名なし"}」: {describeMemo(parsed)}</p>
+            <p className="text-sm">選択した以前のデータ「{pendingJobResult.siteName || "現場名なし"}」: {describeMemo(pendingJobResult.result)}</p>
+            <Button type="button" variant="outline" className="min-h-11" data-workspace-navigation onClick={deferPendingJobResult}>今の編集を続ける</Button>
+            <Button type="button" className="h-auto min-h-11 max-w-full whitespace-normal py-2" data-workspace-navigation onClick={() => void openPendingJobResult(pendingJobResult.jobId)}>選択した以前のデータを復元する</Button>
+            {resultChoiceDeferred ? <p role="status" className="text-sm text-muted-foreground">今の編集を続けています。</p> : null}
           </CardHeader>
         </Card>
       ) : null}

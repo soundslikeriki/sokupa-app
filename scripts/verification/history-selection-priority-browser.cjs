@@ -58,7 +58,7 @@ const wait = async fn => { const until = Date.now() + 15000; while (Date.now() <
         assert.equal(await page.getByText('別の解析: C-CODE: 23m', { exact: true }).count(), 0);
         assert.equal(cReads, beforeC); assert.equal(automaticReads, beforeAutomatic + (scenario === 'delayed-pointer' ? 1 : 0)); assert.equal(nonBSeen, 0); checks++;
         if (scenario === 'same-history-selected-twice') { assert.equal(aReads, 2); assert.equal(await page.getByText('結果を取得できません。', { exact: false }).count(), 0); checks++; }
-        await page.getByRole('button', { name: '今の編集を残して選んだ結果を開く', exact: true }).click();
+        await page.getByRole('button', { name: '選択した以前のデータを復元する', exact: true }).click();
         await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor();
         const applied = JSON.parse(await page.evaluate(k => localStorage.getItem(k), key)); assert.equal(applied.resultJobId, a); assert.equal(applied.parsed.items[0].order_quantity, 12); checks++;
         assert.ok(await page.evaluate(({ key, b }) => Object.keys(localStorage).filter(k => k.startsWith(key + ':recovery:')).some(k => { const draft = JSON.parse(localStorage.getItem(k)); return draft.resultJobId === b && draft.parsed.items[0].order_quantity === 46; }), { key, b })); checks++;

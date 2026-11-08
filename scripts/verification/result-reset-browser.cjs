@@ -104,7 +104,7 @@ const make=()=>{
  // Regression: ...current must not carry A's result name into explicitly opened B.
  for(const siteB of['Result B',''])for(const path of['manual','age']){
   const h=await fixture(bases[0],{pendingB:true,siteB});
-  await h.page.getByRole('button',{name:'今の編集を残して選んだ結果を開く',exact:true}).click();await h.page.getByLabel('ANONB の一覧発注数量',{exact:true}).waitFor();await h.saved();
+  await h.page.getByRole('button',{name:'選択した以前のデータを復元する',exact:true}).click();await h.page.getByLabel('ANONB の一覧発注数量',{exact:true}).waitFor();await h.saved();
   check((await h.read()).resultJobId===B&&(await h.read()).resultSiteName===siteB,'pending B has its own exact source name, including no-name, never A');
   await ui.disclosure(h.page,'画像・現場名');await h.inputSite().fill('Next C');await h.saved();
   if(path==='manual'){await h.photo();await h.reset().click();await h.saved();}
