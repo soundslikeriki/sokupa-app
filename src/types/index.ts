@@ -38,6 +38,8 @@ export type MemoReadingReview = {
 
 /** 品番単位で集約された1ブロック（AI出力スキーマ） */
 export type MemoProductItem = {
+  /** Local editor identity, persisted in workspace snapshots; never a credential or AI input. */
+  client_material_id?: string;
   reading_reviews?: MemoReadingReview[];
   reading_review_confirmation?: string;
   /** Simple memo use is the default; legacy active repeat drafts reopen the pattern editor. */

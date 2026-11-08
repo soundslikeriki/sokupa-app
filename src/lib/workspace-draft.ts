@@ -1,4 +1,5 @@
 import type { ParsedMemoPayload, OrderDraftItem } from "../types";
+import { validMaterialId } from "./material-identity";
 
 export type ResultSession = { version: 1; generation: number; inactive: boolean; fingerprint: string;
   meaningfulAt: unknown; observedAt: unknown; allowedJobId: string | null; reason?: "manual" | "age" | "declined";
@@ -20,7 +21,7 @@ const number = (value: unknown): value is number => typeof value === "number" &&
 function memo(value: unknown): boolean {
   if (value === null) return true;
   return object(value) && ["image_needs_review", "needs_review_any"].every((key) => value[key] === undefined || typeof value[key] === "boolean") && (value.notes === undefined || typeof value.notes === "string") && Array.isArray(value.items) && value.items.length <= 1000 && value.items.every((item: unknown) =>
-    object(item) && (item.needs_review === undefined || typeof item.needs_review === "boolean") && typeof item.product_code === "string" && typeof item.manufacturer === "string" && number(item.total_m) && number(item.order_quantity) &&
+    object(item) && (item.client_material_id === undefined || validMaterialId(item.client_material_id)) && (item.needs_review === undefined || typeof item.needs_review === "boolean") && typeof item.product_code === "string" && typeof item.manufacturer === "string" && number(item.total_m) && number(item.order_quantity) &&
     ["notes", "spec", "catalog_name", "catalog_page_num", "source_url", "quantity_confirmation", "reading_review_confirmation", "order_quantity_input", "loss_rate_input", "repeat_cm_input", "repeat_height_input"].every((key) => item[key] === undefined || typeof item[key] === "string") &&
     (item.reading_reviews === undefined || (Array.isArray(item.reading_reviews) && item.reading_reviews.length <= 1000 && item.reading_reviews.every((review: unknown) =>
       object(review) && typeof review.reason === "string" && review.reason.length <= 20000 && Array.isArray(review.candidate_formulas) && review.candidate_formulas.length <= 1000 && review.candidate_formulas.every((formula: unknown) => typeof formula === "string" && formula.length <= 10000) &&

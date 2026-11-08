@@ -12,6 +12,7 @@ import { roundMeters } from "@/lib/memo-calculation";
 import { orderModeForItem, planMemoOrder } from "@/lib/order-planning";
 import { compactReadingReviews, compactReviewReasons, concreteReadingReason, readingNoticesForItem, shortOrderStatus } from "@/lib/order-presentation";
 import { numericalOrderStatus } from "@/lib/order-quantity-status";
+import { identifyMaterials, materialSignature, originalMaterial } from "@/lib/material-identity";
 import { findOriginalMemoEntry } from "@/lib/original-memo-entry";
 import { calculateOrderQuantity, DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import {
@@ -29,11 +30,9 @@ import type { MemoProductItem, MemoReadingReview, OrderDraftItemInput } from "@/
 const MFG_ORDER = ["サンゲツ", "リリカラ", "ルノン", "トキワ", "シンコール", "東リ", "エービーシー商会", "不明", "その他"] as const;
 const DEFAULT_WALLPAPER_WIDTH_M = 0.92;
 
-// Duplicate SKUs remain separate materials. This private key never enters
-// saved results, correction payloads or copied order text.
+// Persisted local material identity survives SKU edits and display ordering.
 function itemEditorKey(items: MemoProductItem[], index: number): string {
-  const code = items[index].product_code;
-  return items.some((item, other) => other !== index && item.product_code === code) ? `\u0000material:${index}:${code}` : code;
+  return items[index].client_material_id!;
 }
 
 
@@ -158,8 +157,15 @@ function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
   };
 }
 
-export function OrderList({ basicView = false, items, sourceItems, sourceJobId, readingReviewSourceJobId, notes, siteName = "", onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft, resultTools, onMeaningfulEdit, onEditorBlocked, onResetResult, resetDisabledReason, onWorkspaceViewChange }: OrderListProps) {
+export function OrderList({ basicView = false, items: incomingItems, sourceItems, sourceJobId, readingReviewSourceJobId, notes, siteName = "", onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft, resultTools, onMeaningfulEdit, onEditorBlocked, onResetResult, resetDisabledReason, onWorkspaceViewChange }: OrderListProps) {
   const privatePhotoJobId = sourceJobId ?? readingReviewSourceJobId;
+  const materialContext = privatePhotoJobId ?? "legacy-workspace";
+  const [materialState, setMaterialState] = useState(() => ({ incoming: incomingItems, context: materialContext,
+    items: identifyMaterials([], incomingItems, materialContext) }));
+  const items = materialState.items;
+  const [publishedMaterials, setPublishedMaterials] = useState(new Map<string, string>());
+  const [lastCanonicalMaterials, setLastCanonicalMaterials] = useState(items);
+  const [detachedInput, setDetachedInput] = useState<string | null>(null);
   const [copyReviewOpen, setCopyReviewOpen] = useState(false);
   const [copyReviewSession, setCopyReviewSession] = useState(0);
   const copyReviewOpenRef = useRef(false);
@@ -196,7 +202,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       const panel = resultRoot.current?.querySelector<HTMLElement>(`[data-result-panel="${view}"]`);
       if (panel && panel.getClientRects().length && !document.activeElement?.matches("input,select,textarea")) { panel.focus({ preventScroll: true }); panel.scrollIntoView({ block: "start" }); }
       if (view === "edit") {
-        const material = Array.from(panel?.querySelectorAll<HTMLElement>("[data-material-value]") ?? []).find(element => element.dataset.materialValue === code);
+        const material = Array.from(panel?.querySelectorAll<HTMLElement>("[data-material-value]") ?? []).find(element => element.dataset.materialId === code);
         material?.scrollIntoView({ block: "start" });
       }
     });
@@ -282,8 +288,47 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const [collapsedRepeatControls, setCollapsedRepeatControls] = useState<Set<string>>(() => new Set());
   const newEntryInputsRef = useRef<Record<string, NewEntryInput>>({});
   const lastSyncedItemsRef = useRef("");
-  const originalItemsRef = useRef<MemoProductItem[]>([]);
+  const originalItemsRef = useRef(new Map<string, MemoProductItem>());
+  const originalContextRef = useRef(materialContext);
   const previousHadItemsRef = useRef(false);
+
+  // Reconcile before commit: a stale overlay must never render/save against a
+  // replacement snapshot. Only explicit IDs or unique source rows can follow.
+  if (materialState.incoming !== incomingItems || materialState.context !== materialContext) {
+    const contextChanged = materialState.context !== materialContext;
+    const next = identifyMaterials(contextChanged ? [] : items, incomingItems, materialContext);
+    const nextById = new Map(next.map(item => [item.client_material_id!, item]));
+    const detached = new Set(items.filter(item => {
+      const replacement = nextById.get(item.client_material_id!);
+      if (contextChanged || !replacement) return true;
+      const signature = materialSignature(replacement);
+      return signature !== materialSignature(item) && signature !== publishedMaterials.get(item.client_material_id!);
+    }).map(item => item.client_material_id!));
+    if (detached.size) {
+      const pick = <T,>(record: Record<string, T>) => Object.fromEntries(Object.entries(record).filter(([key]) => detached.has(key)));
+      const raw = { overrides: pick(overrides), code: pick(editingCode), lossRates: pick(lossRates),
+        newRows: pick(newEntryInputs), quantities: pick(orderQuantityInputs), manual: pick(manualOrderQuantities) };
+      // One bounded, downloadable local record; never applied to another material.
+      // Existing persisted snapshots and their source data remain untouched.
+      if (Object.values(raw).some(record => Object.keys(record).length)) setDetachedInput(JSON.stringify({ version: 1,
+        sourceJobId: materialState.context, materials: lastCanonicalMaterials.filter(item => detached.has(item.client_material_id!)), raw },
+        (_key, value) => typeof value === "number" && !Number.isFinite(value) ? String(value) : value, 2));
+      const keep = <T,>(record: Record<string, T>) => Object.fromEntries(Object.entries(record).filter(([key]) => !detached.has(key)));
+      setOverrides(keep); setEditingCode(keep); setLossRates(keep); setNewEntryInputs(keep);
+      setOrderQuantityInputs(keep); setManualOrderQuantities(keep);
+
+    }
+    if (contextChanged) { setPublishedMaterials(new Map()); setCollapsedCodes(new Set()); setCollapsedRepeatControls(new Set()); }
+    setMaterialState({ incoming: incomingItems, context: materialContext, items: next });
+  }
+  useLayoutEffect(() => {
+    newEntryInputsRef.current = newEntryInputs;
+    if (originalContextRef.current !== materialContext) { originalItemsRef.current.clear(); originalContextRef.current = materialContext; }
+    for (const item of items) if (!originalItemsRef.current.has(item.client_material_id!)) {
+      const original = originalMaterial(item, sourceItems ?? items, items.filter(other => other.product_code === item.product_code).length === 1);
+      if (original) originalItemsRef.current.set(item.client_material_id!, cloneMemoProductItem(original));
+    }
+  }, [items, sourceItems, materialContext, newEntryInputs]);
 
   const getLossRateForItem = (item: MemoProductItem, editorKey = item.product_code): number => {
     const local = lossRates[editorKey];
@@ -338,13 +383,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
   const findItem = (key: string) => items.find((_, index) => itemEditorKey(items, index) === key);
   const applyItemsChange = (nextItems: MemoProductItem[]) => {
-    const rekey = <T,>(values: Record<string, T>): Record<string, T> => Object.fromEntries(items.flatMap((_, index) => {
-      const oldKey = itemEditorKey(items, index);
-      return nextItems[index] && Object.prototype.hasOwnProperty.call(values, oldKey) ? [[itemEditorKey(nextItems, index), values[oldKey]]] : [];
-    }));
-    setOverrides(rekey); setEditingCode(rekey); setLossRates(rekey);
-    setManualOrderQuantities(rekey); setOrderQuantityInputs(rekey); setNewEntryInputs(rekey);
-    newEntryInputsRef.current = rekey(newEntryInputsRef.current);
+    setPublishedMaterials(new Map(nextItems.map(item => [item.client_material_id!, materialSignature(item)])));
     onItemsChange?.(nextItems);
   };
 
@@ -371,7 +410,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   useEffect(() => {
     if (items.length === 0) {
       if (previousHadItemsRef.current) {
-        originalItemsRef.current = [];
+        originalItemsRef.current.clear();
         previousHadItemsRef.current = false;
         lastSyncedItemsRef.current = "";
         setOverrides({});
@@ -385,13 +424,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     }
 
     if (!previousHadItemsRef.current) {
-      originalItemsRef.current = (sourceItems ?? items).map(cloneMemoProductItem);
+      // Originals are matched by immutable material/source identity above.
       previousHadItemsRef.current = true;
     }
   }, [items, sourceItems]);
 
   useEffect(() => {
-    const productCodes = items.map((_, index) => String(index));
+    const productCodes = items.map(item => item.client_material_id!);
     setCollapsedCodes((current) => {
       const next = pruneCollapsedCodes(current, productCodes);
       if (next.size === current.size && Array.from(next).every((code) => current.has(code))) {
@@ -417,7 +456,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     const before = items[targetIndex];
     const updatedItems = items.map((item, index) => index === targetIndex
       ? { ...item, product_code: toCode, quantity_confirmation: "", reading_review_confirmation: "" } : item);
-    setSelectedProductCode(updatedItems.findIndex(item => item.product_code === toCode) === targetIndex ? toCode : `${toCode}::${targetIndex}`);
+    setSelectedProductCode(fromKey);
     applyItemsChange(updatedItems);
 
     // DBへ補正ログを保存（失敗してもUIは優先）
@@ -646,7 +685,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
   const handleResetEntry = (productCode: string, entryIndex: number) => {
     const original = findOriginalMemoEntry(
-      originalItemsRef.current[items.findIndex((_, index) => itemEditorKey(items, index) === productCode)]?.entries ?? [],
+      originalItemsRef.current.get(productCode)?.entries ?? [],
       findItem(productCode)?.entries[entryIndex],
     );
     if (!original) {
@@ -675,8 +714,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const handleResetProductToOriginal = (productCode: string) => {
     if (!onItemsChange) return;
     const targetIndex = items.findIndex((_, index) => itemEditorKey(items, index) === productCode);
-    const original = originalItemsRef.current[targetIndex];
-    if (!original) return;
+    const original = originalItemsRef.current.get(productCode);
+    if (!original) { setRowResetError("元の材料を特定できません。入力は保持しています。メモ画像を確認してください。"); return; }
 
     clearManualOrderQuantity(productCode);
     setLossRates((prev) => {
@@ -699,7 +738,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     delete newEntryInputsRef.current[productCode];
     setOrderQuantityInputs(previous => ({ ...previous, [productCode]: undefined }));
 
-    applyItemsChange(items.map((item, index) => index === targetIndex ? { ...cloneMemoProductItem(original), quantity_confirmation: "", reading_review_confirmation: "" } : item));
+    applyItemsChange(items.map((item, index) => index === targetIndex ? { ...cloneMemoProductItem(original), client_material_id: productCode, quantity_confirmation: "", reading_review_confirmation: "" } : item));
   };
 
   const handleSetOrderQuantity = (productCode: string, value: number) => {
@@ -825,16 +864,16 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
   const groups = useMemo(() => groupByManufacturer(derivedItems), [derivedItems]);
   const reviewReasonGroups = useMemo(() => compactReviewReasons(derivedItems), [derivedItems]);
-  const productCodes = useMemo(() => derivedItems.map((_, index) => String(index)), [derivedItems]);
+  const productCodes = useMemo(() => derivedItems.map(item => item.editorKey), [derivedItems]);
   const materialValue = (item: typeof derivedItems[number], index: number) =>
     derivedItems.findIndex(row => row.product_code === item.product_code) === index ? item.product_code : `${item.product_code}::${index}`;
   const materialValues = derivedItems.map(materialValue);
-  const activeMaterialValue = materialValues.includes(selectedProductCode) ? selectedProductCode : materialValues[0];
+  const activeMaterialValue = materialValues[derivedItems.findIndex(item => item.editorKey === selectedProductCode)] ?? materialValues[0];
   const jumpToMaterial = (value: string) => {
-    setSelectedProductCode(value);
     const index = materialValues.indexOf(value);
+    setSelectedProductCode(derivedItems[index]?.editorKey ?? "");
     if (index < 0) return;
-    setCollapsedCodes(current => { const next = new Set(current); next.delete(String(index)); return next; });
+    setCollapsedCodes(current => { const next = new Set(current); next.delete(derivedItems[index]?.editorKey); return next; });
     window.requestAnimationFrame(() => document.getElementById(`${navId}-material-${index}`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
   };
   const allCodesCollapsed = useMemo(
@@ -861,6 +900,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
     const signature = JSON.stringify(
       canonicalItems.map((item) => ({
+        client_material_id: item.client_material_id,
         product_code: item.product_code,
         reading_reviews: item.reading_reviews, reading_review_confirmation: item.reading_review_confirmation,
         order_mode: item.order_mode, pattern_rows_configured: item.pattern_rows_configured, memo_allowance: item.memo_allowance, loss_rate_input: item.loss_rate_input, repeat_cm_input: item.repeat_cm_input, repeat_height_input: item.repeat_height_input,
@@ -877,15 +917,17 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       })),
     );
 
+    setLastCanonicalMaterials(canonicalItems);
     if (signature === lastSyncedItemsRef.current) return;
     lastSyncedItemsRef.current = signature;
+    setPublishedMaterials(new Map(canonicalItems.map(item => [item.client_material_id!, materialSignature(item)])));
     onItemsChange(canonicalItems);
   }, [derivedItems, onItemsChange]);
 
-  const copyCollection = JSON.stringify({ job: privatePhotoJobId, siteName, products: derivedItems.map(item => ({ code: item.product_code,
-    sources: item.entries.map(entry => ({ id: entry.source_row_id, image: entry.source_image_index, index: entry.source_entry_index, formula: entry.original_formula })) })) });
+  const copyCollection = JSON.stringify({ job: privatePhotoJobId, siteName, products: derivedItems.map(item => ({ id: item.editorKey, code: item.product_code,
+    sources: item.entries.map(entry => ({ id: entry.source_row_id, image: entry.source_image_index, index: entry.source_entry_index, formula: entry.original_formula })) })).sort((a, b) => a.id.localeCompare(b.id)) });
   const currentReviewScope = { collection: copyCollection,
-    identity: JSON.stringify({ job: privatePhotoJobId, siteName, products: derivedItems.map(item => item.product_code) }),
+    identity: JSON.stringify({ job: privatePhotoJobId, siteName, products: derivedItems.map(item => [item.editorKey, item.product_code]).sort((a,b) => a[0].localeCompare(b[0])) }),
     sources: Object.fromEntries(derivedItems.map(item => [item.editorKey, JSON.stringify(item.entries.map(entry => ({
       id: entry.source_row_id, image: entry.source_image_index, index: entry.source_entry_index, formula: entry.original_formula }))) ])),
     filled: derivedItems.length > 0 };
@@ -900,8 +942,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     setOverrides(previous => ({ ...previous, ...Object.fromEntries(derivedItems.filter(item => all || copyReviewScope.sources[item.editorKey] !== currentReviewScope.sources[item.editorKey]).map(item => [item.editorKey,
       { ...previous[item.editorKey], quantityConfirmation: "", readingReviewConfirmation: "" }])) }));
   }
-  const copyReviewRows = useMemo(() => derivedItems.map((item, index) => {
-    const id = `${index}:${item.product_code}`;
+  const copyReviewRows = useMemo(() => derivedItems.map(item => {
+    const id = item.editorKey;
     const context = { sourceJobId: privatePhotoJobId ?? null, siteName, itemKey: id, collectionKey: copyCollection };
     const review = inspectCopyReview(item.copyReviewInput, context);
     const duplicate = derivedItems.filter(other => other.product_code === item.product_code).length > 1;
@@ -1077,7 +1119,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                   <p className={`text-xs ${numeric.state === "sufficient" ? "font-semibold text-emerald-700 dark:text-emerald-300" : numeric.state === "shortfall" ? "font-semibold text-rose-700 dark:text-rose-300" : "text-muted-foreground"}`} role="status" aria-label={`${code} の発注量チェック`}>
                     <span aria-hidden="true">{numeric.state === "sufficient" ? "✅ " : numeric.state === "shortfall" ? "⚠️ " : "－ "}</span>{numeric.text}
                   </p>
-                  <button type="button" className="min-h-11 text-xs underline" aria-label={`${code} を確認・編集`} data-workspace-navigation onClick={() => { setCollapsedCodes(current => { const next = new Set(current); next.delete(String(index)); return next; }); selectView("edit", materialValue(item, index)); }}>確認・編集</button>
+                  <button type="button" className="min-h-11 text-xs underline" aria-label={`${code} を確認・編集`} data-workspace-navigation onClick={() => { setCollapsedCodes(current => { const next = new Set(current); next.delete(derivedItems[index]?.editorKey); return next; }); selectView("edit", item.editorKey); }}>確認・編集</button>
                 </div>
                 {!review.ready || readingAttention || duplicate ? <p className="flex w-full items-center justify-between gap-2 text-xs text-amber-800 dark:text-amber-300" aria-label={`${code} の発注時の注意`}>
                   <span>{review.blockedMessage || readingAttention || "同品番は別行で表示・追加時に統合を選択"}</span>
@@ -1138,7 +1180,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       </section>
       <section id={`${navId}-edit`} data-result-panel="edit" role="tabpanel" aria-labelledby={`${navId}-edit-tab`} tabIndex={-1} hidden={resultView !== "edit"} className="scroll-mt-4 space-y-3 outline-none print:block">
         <h2 className="text-xl font-bold">数量</h2>
-        <label className="block text-sm font-semibold">編集する品番<select aria-label="編集する品番" data-workspace-navigation className="mt-1 min-h-11 w-full rounded-lg border bg-background px-3" value={activeMaterialValue} onChange={event => jumpToMaterial(event.target.value)}>{groups.map(group => <optgroup key={group.label} label={group.label}>{group.rows.map(product => <option key={derivedItems.indexOf(product)} value={materialValue(product, derivedItems.indexOf(product))}>{product.product_code}{derivedItems.filter(item => item.product_code === product.product_code).length > 1 ? `（${derivedItems.indexOf(product) + 1}行目）` : ""}</option>)}</optgroup>)}</select></label>
+        <label className="block text-sm font-semibold">編集する品番<select aria-label="編集する品番" data-workspace-navigation className="mt-1 min-h-11 w-full rounded-lg border bg-background px-3" value={activeMaterialValue} onChange={event => jumpToMaterial(event.target.value)}>{groups.map(group => <optgroup key={group.label} label={group.label}>{group.rows.map(product => <option key={product.editorKey} value={materialValue(product, derivedItems.indexOf(product))}>{product.product_code}{derivedItems.filter(item => item.product_code === product.product_code).length > 1 ? `（${derivedItems.indexOf(product) + 1}行目）` : ""}</option>)}</optgroup>)}</select></label>
       <details className="rounded-xl border bg-background p-3 text-sm" aria-label="読み取り・計算の説明">
         <summary data-workspace-navigation className="min-h-6 cursor-pointer font-medium">読み取りの説明{reviewReasonGroups.length ? "（確認あり）" : ""}</summary>
         <div className="mt-3 space-y-2 text-xs text-muted-foreground">
@@ -1167,6 +1209,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         </Button>
       </div>
 
+      {detachedInput ? <details className="rounded-lg border p-3 text-sm"><summary className="min-h-11 cursor-pointer">切り替え前の入力を保全しました</summary>
+        <p>対応を特定できない編集は別の材料に適用していません。</p>
+        <button type="button" data-workspace-navigation className="min-h-11 underline" onClick={() => {
+          const url = URL.createObjectURL(new Blob([detachedInput], { type: "application/json" }));
+          const link = document.createElement("a"); link.href = url; link.download = "sokupa-material-inputs.json"; link.click();
+          window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }}>保全した入力を書き出す</button></details> : null}
       {rowResetError ? <p role="alert" className="text-sm text-amber-800 dark:text-amber-300">{rowResetError}</p> : null}
       <div className="space-y-4 sm:space-y-6">
         {groups.map((group) => (
@@ -1180,7 +1229,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
             <CardContent className="p-0">
               {group.rows.map((product, idx) => {
                 const materialIndex = derivedItems.indexOf(product);
-                const materialKey = String(materialIndex);
+                const materialKey = product.editorKey;
                 const isCollapsed = collapsedCodes.has(materialKey);
                 const commonHeightInput = overrides[product.editorKey]?.heightM ?? product.repeat_height_input;
                 const commonHeightInvalid = typeof commonHeightInput === "string" && commonHeightInput !== "";
@@ -1192,11 +1241,11 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                       : individualHeightRows === activeRepeatRows ? `各行の個別寸法で計算（共通高さ ${product.repeat_height_m}m は未使用）`
                         : `共通高さ ${product.repeat_height_m}m${individualHeightRows ? `・個別寸法${individualHeightRows}行を優先` : "を使用"}`
                     : "各行の寸法で計算";
-                const repeatDetailsId = `${navId}-repeat-${materialIndex}-${encodeURIComponent(product.product_code)}`;
-                const repeatControlsId = `${repeatDetailsId}-controls-${encodeURIComponent(group.label)}-${idx}`;
+                const repeatDetailsId = `${navId}-repeat-${product.editorKey}`;
+                const repeatControlsId = `${repeatDetailsId}-controls`;
                 const repeatControlsOpen = !collapsedRepeatControls.has(repeatControlsId);
                 return (
-                <div aria-label={`${product.product_code} の材料 ${materialIndex + 1}`} data-material-index={materialIndex} data-material-value={materialValue(product, materialIndex)} id={`${navId}-material-${materialIndex}`} key={materialIndex} className={`print:block px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
+                <div aria-label={`${product.product_code} の材料 ${materialIndex + 1}`} data-material-index={materialIndex} data-material-id={product.editorKey} data-material-value={materialValue(product, materialIndex)} id={`${navId}-material-${materialIndex}`} key={product.editorKey} className={`print:block px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
                   {isCollapsed ? (
                     <div className="flex min-w-0 items-center gap-3">
                       <div className="min-w-0 flex-1">
@@ -1775,7 +1824,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         copyReady={copyReviewRows.length > 0 && copyReviewRows.every(row => row.ready)} onClose={() => closeCopyReview()}
         onApply={applyCopyReview} onCopy={copyOrderText}
         onEdit={id => { const row = liveCopyReview.current.rows.find(row => row.id === id); if (row) closeCopyReview(() => {
-          setCollapsedCodes(current => { const next = new Set(current); const index = liveCopyReview.current.rows.findIndex(item => item.id === row.id); next.delete(String(index)); return next; }); selectView("edit", materialValue(liveCopyReview.current.items[Number(row.id.split(":")[0])], Number(row.id.split(":")[0])));
+          setCollapsedCodes(current => { const next = new Set(current); next.delete(row.editorKey); return next; }); selectView("edit", row.editorKey);
         }); }}
         onPhoto={index => { setPhotoError(false); setPhotoIndex(index); if (copyPhotoRef.current) { copyPhotoRef.current.open = true; copyPhotoRef.current.scrollIntoView({ block: "start" }); } }}
         photo={copyReviewOpen ? <details ref={copyPhotoRef} open className="space-y-2 rounded-xl border p-3"><summary className="min-h-11 cursor-pointer font-semibold">メモ画像（この結果）</summary>{sourcePhoto(true)}</details> : null} />
