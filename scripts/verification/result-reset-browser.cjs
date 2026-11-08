@@ -51,6 +51,32 @@ const make=()=>{
   return {context,page,owner,key,latestKey,control,dialogs,calls,errors,unexpected,read,bytes,saved,photo,inputSite,reset,restore,choice};
  };
  for(const base of bases){
+  // No reconfirmation or text input: quantity buttons alone must renew saved age.
+  for(const editView of[false,true])for(const boundary of[DAY,2*DAY]){
+   const seed=make(),item=seed.parsed.items[0];item.order_quantity=item.manual_order_quantity=23;delete item.reading_reviews;delete item.quantity_confirmation;delete item.reading_review_confirmation;
+   const h=await fixture(base,{initial:await resumeResultDraft(seed,now-23*60*60*1000)}),changedAt=now+1000;
+   if(editView)await ui.edit(h.page,'ANON1');
+   await h.page.getByRole('button',{name:'ANON1 の発注数量を1m増やす',exact:true}).click();await wait(()=>h.read().then(d=>d.parsed.items[0].order_quantity===24));await h.saved();
+   check((await h.read()).resultSession.meaningfulAt===now,`${editView?'editor':'list'} quantity plus alone renews meaningful saved time`);
+   await h.page.evaluate(value=>window.setResetClock(value),changedAt);await h.page.getByRole('button',{name:'ANON1 の発注数量を1m減らす',exact:true}).click();await wait(()=>h.read().then(d=>d.parsed.items[0].order_quantity===23));await h.saved();
+   check((await h.read()).resultSession.meaningfulAt===changedAt&&!(await h.read()).parsed.items[0].quantity_confirmation,'quantity minus alone renews time even when final23 matches the original23, without reconfirmation');
+   await h.page.evaluate(value=>window.setResetClock(value),now+60*60*1000);await h.page.reload();await h.saved();
+   check(h.dialogs.length===0&&(await h.read()).parsed.items[0].order_quantity===23&&(await h.read()).resultSession.meaningfulAt===changedAt,'button edit survives reload past old24h without a prompt or automatic renewal');
+   if(boundary===DAY){await h.page.evaluate(value=>window.setResetClock(value),changedAt+DAY-1);await h.page.reload();await h.saved();check(h.dialogs.length===0&&(await h.read()).resultSession.meaningfulAt===changedAt,'button-only save stays automatic until its own24h boundary');}
+   await h.page.evaluate(value=>window.setResetClock(value),changedAt+boundary);await h.page.reload();await h.saved();
+   check(boundary===DAY?h.dialogs.length===1&&(await h.read()).parsed.items[0].order_quantity===23:(await h.read()).parsed===null&&(await h.read()).resultSession.undo.parsed.items[0].order_quantity===23,'24/48h decision is measured from the last button-only saved edit');
+   check(h.errors.length===0&&h.unexpected.length===0,'button-clock regression uses only expected synthetic APIs');await h.context.close();
+  }
+  {
+   const seed=make();seed.parsed.items[0].order_quantity=seed.parsed.items[0].manual_order_quantity=0;const h=await fixture(base,{initial:await resumeResultDraft(seed,now-23*60*60*1000)}),minus=h.page.getByRole('button',{name:'ANON1 の発注数量を1m減らす',exact:true});
+   const before=await h.bytes();check(await minus.isDisabled(),'quantity zero disables minus instead of creating a negative edit');await minus.evaluate(button=>button.click());await h.saved();check(await h.bytes()===before&&(await h.read()).resultSession.meaningfulAt===now-23*60*60*1000,'disabled zero-minus leaves stored bytes and meaningful time unchanged');await h.context.close();
+  }
+  {
+   const h=await fixture(base,{age:23*60*60*1000});const before=await h.bytes();await h.page.evaluate(key=>{const old=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k===key)throw new DOMException('Synthetic quota','QuotaExceededError');return old.call(this,k,v);};},h.key);
+   await h.page.getByRole('button',{name:'ANON1 の発注数量を1m増やす',exact:true}).click();await h.page.getByRole('heading',{name:'エラー',exact:true}).waitFor();
+   check(await h.bytes()===before&&(await h.read()).resultSession.meaningfulAt===now-23*60*60*1000,'failed button save advances neither persisted result nor its clock');
+   check((await h.page.getByLabel('結果の保存状態').innerText()).includes('確認できません'),'failed button save is never displayed as saved');await h.context.close();
+  }
   for(const age of[0,DAY-1,DAY,2*DAY-1,2*DAY]){
    const h=await fixture(base,{age});
    if(age<2*DAY){await h.page.getByLabel('ANON1 の一覧発注数量',{exact:true}).waitFor();check((await h.read()).parsed.items[0].order_quantity===30,`${age}: edited final quantity retained`);check(h.dialogs.length===(age<DAY?0:1),`${age}: exact24h confirmation boundary`);if(age<DAY)check((await h.read()).resultSession.meaningfulAt===now-age,'opening does not renew meaningful time');else check((await h.read()).resultSession.meaningfulAt===now,'explicit age resume restarts24h');}

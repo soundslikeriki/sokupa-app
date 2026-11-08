@@ -688,6 +688,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const handleAdjustOrderQuantity = (productCode: string, delta: number) => {
+    onMeaningfulEdit?.();
     const currentItem = derivedItems.find((item) => item.product_code === productCode);
     const currentQuantity = toFiniteNumber(currentItem?.order_quantity);
     handleSetOrderQuantity(productCode, currentQuantity + delta);
