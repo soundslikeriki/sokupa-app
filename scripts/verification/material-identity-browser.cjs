@@ -17,6 +17,12 @@ for(const basic of[false,true])for(const width of[320,390]){
  await page.evaluate(()=>window.reorderMaterials());await wait(()=>read().then(x=>x[0].client_material_id===b));
  state=await read();check(state[0].order_quantity===23&&state[1].order_quantity===61,'reorder keeps source-1=23 and edited source-0=61');
  check(await card(a).getByLabel('DUP の発注数量を入力',{exact:true}).inputValue()==='61','numeric editor follows immutable material after reorder');
+ const beforeInsertion=await read(),extra=structuredClone(beforeInsertion[0]);delete extra.client_material_id;extra.order_quantity=7;extra.manual_order_quantity=7;extra.entries[0].source_row_id='inserted-duplicate';extra.entries[0].source_image_index=3;
+ await set([extra,...beforeInsertion]);await wait(()=>read().then(x=>x.length===3&&x.every(i=>i.client_material_id)));
+ check((await read()).find(i=>i.client_material_id===a).order_quantity===61&&(await read())[0].order_quantity===7,'same-SKU first insertion cannot inherit61');
+ await set((await read()).filter(i=>i.client_material_id!==b));await wait(()=>read().then(x=>x.length===2));
+ check((await read()).find(i=>i.client_material_id===a).order_quantity===61&&(await read())[0].order_quantity===7,'removing original first same-SKU material does not transfer its state');
+ await set(beforeInsertion);await wait(()=>read().then(x=>x.length===2&&x[0].client_material_id===b));
  await card(a).getByLabel('DUP に追加する長さ (m)',{exact:true}).fill('1.25');await card(a).getByLabel('DUP に追加する幅数',{exact:true}).fill('3');
  await card(a).getByTitle('タップして品番を編集',{exact:true}).click();await card(a).getByLabel('品番を編集',{exact:true}).fill('PENDING');
  await page.evaluate(()=>window.reorderMaterials());await wait(()=>read().then(x=>x[0].client_material_id===a));
@@ -33,9 +39,9 @@ for(const basic of[false,true])for(const width of[320,390]){
  await card(a).getByRole('button',{name:'解析結果に戻す',exact:false}).click();await wait(()=>read().then(x=>x.find(i=>i.client_material_id===a).product_code==='DUP'));
  check((await read()).find(i=>i.client_material_id===b).order_quantity===23&&(await read()).find(i=>i.client_material_id===a).entries[0].source_row_id==='source-0','original reset uses correct source after reorder');
  await card(a).getByLabel('DUP の発注数量を入力',{exact:true}).fill('61');await wait(()=>read().then(x=>x.find(i=>i.client_material_id===a).order_quantity===61));
- await page.evaluate(()=>window.restoreMaterials(window.seed));await wait(()=>read().then(x=>x[0].order_quantity===51));
+ await page.evaluate(()=>window.restoreMaterials(window.seed));await wait(()=>read().then(x=>x[0].order_quantity===51&&x.every(i=>i.client_material_id)));
  check((await read())[1].order_quantity===23,'old same-job snapshot restores51 and preserves23 instead of overlay61');
- const legacy=(await read()).map(({client_material_id,...item})=>item).reverse();await set(legacy);await wait(()=>read().then(x=>x[0].entries[0].source_row_id==='source-1'));
+ const legacy=(await read()).map(({client_material_id,...item})=>item).reverse();await set(legacy);await wait(()=>read().then(x=>x[0].entries[0].source_row_id==='source-1'&&x.every(i=>i.client_material_id)));
  check((await read())[0].client_material_id===b&&(await read())[0].order_quantity===23,'legacy reorder matches unique immutable source anchor');
  // Truly identical data without source references is not enough to identify two materials.
  const anonymous=structuredClone((await read())[0]);delete anonymous.client_material_id;anonymous.entries=anonymous.entries.map(({source_row_id,source_image_index,source_entry_index,...e})=>e);anonymous.order_quantity=23;anonymous.manual_order_quantity=23;
@@ -44,13 +50,18 @@ for(const basic of[false,true])for(const width of[320,390]){
  await card(c).getByLabel('DUP の発注数量を入力',{exact:true}).fill('61');await wait(()=>read().then(x=>x[0].order_quantity===61));
  await page.evaluate(()=>window.reorderMaterials());await wait(()=>read().then(x=>x[0].client_material_id===d));
  check((await read())[0].order_quantity===23&&(await read())[1].order_quantity===61,'identical same-SKU materials with persisted IDs stay independent');
- await set([anonymous,structuredClone(anonymous)]);await wait(()=>read().then(x=>x.every(i=>i.client_material_id!==c&&i.client_material_id!==d)));
+ await set([anonymous,structuredClone(anonymous)]);await wait(()=>read().then(x=>x.every(i=>i.client_material_id&&i.client_material_id!==c&&i.client_material_id!==d)));
  check((await read()).every(i=>i.order_quantity===23),'ambiguous ID-less legacy replacement never borrows61');
+ const liveId=(await read())[0].client_material_id;
+ await card(liveId).getByTitle('タップして品番を編集',{exact:true}).click();await card(liveId).getByLabel('品番を編集',{exact:true}).fill('NOT-COMMITTED');
+ const postCount=(await page.evaluate(()=>window.calls.filter(c=>c.url==='/api/memo-corrections'))).length;
  await page.getByText('切り替え前の入力を保全しました',{exact:true}).click();
+ check(await card(liveId).getByLabel('品番を編集',{exact:true}).inputValue()==='NOT-COMMITTED'&&(await page.evaluate(()=>window.calls.filter(c=>c.url==='/api/memo-corrections'))).length===postCount,'recovery disclosure never commits another pending SKU');
+ await card(liveId).getByLabel('品番を編集',{exact:true}).press('Escape');
  const download=page.waitForEvent('download');await page.getByRole('button',{name:'保全した入力を書き出す',exact:true}).click();const saved=await download,path=await saved.path();const recovered=JSON.parse(fs.readFileSync(path,'utf8'));
  check(recovered.materials.some(i=>i.client_material_id===c&&i.order_quantity===61),'detached old input61 remains downloadable, never silently discarded');
  const current=(await read())[0].client_material_id;await card(current).getByLabel('DUP の発注数量を入力',{exact:true}).fill('73');await wait(()=>read().then(x=>x[0].order_quantity===73));
- await page.evaluate(()=>{window.setResultJob('00000000-0000-4000-8000-00000000000b');window.setMaterials(window.seed);});await wait(()=>read().then(x=>x[0].entries[0].source_row_id==='source-0'&&x[0].order_quantity===51));
+ await page.evaluate(()=>{window.setResultJob('00000000-0000-4000-8000-00000000000b');window.setMaterials(window.seed);});await wait(()=>read().then(x=>x[0].entries[0].source_row_id==='source-0'&&x[0].order_quantity===51&&x.every(i=>i.client_material_id)));
  check((await read())[1].order_quantity===23,'different-job selection never inherits manual73');
  check(errors.length===0&&unexpected.length===0,'identity transitions have no console/runtime error or real network');
  await context.close();

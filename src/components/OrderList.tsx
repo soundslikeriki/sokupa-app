@@ -1209,7 +1209,7 @@ export function OrderList({ basicView = false, items: incomingItems, sourceItems
         </Button>
       </div>
 
-      {detachedInput ? <details className="rounded-lg border p-3 text-sm"><summary className="min-h-11 cursor-pointer">切り替え前の入力を保全しました</summary>
+      {detachedInput ? <details className="rounded-lg border p-3 text-sm"><summary data-workspace-navigation className="min-h-11 cursor-pointer">切り替え前の入力を保全しました</summary>
         <p>対応を特定できない編集は別の材料に適用していません。</p>
         <button type="button" data-workspace-navigation className="min-h-11 underline" onClick={() => {
           const url = URL.createObjectURL(new Blob([detachedInput], { type: "application/json" }));
