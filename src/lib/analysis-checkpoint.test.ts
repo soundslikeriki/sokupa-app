@@ -85,3 +85,11 @@ test("one slow image leaves the next image unclaimed in the same invocation",asy
  const admin=createClient('https://db.example.test','synthetic',{auth:{persistSession:false},global:{fetch:async(input)=>{const url=new URL(String(input)),name=url.pathname.split('/').at(-1);if(url.pathname.includes('/storage/'))return new Response(new Uint8Array([255,216,255,217]),{headers:{'Content-Type':'image/jpeg'}});if(name==='analysis_jobs')return json({id:'job',status:'running',total_images:2});if(name==='claim_durable_analysis_image'){claims++;return json([{id:'image',idx:0,url:'synthetic/0.jpg',lease_token:'lease'}]);}if(name==='complete_analysis_image')return json(true);if(name==='analysis_job_images')return json([{idx:0,status:'done',parsed:{items:[{}]}},{idx:1,status:'queued'}]);throw Error('Unexpected request');}}});
  try{assert.equal((await runAnalysisJob({admin,jobId:'job',budget,parse:async()=>{parses++;clock=210_000;return json({data:{items:checkpoint.rawItems}});}})).status,'running');assert.equal(claims,1);assert.equal(parses,1);}finally{if(saved===undefined)delete process.env.NEXT_PUBLIC_SUPABASE_URL;else process.env.NEXT_PUBLIC_SUPABASE_URL=saved;}
 });
+
+test("platform shared deadline subtracts cold initialization and never extends an expired invocation",()=>{
+ let clock=0;const budget=new AnalysisBudget(()=>clock,new Date(240_000),0);
+ assert.equal(budget.remaining(),180_000);assert.equal(budget.remaining(285_000),225_000);
+ clock=30_001;assert.throws(()=>budget.providerSignal("vision"),AnalysisYield);
+ assert.equal(new AnalysisBudget(()=>0,new Date(-1),0).remaining(285_000),0);
+ assert.equal(new AnalysisBudget(()=>0,new Date(900_000),0).remaining(),240_000);
+});

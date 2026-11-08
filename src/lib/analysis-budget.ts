@@ -1,8 +1,19 @@
+import { getDeadline } from "@vercel/functions";
+
 /** One monotonic clock from HTTP entry, shared by every continuation in that invocation. */
 export class AnalysisBudget {
   private readonly started: number;
-  constructor(private readonly now: () => number = () => performance.now()) { this.started = now(); }
-  remaining(deadline = 240_000): number { return Math.max(0, deadline - (this.now() - this.started)); }
+  private readonly duration: number;
+  constructor(private readonly now: () => number = () => performance.now(), invocationDeadline = getDeadline(), wallNow = Date.now()) {
+    this.started = now();
+    const platformRemaining = invocationDeadline ? invocationDeadline.getTime() - wallNow : 300_000;
+    this.duration = Number.isFinite(platformRemaining) ? Math.max(0, Math.min(300_000, platformRemaining)) : 300_000;
+  }
+  remaining(deadline = 240_000): number {
+    // Preserve the same closing reserve even when cold initialization/auth consumed time
+    // before this handler, or the platform supplies an earlier shared deadline.
+    return Math.max(0, Math.min(deadline, this.duration - (300_000 - deadline)) - (this.now() - this.started));
+  }
   providerSignal(kind: "vision" | "catalog"): AbortSignal {
     const available = this.remaining();
     const minimum = kind === "vision" ? 150_000 : 90_000;

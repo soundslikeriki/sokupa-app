@@ -47,6 +47,10 @@ try{
   check(retry?row.provider_operation===null:row.failure_delivery_unknown===unknown,`${code} provider intent/delivery state preserved correctly`);
   const job=await one('select quota_reserved,quota_refunded from analysis_jobs where id=$1',[id]);check(job.quota_refunded===(retry?0:job.quota_reserved),`${code} quota settles transactionally`);
  }
+ for(const fn of ['analysis_pipeline_version()','begin_analysis_provider(uuid,uuid,uuid,text,text)','checkpoint_analysis_image(uuid,uuid,uuid,jsonb)','yield_analysis_image(uuid,uuid)','claim_durable_analysis_image(uuid)']) {
+  for(const role of ['anon','authenticated','service_role'])check((await one('select has_function_privilege($1,$2,$3) ok',[role,'public.'+fn,'execute'])).ok===(role==='service_role'),`${role}: ${fn} has only the intended existing server permission`);
+ }
+ check(!(await one("select has_column_privilege('anon','public.analysis_job_images','pipeline_checkpoint','select') ok")).ok,'checkpoint data does not expand anonymous image access');
  await q('set role anon');await assert.rejects(q('select analysis_pipeline_version()'),e=>e.code==='42501');await q('reset role');check(true,'anonymous caller cannot invoke pipeline authority');
  console.log(JSON.stringify({checks:n,pass:true,engine:'PGlite actual PostgreSQL single connection; concurrent request serialization only, not independent backend lock proof'}));
 }finally{await db.close();}})().catch(e=>{console.error(e);process.exitCode=1;});
