@@ -1,3 +1,4 @@
+import { AnalysisBudget } from "@/lib/analysis-budget";
 import { analysisBackgroundReady } from "@/lib/analysis-background";
 import { NextRequest, NextResponse } from "next/server";
 import { authorize } from "@/lib/server-auth";
@@ -7,7 +8,8 @@ import { waitUntil } from "@vercel/functions";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 export async function GET(req: NextRequest) {
-  const auth = await authorize(req);
+  const budget = new AnalysisBudget();
+  const auth = await authorize(req, budget);
   if (auth.error) return auth.error;
   if (req.nextUrl.searchParams.get("history") === "1") {
     const before = req.nextUrl.searchParams.get("before");
@@ -35,8 +37,9 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ data: data ?? [] }, { headers: { "Cache-Control": "no-store" } });
 }
 export async function POST(req: NextRequest) {
+  const budget = new AnalysisBudget();
   try {
-    const auth = await authorize(req);
+    const auth = await authorize(req, budget);
     if (auth.error) return auth.error;
     const body = await req.json();
     const paths = body.image_paths;
@@ -54,7 +57,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: limited ? "今月の利用上限（20枚）に達しました。" : "解析の受付に失敗しました。再度お試しください。" }, { status: limited ? 429 : 503 });
     }
     // Each image has an exclusive lease; longer jobs resume in separate invocations.
-    waitUntil(runAnalysisJob({ admin: auth.admin, jobId }));
+    waitUntil(runAnalysisJob({ admin: auth.admin, jobId, budget }));
     return NextResponse.json({ success: true, job_id: jobId, execution_mode: process.env.ANALYSIS_BACKGROUND_MODE, background_ready: true });
   } catch {
     return NextResponse.json({ error: "解析の受付に失敗しました" }, { status: 500 });

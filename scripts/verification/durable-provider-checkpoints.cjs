@@ -1,0 +1,52 @@
+// Actual PostgreSQL (WASM), synthetic rows only, no network or provider credentials.
+const {PGlite}=require(process.env.PGLITE_MODULE||'@electric-sql/pglite');
+const {readFileSync}=require('node:fs');const assert=require('node:assert/strict');
+(async()=>{const db=new PGlite();let n=0;const q=db.query.bind(db),one=async(sql,args)=>(await q(sql,args)).rows[0],check=(value,label)=>{assert.ok(value,label);console.log(`PASS ${++n}: ${label}`);};
+try{
+ await require('./analysis-fixture.cjs').setupAnalysisFixture(db);await require('./worker-health-fixture.cjs').primeWorkerHealth(q);
+ await db.exec(readFileSync('supabase/migrations/20261108054508_durable_provider_checkpoints.sql','utf8'));
+ const make=async(count=1)=>(await one('select create_analysis_job($1,$2,$3,true) id',['owner',Array.from({length:count},(_,i)=>`owner/${i}.jpg`),'Synthetic'])).id;
+ const claim=async(id)=>(await q('select * from claim_durable_analysis_image($1)',[id])).rows;
+ const expire=async(img)=>q("update analysis_job_images set lease_expires_at=now()-interval '1 second' where id=$1",[img.id]);
+ const op=()=>crypto.randomUUID();
+ const begin=async(img,operation,revision=null)=>(await one("select begin_analysis_provider($1,$2,$3,'vision',$4) ok",[img.id,img.lease_token,operation,revision])).ok;
+ const snapshot=(revision=op())=>({version:1,revision,rawItems:[{product_code:'SYN',entries:[{length_m:2,quantity:1,subtotal_m:2}],total_m:2}],notes:'Synthetic',imageNeedsReview:false,catalog:{}});
+ const save=async(img,operation,value)=>(await one('select checkpoint_analysis_image($1,$2,$3,$4) ok',[img.id,img.lease_token,operation,value])).ok;
+ const payload={items:[{product_code:'SYN',entries:[{original_formula:'2×1',length_m:2,quantity:1,subtotal_m:2}],total_m:2,order_quantity:3}]};
+ check((await one('select analysis_pipeline_version() v')).v===1,'capability reports staged protocol1');
+ await assert.rejects(q('select * from claim_analysis_image($1)',[crypto.randomUUID()]),/durable_worker_required/);check(true,'old application cannot acquire an unjournaled lease');
+ const job=await make(2),img=(await claim(job))[0],operation=op();
+ check(await begin(img,operation),'provider intent is durably recorded before sending');
+ check(!await begin(img,op()),'second worker/duplicate intent cannot enter');
+ check((await claim(job)).length===0,'active lease excludes parallel provider work');
+ check(!(await one('select yield_analysis_image($1,$2) ok',[img.id,img.lease_token])).ok,'pending provider intent cannot be yielded');
+ check(!(await one('select complete_analysis_image($1,$2,$3) ok',[img.id,img.lease_token,payload])).ok,'inflight provider cannot be completed as a result');
+ await expire(img);check((await claim(job)).length===0,'crash after send is stopped, not automatically sent again');
+ const stopped=await one('select status,failure_delivery_unknown,pipeline_checkpoint from analysis_job_images where id=$1',[img.id]);
+ check(stopped.status==='failed'&&stopped.failure_delivery_unknown,'unknown external outcome remains explicit');
+ check(!await save(img,operation,snapshot()),'expired callback cannot overwrite terminal state');
+ check((await one('select count(*)::int n from analysis_job_images where job_id=$1',[job])).n===2,'partial failure preserves both image records');
+ const savedJob=await make(),savedImg=(await claim(savedJob))[0],first=op(),checkpoint=snapshot();await begin(savedImg,first);
+ check(await save(savedImg,first,checkpoint),'validated OCR checkpoint persists and clears provider intent atomically');
+ await expire(savedImg);const resumed=(await claim(savedJob))[0];check(resumed&&resumed.lease_token!==savedImg.lease_token,'known completed OCR resumes with a fresh fenced lease');
+ check((await one('select pipeline_checkpoint from analysis_job_images where id=$1',[savedImg.id])).pipeline_checkpoint.revision===checkpoint.revision,'OCR bytes survive lease expiry and another claim');
+ check(!await begin(resumed,op(),op()),'wrong checkpoint revision cannot start new provider work');
+ check(!await save(savedImg,null,snapshot()),'old lease callback cannot save over resumed stage');
+ check(await begin(resumed,op(),checkpoint.revision),'fresh lease begins only from the recorded checkpoint');
+ await expire(resumed);check((await claim(savedJob)).length===0,'crash during catalog also stops instead of recharging OCR/catalog');
+ const queued=await make(),unstarted=(await claim(queued))[0];check((await one('select yield_analysis_image($1,$2) ok',[unstarted.id,unstarted.lease_token])).ok,'insufficient budget releases known-unstarted work safely');
+ check((await claim(queued)).length===1,'separate invocation may pick up safe yielded work');
+ const legacy=await make(),old=(await claim(legacy))[0];await q('update analysis_job_images set pipeline_version=null where id=$1',[old.id]);await expire(old);check((await claim(legacy)).length===0,'unmarked pre-migration expired worker never repeats unknown work');
+ for(const code of['timeout','network','authentication','rate_limit','upstream_unavailable']){
+  await q('select clear_analysis_provider_block()');await require('./worker-health-fixture.cjs').primeWorkerHealth(q);
+  const id=(await one('select create_analysis_job($1,$2,$3,false) id',['limited',['limited/0.jpg'],'Synthetic'])).id,lease=(await claim(id))[0],operation=op();await begin(lease,operation);
+  const retry=['rate_limit','upstream_unavailable'].includes(code),unknown=['timeout','network'].includes(code);
+  const state=(await one('select defer_analysis_image($1,$2,$3,$4,0,$5) state',[lease.id,lease.lease_token,code,retry,unknown])).state;
+  check(state===(retry?'queued':'failed'),`${code} failure recording executes without invalid job columns`);
+  const row=await one('select status,provider_operation,failure_delivery_unknown from analysis_job_images where id=$1',[lease.id]);
+  check(retry?row.provider_operation===null:row.failure_delivery_unknown===unknown,`${code} provider intent/delivery state preserved correctly`);
+  const job=await one('select quota_reserved,quota_refunded from analysis_jobs where id=$1',[id]);check(job.quota_refunded===(retry?0:job.quota_reserved),`${code} quota settles transactionally`);
+ }
+ await q('set role anon');await assert.rejects(q('select analysis_pipeline_version()'),e=>e.code==='42501');await q('reset role');check(true,'anonymous caller cannot invoke pipeline authority');
+ console.log(JSON.stringify({checks:n,pass:true,engine:'PGlite actual PostgreSQL single connection; concurrent request serialization only, not independent backend lock proof'}));
+}finally{await db.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

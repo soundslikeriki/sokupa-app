@@ -17,7 +17,7 @@ test("database/storage infrastructure errors stay distinct from persisted image 
         const failure = () => json({ message: "Synthetic database failure" },400);
         assert.equal(url.hostname,"db.example.test");
         if (url.pathname.includes("/storage/")) return stage === "storage" ? json({ message: "Synthetic storage unavailable" },403) : new Response(new Uint8Array([255,216,255,217]),{headers:{"Content-Type":"image/jpeg"}});
-        if (name === "claim_analysis_image") return stage === "claim" ? failure() : json(claimed ? [{ id: "image", idx: 0, url: "synthetic/0.jpg", lease_token: "lease" }] : []);
+        if (name === "claim_durable_analysis_image") return stage === "claim" ? failure() : json(claimed ? [{ id: "image", idx: 0, url: "synthetic/0.jpg", lease_token: "lease" }] : []);
         if (name === "complete_analysis_image") return failure();
         if (name === "fail_analysis_image") return stage === "content_failure" ? json(true) : failure();
         if (name === "analysis_jobs") {
@@ -53,7 +53,7 @@ test("worker persists a complete merged result before notifying; LINE failure ke
       notified = true;
       return new Response(null, { status: 401 });
     }
-    if (url.pathname.endsWith("/rpc/claim_analysis_image")) return json([]);
+    if (url.pathname.endsWith("/rpc/claim_durable_analysis_image")) return json([]);
     if (init?.method === "PATCH") {
       updates.push(JSON.parse(String(init.body)));
       return json({ id: "00000000-0000-4000-8000-000000000000" });
@@ -76,7 +76,7 @@ test("worker does not finalize while another image is running", async () => {
   const calls: string[] = [];
   const admin = createClient("https://db.example.test", "test-only-key", { auth: { persistSession: false }, global: { fetch: async (input, init) => {
     const url = new URL(String(input)); calls.push(init?.method || "GET");
-    const value = url.pathname.endsWith("/analysis_jobs") ? { id: "fake-job", status: "running", total_images: 1 } : url.pathname.endsWith("/rpc/claim_analysis_image") ? [] : [{ status: "running" }];
+    const value = url.pathname.endsWith("/analysis_jobs") ? { id: "fake-job", status: "running", total_images: 1 } : url.pathname.endsWith("/rpc/claim_durable_analysis_image") ? [] : [{ status: "running" }];
     return new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
   } } });
   assert.equal((await processAnalysisJobStep({ admin, jobId: "fake-job" })).status, "running");
@@ -158,7 +158,7 @@ test("expired lease resumes once, fences a late worker, and never duplicates the
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     if (url.hostname === "api.line.me") { notifications++; assert.equal(body.messages.length, 2); assert.match(body.messages[1].text,/要確認・参考値/); return json({}); }
     if (url.pathname.includes("/storage/")) return new Response(new Uint8Array([255,216,255,217]), { headers: { "Content-Type": "image/jpeg" } });
-    if (url.pathname.endsWith("/claim_analysis_image")) {
+    if (url.pathname.endsWith("/claim_durable_analysis_image")) {
       if (image.status === "done" || (image.status === "running" && !expired)) return json([]);
       image.status = "running"; image.lease_token = `lease-${++token}`; expired = false;
       return json([{ ...image }]);

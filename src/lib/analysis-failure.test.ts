@@ -57,7 +57,10 @@ test("SDK 503 through actual worker defers the lease and fails Cron; it never ma
     if(name==="analysis_processing_secure")return json(true);
     if(name==="resumable_analysis_jobs")return json([{id:"synthetic-job"}]);
     if(name==="analysis_jobs")return json({id:"synthetic-job",status:jobStatus,total_images:1});
-    if(name==="claim_analysis_image")return json([{id:"synthetic-image",idx:0,url:"synthetic/0.jpg",lease_token:"lease"}]);
+    if(name==="claim_durable_analysis_image")return json([{id:"synthetic-image",idx:0,url:"synthetic/0.jpg",lease_token:"lease"}]);
+    if(name==="analysis_pipeline_version")return json(1);
+    if(name==="analysis_job_images")return json({pipeline_checkpoint:null,provider_operation:null,lease_token:"lease",status:"running"});
+    if(name==="begin_analysis_provider")return json(true);
     if(name==="defer_analysis_image"){deferred.push(body);imageStatus="queued";jobStatus="running";return json("queued");}
     throw new Error(`Unexpected mutation/request: ${name}`);
   };

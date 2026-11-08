@@ -1,3 +1,4 @@
+import { AnalysisBudget } from "@/lib/analysis-budget";
 import { NextRequest, NextResponse } from "next/server";
 import { waitUntil } from "@vercel/functions";
 import { createSupabaseAdmin } from "@/lib/supabaseAdmin";
@@ -11,14 +12,15 @@ const signalGate = createWakeSignalGate();
 
 /** Public empty wake-up signal. A private, root-issued DB permit is the authority to do work. */
 export async function POST(req: NextRequest) {
+  const budget = new AnalysisBudget();
   try {
     const url = new URL(req.url);
     if (wakeEnabled() && url.pathname === "/api/analysis-jobs/wake" && !url.search && !url.hash && signalGate.begin()) {
       try {
-        const admin = createSupabaseAdmin();
+        const admin = createSupabaseAdmin(budget.fetch());
         if (admin) {
           const claim = await claimAnalysisWake(admin, url.origin);
-          if (claim) waitUntil(runAnalysisWake(admin, claim));
+          if (claim) waitUntil(runAnalysisWake(admin, claim, budget));
         }
       } finally { signalGate.finish(); }
     }

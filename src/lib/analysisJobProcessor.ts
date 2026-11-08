@@ -3,6 +3,8 @@ import { buildAnalysisCompletionMessages } from "@/lib/analysis-notification";
 
 import type { ParsedMemoPayload } from "@/types";
 import { mergeParsedPayloads } from "@/lib/memo-calculation";
+import { AnalysisBudget, AnalysisYield, AnalysisCheckpointError } from "./analysis-budget";
+import { imageJournal } from "./analysis-checkpoint";
 import { parseMemoBody } from "@/lib/parseMemo";
 import { MEMO_BUCKET, memoObjectPath, MAX_MEMO_BYTES } from "@/lib/memo-storage";
 import { sendLineMessages } from "@/lib/line-notification";
@@ -18,7 +20,8 @@ export type AnalysisJobStepResult = {
 const infrastructureFailure = (error: string, status: AnalysisJobStepResult["status"] = "running"): AnalysisJobStepResult => ({ status, error, failureKind: "infrastructure" });
 class NotificationStateError extends Error {}
 
-async function notifyCompletion(admin: SupabaseClient, job: any, result: ParsedMemoPayload) {
+async function notifyCompletion(admin: SupabaseClient, job: any, result: ParsedMemoPayload, budget: AnalysisBudget) {
+  if (budget.remaining(270_000) < 30_000) return;
   const started = Date.now();
   try {
     if (job.notification_protocol !== "line_retry_v1") {
@@ -37,7 +40,7 @@ async function notifyCompletion(admin: SupabaseClient, job: any, result: ParsedM
       if (error) throw new NotificationStateError("notification attempt recording failed");
     }
     const messages = buildAnalysisCompletionMessages(result, job.site_name);
-    await sendLineMessages(job.line_user_id, messages, job.id);
+    await sendLineMessages(job.line_user_id, messages, job.id, budget.fetch());
     const { error } = await admin.from("analysis_jobs").update({ notification_status: "accepted", notification_error: null, notified_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", job.id);
     if (error) throw new NotificationStateError("notification state update failed");
     console.info("[analysis-job] notification", { jobId: job.id, status: "accepted", durationMs: Date.now() - started });
@@ -60,8 +63,10 @@ export async function processAnalysisJobStep(opts: {
   /** Internal test seam; never supplied from HTTP input. */
   parse?: (body: Parameters<typeof parseMemoBody>[0]) => Promise<Response>;
   finalizeOnly?: boolean;
+  budget?: AnalysisBudget;
 }): Promise<AnalysisJobStepResult> {
   const { admin, jobId } = opts;
+  const budget = opts.budget ?? new AnalysisBudget();
 
   const { data: job, error: jobErr } = await admin
     .from("analysis_jobs")
@@ -77,15 +82,16 @@ export async function processAnalysisJobStep(opts: {
   }
   if (job.status === "done") {
     try {
-      if (["pending", "failed"].includes(job.notification_status) && job.result) await notifyCompletion(admin, job, job.result as ParsedMemoPayload);
+      if (["pending", "failed"].includes(job.notification_status) && job.result) await notifyCompletion(admin, job, job.result as ParsedMemoPayload, budget);
     } catch { return infrastructureFailure("Notification state unavailable", "done"); }
     return { status: "done" };
   }
   if (job.status === "failed") return job.failure_kind === "infrastructure" ? infrastructureFailure(job.error || "Infrastructure failure", "failed") : { status: "failed", failureKind: "job" };
 
+  if (!opts.finalizeOnly && budget.remaining() < 150_000) return { status: "running" };
   const { data: claims, error: imgErr } = opts.finalizeOnly
     ? { data: [], error: null }
-    : await admin.rpc("claim_analysis_image", { p_job_id: jobId });
+    : await admin.rpc("claim_durable_analysis_image", { p_job_id: jobId });
   if (imgErr) {
     console.error("[analysis-job] claim failed", { jobId, error: imgErr.message });
     return infrastructureFailure("Image claim failed");
@@ -147,7 +153,7 @@ export async function processAnalysisJobStep(opts: {
     }
     if (!finalized) return { status: "done" };
 
-    try { await notifyCompletion(admin, { ...job, notification_protocol: "line_retry_v1" }, resultPayload); }
+    try { await notifyCompletion(admin, { ...job, notification_protocol: "line_retry_v1" }, resultPayload, budget); }
     catch { return infrastructureFailure("Notification state unavailable", "done"); }
     return { status: "done" };
   }
@@ -158,15 +164,21 @@ export async function processAnalysisJobStep(opts: {
     return infrastructureFailure(data === "queued" ? "解析サービスが一時的に利用できません。待ち時間を置いて再試行します。" : "解析サービスの障害により処理を停止しました。",data === "failed" ? "failed" : "running");
   };
   try {
+    if (!opts.parse) {
+      const version = await admin.rpc("analysis_pipeline_version");
+      if (version.error || version.data !== 1) return infrastructureFailure("Durable provider protocol not installed");
+    }
+    const journal = opts.parse ? null : await imageJournal(admin, img.id, img.lease_token);
     const context = job.context && typeof job.context === "object" ? job.context : {};
     const started = Date.now();
     const objectPath = memoObjectPath(img.url, process.env.NEXT_PUBLIC_SUPABASE_URL!);
     const { data: image, error: downloadError } = await admin.storage.from(MEMO_BUCKET).download(objectPath);
     if (downloadError && ![400,404].includes(Number("statusCode" in downloadError ? downloadError.statusCode : undefined))) return infrastructureFailure("Image storage unavailable");
     if (downloadError || !image || !image.size || image.size > MAX_MEMO_BYTES) throw new Error("画像を読み込めませんでした。画像を選び直してください。");
-    const parseRes = await (opts.parse ?? parseMemoBody)({
+    const parseBody = {
       base64Image: Buffer.from(await image.arrayBuffer()).toString("base64"), mimeType: image.type || "image/jpeg", context,
-    });
+    };
+    const parseRes = opts.parse ? await opts.parse(parseBody) : await parseMemoBody(parseBody, { budget, admin, checkpoint: journal!.checkpoint, beforeProvider: journal!.beforeProvider, save: journal!.save });
     console.info("[analysis-job] image timing", { jobId, imageId: img.id, durationMs: Date.now() - started, status: parseRes.status });
     let parseJson: any;
     try { parseJson = await parseRes.json(); }
@@ -183,8 +195,13 @@ export async function processAnalysisJobStep(opts: {
     if (completeError) return infrastructureFailure("解析結果の保存を確認できませんでした。再開時に状態を確認します。");
     // An expired worker never overwrites the result of a new lease holder.
     if (!completed) return { status: "running" };
-    return processAnalysisJobStep({ ...opts, finalizeOnly: true });
+    return processAnalysisJobStep({ ...opts, budget, finalizeOnly: true });
   } catch (e: unknown) {
+    if (e instanceof AnalysisYield) {
+      const yielded = await admin.rpc("yield_analysis_image", { p_image_id: img.id, p_lease_token: img.lease_token });
+      return yielded.error || yielded.data !== true ? infrastructureFailure("Image yield unavailable") : { status: "running" };
+    }
+    if (e instanceof AnalysisCheckpointError) return infrastructureFailure(e.message);
     const msg = e instanceof Error ? e.message : "failed";
     console.error("[analysis-job] image failed", { jobId, imageId: img.id, msg });
     const { data: failed, error: failError } = await admin.rpc("fail_analysis_image", { p_image_id: img.id, p_lease_token: img.lease_token, p_error: msg });
@@ -195,10 +212,11 @@ export async function processAnalysisJobStep(opts: {
 
 /** Start another image only while most of the 300s invocation budget remains. */
 export async function runAnalysisJob(opts: Parameters<typeof processAnalysisJobStep>[0]) {
+  const budget = opts.budget ?? new AnalysisBudget();
   const started = Date.now();
   for (let step = 0; step < 6; step++) {
-    const result = await processAnalysisJobStep(opts);
-    if (result.status !== "running" || result.error || Date.now() - started >= 30_000) return result;
+    const result = await processAnalysisJobStep({ ...opts, budget });
+    if (result.status !== "running" || result.error || Date.now() - started >= 30_000 || budget.remaining() < 150_000) return result;
   }
   return { status: "running" as const };
 }

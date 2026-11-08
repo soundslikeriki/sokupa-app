@@ -53,7 +53,7 @@ test("independent scheduled ticks finish two 31-second images after the browser 
     if (name === "analysis_worker_tick_complete") { assert.equal(body.p_success, true); assert.equal(body.p_tick_id, "synthetic-tick"); return json(true); }
     if (name === "analysis_processing_secure") return json(true);
     if (name === "resumable_analysis_jobs") return json(job.status === "done" ? [] : [{ id: job.id }]);
-    if (name === "claim_analysis_image") { const image = images.find((item) => item.status === "queued"); if (!image) return json([]); image.status = "running"; job.status = "running"; return json([{ ...image }]); }
+    if (name === "claim_durable_analysis_image") { const image = images.find((item) => item.status === "queued"); if (!image) return json([]); image.status = "running"; job.status = "running"; return json([{ ...image }]); }
     if (name === "complete_analysis_image") { const image = images.find((item) => item.id === body.p_image_id)!; assert.equal(image.lease_token, body.p_lease_token); image.status = "done"; image.parsed = body.p_parsed; return json(true); }
     if (name === "analysis_jobs") { if (init?.method === "PATCH") Object.assign(job, body); return json({ ...job }); }
     if (name === "analysis_job_images") return json(images.map((image) => ({ ...image })));

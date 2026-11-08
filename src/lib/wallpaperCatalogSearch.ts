@@ -253,6 +253,7 @@ export async function augmentProductWithCatalogSearch(
   _genAI: GoogleGenerativeAI,
   admin: SupabaseClient | null,
   rawProductCode: string,
+  options?: { beforeProvider: () => Promise<AbortSignal> },
 ): Promise<CatalogAugment> {
   void _genAI;
   if (readQaRuntime()) return { confidence: 0.45, needs_review: true, catalog_notes_extra: "QA合成試験：カタログ検索は行いません", is_live_searched: false };
@@ -371,10 +372,13 @@ export async function augmentProductWithCatalogSearch(
     steps?: ReadonlyArray<{ sources?: ReadonlyArray<{ sourceType?: string; url?: string }> }>;
   } | null = null;
 
+  // Checkpoint intent happens after a cache hit can return, but before any external search.
+  const signal = options ? await options.beforeProvider() : AbortSignal.timeout(90_000);
+  signal.throwIfAborted();
   try {
     const res = await generateText({
       maxRetries: 0,
-      abortSignal: AbortSignal.timeout(90_000),
+      abortSignal: signal,
       model: google(CATALOG_MODEL),
       tools: { google_search: google.tools.googleSearch({}) },
       stopWhen: stepCountIs(12),

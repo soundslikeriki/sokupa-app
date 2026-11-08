@@ -1,3 +1,4 @@
+import { AnalysisBudget } from "@/lib/analysis-budget";
 import { analysisDataAccessSecure } from "@/lib/analysis-background";
 import { runScheduledAnalysisBatch } from "@/lib/analysis-scheduled";
 import { NextRequest, NextResponse } from "next/server";
@@ -12,6 +13,7 @@ export const maxDuration = 300;
 type Body = { job_id?: string };
 
 export async function POST(req: NextRequest) {
+  const budget = new AnalysisBudget();
   try {
     if (!requireJobSecret(req)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -21,11 +23,11 @@ export async function POST(req: NextRequest) {
     const job_id = typeof body.job_id === "string" ? body.job_id.trim() : "";
     if (!job_id) return NextResponse.json({ error: "job_id is required" }, { status: 400 });
 
-    const admin = createSupabaseAdmin();
+    const admin = createSupabaseAdmin(budget.fetch());
     if (!admin) return NextResponse.json({ error: "Supabase admin not configured" }, { status: 500 });
 
     if (!(await analysisDataAccessSecure(admin))) return NextResponse.json({ error: "Private data access not secured" }, { status: 503 });
-    const step = await processAnalysisJobStep({ admin, jobId: job_id });
+    const step = await processAnalysisJobStep({ admin, jobId: job_id, budget });
     if (step.failureKind === "infrastructure") return NextResponse.json({ success: false, status: step.status, error: step.error }, { status: 503 });
     if (step.status === "failed") {
       return NextResponse.json({ success: false, status: "failed", error: step.error || "failed" }, { status: 500 });
@@ -39,10 +41,11 @@ export async function POST(req: NextRequest) {
 
 /** Private scheduled recovery. Configure its scheduler only after release approval. */
 export async function GET(req: NextRequest) {
+  const budget = new AnalysisBudget();
   const existingSecret=requireScheduledSecret(req);
   const dispatch=existingSecret?null:verifySchedulerDispatch(req);
   if (!existingSecret&&!dispatch) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  const admin = createSupabaseAdmin();
+  const admin = createSupabaseAdmin(budget.fetch());
   if (!admin) return NextResponse.json({ error: "Server not configured" }, { status: 503 });
   try {
     if(dispatch){
@@ -50,7 +53,7 @@ export async function GET(req: NextRequest) {
       if(error)return NextResponse.json({error:"Dispatch verification unavailable"},{status:503});
       if(data!==true)return NextResponse.json({error:"Expired or duplicate dispatch"},{status:409});
     }
-    const result = await runScheduledAnalysisBatch(admin,undefined,dispatch?.id);
+    const result = await runScheduledAnalysisBatch(admin,undefined,dispatch?.id,undefined,budget);
     return NextResponse.json({...result,...(dispatch?{dispatch_id:dispatch.id}:{})});
   } catch {
     console.error("[analysis-worker] scheduled batch failed");

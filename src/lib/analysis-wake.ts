@@ -1,3 +1,4 @@
+import { AnalysisBudget } from "./analysis-budget";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { runScheduledAnalysisBatch } from "./analysis-scheduled";
 
@@ -20,9 +21,9 @@ export async function claimAnalysisWake(admin: SupabaseClient, origin: string): 
 }
 
 /** Only server-held permit/tick IDs enter this function. HTTP responses remain empty. */
-export async function runAnalysisWake(admin: SupabaseClient, claim: WakeClaim): Promise<void> {
+export async function runAnalysisWake(admin: SupabaseClient, claim: WakeClaim, budget = new AnalysisBudget()): Promise<void> {
   try {
-    await runScheduledAnalysisBatch(admin, undefined, undefined, claim.worker_tick_id);
+    await runScheduledAnalysisBatch(admin, undefined, undefined, claim.worker_tick_id, budget);
     const { data, error } = await admin.rpc("complete_analysis_wake", { p_id: claim.permit_id, p_claim_token: claim.claim_token, p_success: true });
     if (error || data !== true) throw new Error("Wake completion rejected");
   } catch {

@@ -9,6 +9,8 @@ import { augmentProductWithCatalogSearch, type CatalogAugment } from "@/lib/wall
 import type { MemoProductItem } from "@/types";
 import { MemoProviderError, providerError } from "@/lib/analysis-failure";
 import { readQaRuntime, syntheticQaVision, QaRuntimeError } from "./qa-runtime";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { AnalysisBudget, AnalysisYield, AnalysisCheckpointError } from "./analysis-budget";
 import { annotateVisionReadingReviews, normalizeReadingReviews } from "./memo-reading-review";
 
 const MAX_IMAGES = 16;
@@ -159,7 +161,7 @@ function isLikelyWallpaperProductCode(value: string): boolean {
   return /^[A-Z]{2,4}\s*[\-]?\s*\d{3,5}$/i.test(value.trim());
 }
 
-async function enrichWithProductMaster(items: any[]) {
+async function enrichWithProductMaster(items: any[], admin = createSupabaseAdmin()) {
   return await Promise.all(
     items.map(async (item) => {
       const rawCode = String(item.product_code || "").trim().toUpperCase();
@@ -176,7 +178,7 @@ async function enrichWithProductMaster(items: any[]) {
       }
 
       // 新しいテーブル構造に合わせたクエリ
-      const { data: master } = await createSupabaseAdmin()!
+      const { data: master } = await admin!
         .from('wallpapers')
         .select(`
           code,
@@ -376,7 +378,16 @@ export type ParseMemoBody = {
   mimeType?: string; context?: ParseMemoContext;
 };
 
-export async function parseMemoBody(body: ParseMemoBody) {
+export type MemoCheckpoint = { version: 1; rawItems: Record<string, unknown>[]; notes: string; imageNeedsReview: boolean; catalog: Record<string, Record<string, unknown>> };
+export type MemoPipeline = {
+  budget: AnalysisBudget;
+  admin: SupabaseClient;
+  checkpoint: MemoCheckpoint | null;
+  beforeProvider: (stage: string) => Promise<void>;
+  save: (checkpoint: MemoCheckpoint) => Promise<void>;
+};
+
+export async function parseMemoBody(body: ParseMemoBody, pipeline?: MemoPipeline) {
   try {
     let base64Images: string[] = Array.isArray(body.base64Images)
       ? body.base64Images.filter((x): x is string => typeof x === "string" && x.trim().length > 0)
@@ -435,37 +446,52 @@ export async function parseMemoBody(body: ParseMemoBody) {
       });
     }
 
-    const visionStarted = Date.now();
-    const signal = AbortSignal.timeout(150_000);
-    let responseText: string;
-    if (qa) responseText = await syntheticQaVision(qa);
-    else {
-      try { responseText = (await visionModel!.generateContent(contents, { signal })).response.text(); }
-      catch (error) { throw providerError(error, signal.aborted); }
+    const budget = pipeline?.budget ?? new AnalysisBudget();
+    let checkpoint = pipeline?.checkpoint;
+    if (!checkpoint) {
+      const visionStarted = Date.now();
+      const signal = pipeline ? budget.providerSignal("vision") : AbortSignal.timeout(Math.min(150_000, budget.remaining()));
+      signal.throwIfAborted();
+      if (pipeline) await pipeline.beforeProvider("vision");
+      // Never invoke the SDK with an already-aborted signal (it installs a future listener).
+      signal.throwIfAborted();
+      let responseText: string;
+      if (qa) responseText = await syntheticQaVision(qa);
+      else {
+        try { responseText = (await visionModel!.generateContent(contents, { signal })).response.text(); }
+        catch (error) { throw providerError(error, signal.aborted); }
+      }
+      console.info("[parse-memo] timing", { stage: "vision", durationMs: Date.now() - visionStarted, synthetic: Boolean(qa) });
+      const parsedData = parseVisionJson(responseText);
+      const rawItems = annotateVisionReadingReviews(parsedData.items, parsedData.notes).map((item) => ({ ...item, image_needs_review: parsedData.image_needs_review === true || item.image_needs_review === true, vision_needs_review: parsedData.needs_review === true || item.needs_review, vision_confidence: item.confidence }));
+      // Validate calculable OCR before preserving it. It is not yet a confirmed catalog result.
+      if (!rawItems.some(row => finalizeClientItem(row))) throw new Error("計算式を読み取れませんでした。画像を確認してください。");
+      checkpoint = { version: 1, rawItems, notes: typeof parsedData.notes === "string" ? parsedData.notes.trim() : "", imageNeedsReview: parsedData.image_needs_review === true, catalog: {} };
+      await pipeline?.save(checkpoint);
     }
-    console.info("[parse-memo] timing", { stage: "vision", durationMs: Date.now() - visionStarted, synthetic: Boolean(qa) });
-
-    const parsedData = parseVisionJson(responseText);
-    const rawItems = annotateVisionReadingReviews(parsedData.items, parsedData.notes).map((item) => ({ ...item, image_needs_review: parsedData.image_needs_review === true || item.image_needs_review === true, vision_needs_review: parsedData.needs_review === true || item.needs_review, vision_confidence: item.confidence }));
-
-    const admin = qa ? null : createSupabaseAdmin();
+    if (checkpoint.version !== 1 || !Array.isArray(checkpoint.rawItems) || !checkpoint.rawItems.length || !checkpoint.catalog || typeof checkpoint.catalog !== "object") throw new AnalysisCheckpointError();
+    const admin = pipeline?.admin ?? (qa ? null : createSupabaseAdmin());
     const catalogStarted = Date.now();
-    const withCatalog = await Promise.all(
-      rawItems.map(async (raw) => {
-        const item = raw as Record<string, unknown>;
-        const code = String(item.product_code ?? "").trim();
-        if (qa || !code || !isLikelyWallpaperProductCode(code)) {
-          return item;
-        }
-        const aug = await augmentProductWithCatalogSearch(genAI!, admin, code);
-        return mergeVisionWithCatalog(item, aug);
-      })
-    );
-
-    console.info("[parse-memo] timing", { stage: "catalog", durationMs: Date.now() - catalogStarted, productCount: rawItems.length });
-    const mergedRaw = admin
-      ? await enrichWithProductMaster(withCatalog)
-      : withCatalog;
+    // Serial, checkpointed products: an invocation can yield without repeating completed OCR/searches.
+    const withCatalog: Record<string, unknown>[] = [];
+    for (let index = 0; index < checkpoint.rawItems.length; index++) {
+      const item = checkpoint.rawItems[index];
+      if (checkpoint.catalog[index]) { withCatalog.push(checkpoint.catalog[index]); continue; }
+      const code = String(item.product_code ?? "").trim();
+      let merged = item;
+      if (!qa && code && isLikelyWallpaperProductCode(code)) {
+        const aug = await augmentProductWithCatalogSearch(genAI!, admin, code, pipeline ? {
+          beforeProvider: async () => { const signal = budget.providerSignal("catalog"); signal.throwIfAborted(); await pipeline.beforeProvider(`catalog:${index}`); return signal; },
+        } : { beforeProvider: async () => budget.providerSignal("catalog") });
+        merged = mergeVisionWithCatalog(item, aug);
+      }
+      const next: MemoCheckpoint = { ...checkpoint, catalog: { ...checkpoint.catalog, [index]: merged } };
+      await pipeline?.save(next);
+      checkpoint = next;
+      withCatalog.push(merged);
+    }
+    console.info("[parse-memo] timing", { stage: "catalog", durationMs: Date.now() - catalogStarted, productCount: checkpoint.rawItems.length });
+    const mergedRaw = admin ? await enrichWithProductMaster(withCatalog, admin) : withCatalog;
 
     const items: MemoProductItem[] = mergedRaw
       .map((row) => finalizeClientItem(row))
@@ -473,8 +499,7 @@ export async function parseMemoBody(body: ParseMemoBody) {
 
     if (!items.length) throw new Error("計算式を読み取れませんでした。画像を確認してください。");
 
-    const notes =
-      typeof parsedData.notes === "string" && parsedData.notes.trim() ? parsedData.notes.trim() : undefined;
+    const notes = checkpoint.notes;
 
     const needs_review_any = items.some((i) => i.needs_review);
 
@@ -484,11 +509,12 @@ export async function parseMemoBody(body: ParseMemoBody) {
         items,
         notes: notes ?? "",
         needs_review_any,
-        image_needs_review: parsedData.image_needs_review === true,
+        image_needs_review: checkpoint.imageNeedsReview,
       },
       imageCount: base64Images.length,
     });
   } catch (error: unknown) {
+    if (error instanceof AnalysisYield || error instanceof AnalysisCheckpointError) throw error;
     if (error instanceof QaRuntimeError) return NextResponse.json({error:error.message,failure:{kind:"infrastructure",code:"configuration",retryable:false,delivery_unknown:false}},{status:503});
     if (error instanceof MemoProviderError) {
       console.error("[parse-memo] provider failure", {code:error.failure.code,status:error.upstreamStatus,retryable:error.failure.retryable});
