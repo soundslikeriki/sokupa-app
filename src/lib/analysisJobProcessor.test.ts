@@ -95,7 +95,7 @@ test("unproven old pending completion is quarantined without sending LINE", asyn
   assert.equal(updates[0].notification_status, "legacy_unknown");
 });
 
-test("automatic order lists retain quantities and label uncertain products without suppressing the list", async () => {
+test("automatic order lists retain plain quantities for reviewed products without suppressing the list", async () => {
   const savedFetch = global.fetch, savedToken = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   process.env.LINE_CHANNEL_ACCESS_TOKEN = "synthetic-token";
   const item = { product_code: "ANON-A", manufacturer: "Synthetic", entries: [{ original_formula: "20×1", length_m: 20, quantity: 1, subtotal_m: 20 }], total_m: 20, order_quantity: 23 };
@@ -120,6 +120,7 @@ test("automatic order lists retain quantities and label uncertain products witho
           if (variant.expectedMessages === 2) {
             assert.match(body.messages[1].text, /【発注リスト】/);
             assert.match(body.messages[1].text, /ANON-A \/ 数量：23m/);
+            assert.doesNotMatch(body.messages[1].text, /要確認・参考値|※要確認の数量/);
           }
           assert.equal(new Headers(init?.headers).get("X-Line-Retry-Key"), job.id);
           return new Response("{}", { headers: { "Content-Type": "application/json" } });
@@ -156,7 +157,7 @@ test("expired lease resumes once, fences a late worker, and never duplicates the
     const url = new URL(String(input));
     const json = (data: unknown) => new Response(JSON.stringify(data), { headers: { "Content-Type": "application/json" } });
     const body = init?.body ? JSON.parse(String(init.body)) : {};
-    if (url.hostname === "api.line.me") { notifications++; assert.equal(body.messages.length, 2); assert.match(body.messages[1].text,/要確認・参考値/); return json({}); }
+    if (url.hostname === "api.line.me") { notifications++; assert.equal(body.messages.length, 2); assert.doesNotMatch(body.messages[1].text,/要確認・参考値|※要確認の数量/); assert.match(body.messages[1].text,/VS2067 \/ 数量：23m/); return json({}); }
     if (url.pathname.includes("/storage/")) return new Response(new Uint8Array([255,216,255,217]), { headers: { "Content-Type": "image/jpeg" } });
     if (url.pathname.endsWith("/claim_durable_analysis_image")) {
       if (image.status === "done" || (image.status === "running" && !expired)) return json([]);
