@@ -23,5 +23,25 @@ await admin.query("update analysis_job_images set lease_expires_at=now()-interva
 const held=await make(),heldImg=(await claim(held))[0],other=await make();await admin.query('begin');await admin.query('select id from analysis_jobs where id=$1 for update',[held]);let settled=false;const waiting=query("select begin_analysis_provider($1,$2,$3,'vision',null) ok",[heldImg.id,heldImg.lease_token,randomUUID()]).then(r=>{settled=true;return r;});await new Promise(r=>setTimeout(r,100));check(!settled,'job lock serializes provider intent before image state');check((await claim(other)).length===1,'another job proceeds while one job is locked');await admin.query('commit');check((await waiting)[0].ok,'waiting intent completes after job lock release');
 const failed=await parallel(()=>query("select defer_analysis_image($1,$2,'timeout',false,0,true) state",[heldImg.id,heldImg.lease_token]));check(failed.filter(r=>r[0].state==='failed').length===1&&failed.filter(r=>r[0].state==='stale').length===7,'8 timeout callbacks settle one failure and fence the rest');
 await assert.rejects(query('select * from claim_analysis_image($1)',[good]),/durable_worker_required/);check(true,'old application cannot bypass the durable claim protocol');
+// Reproduce expiry while waiting for either lock, using independent native connections.
+await admin.query('select clear_analysis_provider_block()');
+for(const lockKind of ['job','image'])for(const action of ['begin','checkpoint','yield','complete','fail','defer']) {
+ const id=await make(),img=(await claim(id))[0],operation=randomUUID();
+ if(['checkpoint','defer'].includes(action))await query("select begin_analysis_provider($1,$2,$3,'vision',null)",[img.id,img.lease_token,operation]);
+ await admin.query("update analysis_job_images set lease_expires_at=clock_timestamp()+interval '600 milliseconds' where id=$1",[img.id]);
+ const holder=await pool.connect();await holder.query('begin');await holder.query(lockKind==='job'?'select id from analysis_jobs where id=$1 for update':'select id from analysis_job_images where id=$1 for update',[lockKind==='job'?id:img.id]);
+ const requests={begin:["select begin_analysis_provider($1,$2,$3,'vision',null) result",[img.id,img.lease_token,operation]],checkpoint:['select checkpoint_analysis_image($1,$2,$3,$4) result',[img.id,img.lease_token,operation,snapshot(randomUUID())]],yield:['select yield_analysis_image($1,$2) result',[img.id,img.lease_token]],complete:['select complete_analysis_image($1,$2,$3) result',[img.id,img.lease_token,{items:[{product_code:'SYN',entries:[{length_m:2,quantity:1,subtotal_m:2}],total_m:2,order_quantity:3}]}]],fail:["select fail_analysis_image($1,$2,'Synthetic') result",[img.id,img.lease_token]],defer:["select defer_analysis_image($1,$2,'timeout',false,0,true) result",[img.id,img.lease_token]]};
+ let settled=false;const pending=query(...requests[action]).then(rows=>{settled=true;return rows;});
+ await new Promise(resolve=>setTimeout(resolve,850));check(!settled,`${lockKind}/${action}: RPC waits on held lock past600ms lease`);
+ await holder.query('commit');holder.release();const result=(await pending)[0].result;check(result===(action==='defer'?'stale':false),`${lockKind}/${action}: expired lease rejected after850ms lock wait`);
+ const after=await row('select status,pipeline_checkpoint from analysis_job_images where id=$1',[img.id]);check(after.status==='running'&&after.pipeline_checkpoint===null,`${lockKind}/${action}: rejection neither completes nor changes stored image`);
+}
+for(const pendingProvider of [false,true]) {
+ const id=await make(),img=(await claim(id))[0];if(pendingProvider)await query("select begin_analysis_provider($1,$2,$3,'vision',null)",[img.id,img.lease_token,randomUUID()]);
+ await admin.query("update analysis_job_images set lease_expires_at=clock_timestamp()+interval '600 milliseconds' where id=$1",[img.id]);
+ const holder=await pool.connect();await holder.query('begin');await holder.query('select id from analysis_jobs where id=$1 for update',[id]);const pending=claim(id);await new Promise(resolve=>setTimeout(resolve,850));await holder.query('commit');holder.release();const rows=await pending;
+ check(pendingProvider?rows.length===0:rows.length===1,`claim after lock wait ${pendingProvider?'stops unknown delivery':'renews only known-unstarted work'}`);
+ if(!pendingProvider)check((await row("select lease_expires_at>clock_timestamp()+interval '359 seconds' fresh from analysis_job_images where id=$1",[img.id])).fresh,'renewed lease starts from actual post-lock time');
+}
 console.log(JSON.stringify({pass:true,checks,version:(await row('select version() v')).v,connections:8,root,network:'Unix socket only; listen_addresses empty',realAiCalls:0,realLineSends:0}));
 }finally{if(admin)await admin.query('rollback').catch(()=>{});if(pool)await pool.end();if(admin)await admin.end();if(server){server.kill('SIGTERM');await new Promise(r=>server.once('exit',r));}fs.writeFileSync(path.join(root,'server.log'),logs,{mode:0o600});}})().catch(e=>{console.error(e);process.exitCode=1;});
