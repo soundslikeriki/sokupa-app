@@ -41,7 +41,7 @@ const wait = async fn => { const until = Date.now() + 15000; while (Date.now() <
       });
       try {
         await page.goto(base); await workspace.edit(page, 'B-CODE'); await page.getByLabel('B-CODE の発注数量を入力', { exact: true }).waitFor();
-        if (scenario === 'delayed-list') { await page.getByText('別の解析: C-CODE: 23m', { exact: true }).waitFor(); await wait(() => automaticReads >= 1); }
+        if (scenario === 'delayed-list') { await page.getByText('選択した以前のデータ「Pointer C」: C-CODE: 23m', { exact: true }).waitFor(); await wait(() => automaticReads >= 1); }
         if (scenario === 'delayed-pointer') await wait(() => cReads >= 1);
         checks++;
         await workspace.disclosure(page, '保存済みの結果を開く'); await page.getByRole('button', { name: '保存済みの解析結果を探す', exact: true }).click();
@@ -49,13 +49,13 @@ const wait = async fn => { const until = Date.now() + 15000; while (Date.now() <
         const beforeC = cReads, beforeAutomatic = automaticReads;
         await historyButton.click();
         if (scenario === 'same-history-selected-twice') { await wait(() => aReads === 1); await historyButton.click(); }
-        await page.getByText('別の解析: A-CODE: 12m', { exact: true }).waitFor();
+        await page.getByText('選択した以前のデータ「Historical A」: A-CODE: 12m', { exact: true }).waitFor();
         assert.equal(JSON.parse(await page.evaluate(k => localStorage.getItem(k), key)).parsed.items[0].order_quantity, 46); assert.equal(nonBSeen, 0); checks++;
         const latePath = scenario === 'delayed-list' ? '/api/analysis-jobs' : `/api/analysis-jobs/${scenario === 'delayed-pointer' ? c : a}`;
         const lateResponse = page.waitForResponse(response => { const url = new URL(response.url()); return url.pathname === latePath && !url.searchParams.has('history'); });
         release(); const response = await lateResponse; await response.finished(); await page.waitForTimeout(200);
-        assert.equal(await page.getByText('別の解析: A-CODE: 12m', { exact: true }).count(), 1);
-        assert.equal(await page.getByText('別の解析: C-CODE: 23m', { exact: true }).count(), 0);
+        assert.equal(await page.getByText('選択した以前のデータ「Historical A」: A-CODE: 12m', { exact: true }).count(), 1);
+        assert.equal(await page.getByText('選択した以前のデータ「Pointer C」: C-CODE: 23m', { exact: true }).count(), 0);
         assert.equal(cReads, beforeC); assert.equal(automaticReads, beforeAutomatic + (scenario === 'delayed-pointer' ? 1 : 0)); assert.equal(nonBSeen, 0); checks++;
         if (scenario === 'same-history-selected-twice') { assert.equal(aReads, 2); assert.equal(await page.getByText('結果を取得できません。', { exact: false }).count(), 0); checks++; }
         await page.getByRole('button', { name: '選択した以前のデータを復元する', exact: true }).click();

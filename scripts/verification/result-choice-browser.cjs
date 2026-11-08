@@ -61,10 +61,14 @@ for(const pending of['code','new-row']){
  check(pending==='code'?await page.getByLabel('品番を編集',{exact:true}).inputValue()==='UNCOMMITTED':await page.getByLabel('SYN-Q に追加する長さ (m)',{exact:true}).inputValue()==='1.25',pending+': attempted selection preserves the exact raw local draft');
  check(!h.calls.some(call=>call.startsWith('POST /api/memo-corrections')),pending+': navigation never implicitly submits a code correction');await h.context.close();
 }
-for(const failure of['archive','primary','latest']){
- const h=await fixture(bases[0],390),{page}=h;await page.evaluate(({key,failure})=>{window.realSetItem=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(failure==='archive'&&k.startsWith(key+':recovery:')||failure==='primary'&&k===key||failure==='latest'&&k.startsWith('sokupa:latest-result:'))throw new DOMException('Synthetic storage full','QuotaExceededError');return window.realSetItem.call(this,k,v);};},{key:h.key,failure});
+for(const base of bases)for(const failure of['archive','archive-readback','primary','latest']){
+ const h=await fixture(base,390),{page}=h;const latestBefore=await page.evaluate(key=>localStorage.getItem('sokupa:latest-result:v1:'+encodeURIComponent(key.slice('sokupa:workspace:v1:'.length))),h.key);await page.evaluate(({key,failure})=>{window.realSetItem=Storage.prototype.setItem;window.realGetItem=Storage.prototype.getItem;Storage.prototype.getItem=function(k){const value=window.realGetItem.call(this,k);return failure==='archive-readback'&&k.startsWith(key+':recovery:')&&value!==null?'Synthetic invalid archive readback':value;};Storage.prototype.setItem=function(k,v){if(failure==='archive'&&k.startsWith(key+':recovery:')||failure==='primary'&&k===key||failure==='latest'&&k.startsWith('sokupa:latest-result:'))throw new DOMException('Synthetic storage full','QuotaExceededError');return window.realSetItem.call(this,k,v);};},{key:h.key,failure});
  await h.open().click();await page.getByRole('heading',{name:'エラー',exact:true}).waitFor();check((await h.read()).resultJobId===A&&(await h.read()).parsed.items[0].order_quantity===60,failure+': failed save never replaces60m with59m');
- check(await h.card().isVisible()&&!h.calls.some(call=>call==='POST /api/analysis-jobs/'+B+'/seen'),failure+': pending result remains actionable and unacknowledged');await h.context.close();
+ check(await h.card().isVisible()&&!h.calls.some(call=>call==='POST /api/analysis-jobs/'+B+'/seen'),failure+': pending result remains actionable and unacknowledged');
+ check(await page.evaluate(key=>localStorage.getItem('sokupa:latest-result:v1:'+encodeURIComponent(key.slice('sokupa:workspace:v1:'.length))),h.key)===latestBefore,failure+': failed switch restores exact prior latest-result bytes');
+ await page.evaluate(()=>{Storage.prototype.setItem=window.realSetItem;Storage.prototype.getItem=window.realGetItem;});await h.open().click();await wait(()=>h.read().then(d=>d.resultJobId===B&&d.parsed.items[0].order_quantity===59));await h.saved();
+ check((await h.read()).resultSiteName==='Saved B',failure+': explicit retry opens59m only after storage works');
+ check(await page.evaluate(({key,A})=>Object.keys(localStorage).filter(k=>k.startsWith(key+':recovery:')).filter(k=>{const d=JSON.parse(localStorage.getItem(k));return d.resultJobId===A&&d.parsed?.items[0].order_quantity===60;}).length===1,{key:h.key,A}),failure+': retry reuses the single verified60m backup');await h.context.close();
 }
 {
  const h=await fixture(bases[0],390),{page}=h;
