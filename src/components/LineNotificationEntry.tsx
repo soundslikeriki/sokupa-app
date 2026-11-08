@@ -19,7 +19,7 @@ export function LineNotificationEntry() {
       className="flex h-14 w-14 items-center justify-center rounded-lg bg-white focus-visible:ring-2 focus-visible:ring-indigo-500" onClick={() => setOpen(value => !value)}>
       {/* Official unmodified brand PNG; 40px minimum size and surrounding clear space. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src="/line-brand-icon.png" alt="" aria-hidden="true" width={40} height={40} className="h-10 w-10" />
+      <img src="/line-app-android.png" alt="" aria-hidden="true" width={1001} height={1000} className="h-10 w-auto" />
     </button>
     {open ? <section id={id} aria-label="LINE通知の案内" className="fixed inset-x-4 top-24 z-50 space-y-3 rounded-xl border bg-background p-4 text-sm shadow-xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-80">
       <h2 className="font-semibold">LINE通知</h2>

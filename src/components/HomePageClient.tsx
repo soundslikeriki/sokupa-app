@@ -913,7 +913,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       {basicView ? <p role="status" className="rounded-xl border border-amber-500/40 p-3 text-sm">基本表示中です。解析・編集・保存・発注の基本機能を使えます。数量は元メモと照合してください。</p> : null}
       <header className="flex items-center justify-between gap-3 pb-1">
         <div className="min-w-0">{/* eslint-disable-next-line @next/next/no-img-element */}
-        <h1 className="w-[136px] max-w-[46vw] rounded-md bg-white px-1 py-2"><img src="/sokupa-header-logo-compact.webp" alt="ソクパ SOKUPA" width={465} height={80} className="block h-auto w-full" /></h1>
+        <h1 className="w-[120px] max-w-[46vw] rounded-md bg-white px-1 py-2"><img src="/sokupa-header-logo-small-wordmark.webp" alt="ソクパ SOKUPA" width={405} height={80} className="block h-auto w-full" /></h1>
           {parsed && resultSiteName ? <p className="truncate text-xs text-muted-foreground">{resultSiteName}</p> : null}
         </div>
         <div className="flex shrink-0 items-center gap-4">{!qaSynthetic ? <LineNotificationEntry /> : null}

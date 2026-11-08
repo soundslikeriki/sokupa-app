@@ -1,24 +1,25 @@
 {
   "line": {
-    "source": "https://www.line.me/static/logo/top/LINE_Brand_icon.zip",
+    "source": "https://www.line.me/static/logo/top/LINE_APP_Android.zip",
     "guidelines": "https://www.line.me/ja/logo",
-    "file": "public/line-brand-icon.png",
-    "sha256": "5e93437eb5ec0dcdece92d1562fcd435d1d521cca5c013d2d9e15b544a1d8a39",
+    "file": "public/line-app-android.png",
+    "sha256": "cf89a2df7dba6c191bd9e1101ab680f086b1619371972d7e86eaa49e003a83a8",
     "unmodified": true,
     "mobileIconHeightPx": 40,
     "owner": "LY Corporation",
     "buttonSizePx": 56,
     "clearSpaceCheck": "At least20px to neighbouring visible content; header margins provide24px in tested320/390 layouts.",
-    "bubbleAlternative": "Not used: official2024 guidelines prohibit speech-bubble-only icon use; retain the unmodified brand asset at the official mobile40px minimum.",
-    "additionalGuidelines": "https://www.lycbiz.com/sites/default/files/media/jp/logo/line_guideline.pdf"
+    "bubbleAlternative": "The supplied circular reference matches the official Android variant in shape and alpha. Use official distribution bytes, not a cropped bubble. User reference is preserved privately.",
+    "additionalGuidelines": "https://www.lycbiz.com/sites/default/files/media/jp/logo/line_guideline.pdf",
+    "variant": "Official circular Android app icon, original1001x1000 PNG; source file copied without alteration, aspect ratio retained."
   },
   "sokupa": {
-    "file": "public/sokupa-header-logo-compact.webp",
+    "file": "public/sokupa-header-logo-small-wordmark.webp",
     "sourceSha256": "e21a3bbd58223c03b44f4999eee7808791c9acaf1cabd1e9adc49874668f58fe",
-    "method": "User-approved existing symbol retained; original wordmark proportionally reduced to77.5% of symbol height, centered on white. No redraw/generation. Original asset preserved.",
+    "method": "Approved original symbol retained at80px; original wordmark proportionally reduced to52px (65%), centered on white. No redraw/generation. Earlier assets preserved.",
     "derivativeSource": "public/sokupa-header-logo.webp",
     "derivativeSourceSha256": "54070e69352809186c9d1d40445f166d8754784937ed74f20bd5a39242c5e8d9",
     "markHeight": 80,
-    "wordmarkHeight": 62
+    "wordmarkHeight": 52
   }
 }
