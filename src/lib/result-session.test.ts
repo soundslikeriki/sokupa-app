@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { activateResultSession, allowResultJob, commitResultTransition, hasUnfinishedResultInput, isObservationOnlyChange, resetResultDraft, restoreResultDraft, resultAgePolicy, resultMayApply, resumeResultDraft, stampResultSession, RESULT_DAY_MS } from "./result-session";
+import { activateResultSession, allowResultJob, commitResultTransition, hasUnfinishedResultInput, isObservationOnlyChange, resetResultDraft, resultRestoreConflict, restoreResultDraft, resultAgePolicy, resultMayApply, resumeResultDraft, stampResultSession, RESULT_DAY_MS } from "./result-session";
 import { readWorkspaceDraft, type WorkspaceDraft } from "./workspace-draft";
 import { restoreLatestWorkspaceSnapshot, saveLatestWorkspaceSnapshot } from "./latest-workspace";
 
@@ -74,20 +74,21 @@ test("an actual saved edit renews once, and a backwards clock fails conservative
   assert.equal(resultAgePolicy((await stampResultSession(edited, 1500, true)).resultSession, 1500), "confirm");
 });
 
-test("manual reset wins over a recent timestamp and preserves result-only data", async () => {
+test("manual reset wins over a recent timestamp and backs up the entire input/list state", async () => {
   const current = await resumeResultDraft(draft(), 1000), reset = resetResultDraft(current, 1100);
   assert.equal(reset.parsed, null); assert.equal(reset.resultJobId, null);
-  assert.equal(reset.siteName, "Next B"); assert.deepEqual(reset.orderDraftItems, current.orderDraftItems);
+  assert.equal(reset.siteName, ""); assert.deepEqual(reset.orderDraftItems, []);
+  assert.deepEqual(reset.resultSession?.undo?.workspaceInputs, { siteName: "Next B", orderDraftItems: current.orderDraftItems });
   assert.equal(resultAgePolicy(reset.resultSession, 1200), "inactive");
   assert.equal(reset.resultSession?.undo?.resultSiteName, "Result A");
   assert.deepEqual(reset.resultSession?.undo?.parsed, current.parsed);
   current.parsed!.items[0].entries[0].quantity = 99;
-  assert.equal(reset.resultSession?.undo?.parsed.items[0].entries[0].quantity, 1);
+  assert.equal(reset.resultSession?.undo?.parsed!.items[0].entries[0].quantity, 1);
 });
 
 test("one undo is replaced by the next reset and consumed by explicit restore", async () => {
   const resetA = resetResultDraft(await resumeResultDraft(draft(), 1000), 1100);
-  const resultB = { ...resetA, parsed: structuredClone(draft().parsed), resultSiteName: "Result B", resultJobId: jobB, resultSession: activateResultSession(resetA.resultSession) };
+  const resultB = { ...resetA, siteName: "Next B", parsed: structuredClone(draft().parsed), resultSiteName: "Result B", resultJobId: jobB, resultSession: activateResultSession(resetA.resultSession) };
   const resetB = resetResultDraft(resultB, 2000);
   assert.equal(resetB.resultSession?.undo?.resultJobId, jobB);
   const restored = await restoreResultDraft(resetB, 3000);
@@ -99,7 +100,7 @@ test("one undo is replaced by the next reset and consumed by explicit restore", 
 });
 
 test("restore retains confirmations/dimensions and preserves a newer input name and draft", async () => {
-  const reset = resetResultDraft(await resumeResultDraft(draft(), 1000), 1100);
+  const reset = resetResultDraft(await resumeResultDraft(draft(), 1000), 1100, "age");
   reset.siteName = "New next input"; reset.orderDraftItems[0].quantity = 9;
   const restored = await restoreResultDraft(reset, 2000);
   assert.equal(restored.siteName, "New next input"); assert.equal(restored.resultSiteName, "Result A");
@@ -149,4 +150,54 @@ test("session/undo schema rejects broken references while unknown time stays con
   assert.throws(() => readWorkspaceDraft(JSON.stringify(broken)));
   reset.resultSession!.meaningfulAt = "unknown";
   assert.doesNotThrow(() => readWorkspaceDraft(JSON.stringify(reset)));
+});
+
+
+test("full reset restores mixed lists and raw draft fields as one state, without nested undo", async () => {
+  const current = await resumeResultDraft(draft(), 1000);
+  current.orderDraftItems.push({ ...current.orderDraftItems[0], id: "area", sourceType: "area", quantityInput: "" }, { ...current.orderDraftItems[0], id: "dimension", sourceType: "dimension" });
+  const reset = resetResultDraft(current, 2000), restored = await restoreResultDraft(reset, 3000);
+  assert.equal(restored.siteName, current.siteName); assert.deepEqual(restored.orderDraftItems, current.orderDraftItems);
+  assert.deepEqual(restored.parsed, current.parsed); assert.deepEqual(restored.originalParsed, current.parsed);
+  assert.equal(restored.resultSession?.undo, null);
+  assert.equal("resultSession" in reset.resultSession!.undo!, false);
+  const second = resetResultDraft(restored, 4000);
+  assert.equal("undo" in second.resultSession!.undo!, false);
+});
+
+test("full undo refuses newer site/list without mutating either; identical already-restored values are safe", async () => {
+  const reset = resetResultDraft(draft(), 1000);
+  for (const change of [(d:WorkspaceDraft) => { d.siteName = "New C"; }, (d:WorkspaceDraft) => { d.orderDraftItems = draft().orderDraftItems.map(x=>({...x,quantity:9})); }]) {
+    const next = structuredClone(reset); change(next); const raw = JSON.stringify(next);
+    assert.ok(resultRestoreConflict(next)); await assert.rejects(()=>restoreResultDraft(next,2000), /保持/); assert.equal(JSON.stringify(next),raw);
+  }
+  const same = { ...reset, siteName: draft().siteName, orderDraftItems: draft().orderDraftItems };
+  assert.equal(resultRestoreConflict(same),null); assert.equal((await restoreResultDraft(same,2000)).siteName,"Next B");
+});
+
+test("no-result site/list reset and mirror recovery keep an explicit full undo, including an empty list", async () => {
+  for (const list of [[], draft().orderDraftItems]) {
+    const current:WorkspaceDraft = { version:1, parsed:null, siteName:"Only input", orderDraftItems:list };
+    const reset = resetResultDraft(current,1000), store=storage();
+    assert.equal(reset.siteName,""); assert.deepEqual(reset.orderDraftItems,[]); assert.equal(reset.resultSession?.undo?.parsed,null);
+    await saveLatestWorkspaceSnapshot(store,"owner",reset);
+    const recovered=await restoreLatestWorkspaceSnapshot(store,"owner"); assert.deepEqual(recovered,reset);
+    const restored=await restoreResultDraft(recovered!,2000);
+    assert.equal(restored.parsed,null); assert.equal(restored.siteName,"Only input"); assert.deepEqual(restored.orderDraftItems,list);
+    await saveLatestWorkspaceSnapshot(store,"owner",restored);
+    assert.equal((await restoreLatestWorkspaceSnapshot(store,"owner"))?.resultSession?.undo,null);
+  }
+});
+
+test("old result-only undo and automatic age/declined preserve newer input/list; malformed full backup is rejected", async () => {
+  for (const reason of ["age","declined"] as const) {
+    const reset=resetResultDraft(draft(),1000,reason); assert.equal(reset.siteName,"Next B"); assert.deepEqual(reset.orderDraftItems,draft().orderDraftItems);
+    assert.equal(reset.resultSession?.undo?.workspaceInputs,undefined);
+    reset.siteName="New C"; reset.orderDraftItems[0].quantity=99;
+    const restored=await restoreResultDraft(reset,2000); assert.equal(restored.siteName,"New C"); assert.equal(restored.orderDraftItems[0].quantity,99);
+  }
+  const full=resetResultDraft(draft(),1000); full.resultSession!.undo!.workspaceInputs!.orderDraftItems[0].quantity=-1;
+  assert.throws(()=>readWorkspaceDraft(JSON.stringify(full)));
+  const empty=resetResultDraft({version:1,siteName:"A",parsed:null,orderDraftItems:[]},1000);
+  delete empty.resultSession!.undo!.workspaceInputs; assert.throws(()=>readWorkspaceDraft(JSON.stringify(empty)));
 });

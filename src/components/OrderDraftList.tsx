@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Check,
   ClipboardList,
@@ -34,6 +34,7 @@ type OrderDraftListProps = {
   items: OrderDraftItem[];
   siteName: string;
   pendingDuplicate: PendingOrderDraftDuplicate | null;
+  onEditorBlocked?: (blocked: boolean) => void;
   onUpdate: (
     id: string,
     patch: Partial<Pick<OrderDraftItem, "productCode" | "quantity" | "quantityInput" | "unit">>,
@@ -58,6 +59,7 @@ export function OrderDraftList({
   items,
   siteName,
   pendingDuplicate,
+  onEditorBlocked,
   onUpdate,
   onSiteNameChange,
   onDelete,
@@ -71,6 +73,9 @@ export function OrderDraftList({
   const [manualQuantity, setManualQuantity] = useState("");
   const [manualUnit, setManualUnit] = useState("m");
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
+
+  const editorBlocked = Boolean(manualProductCode || manualQuantity || pendingDuplicate);
+  useEffect(() => { onEditorBlocked?.(editorBlocked); return () => onEditorBlocked?.(false); }, [editorBlocked, onEditorBlocked]);
 
   const totals = useMemo(() => calculateOrderDraftTotals(items), [items]);
   const outputIssues = useMemo(() => items.flatMap(item => {

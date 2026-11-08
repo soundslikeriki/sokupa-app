@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Layers, Edit3, ImageIcon } from "lucide-react";
 
 /** Keep original-photo recovery reachable when the result itself is hidden. */
-export function EmptyResultWorkspace({ tools, onWorkspaceViewChange }: { tools: ReactNode; onWorkspaceViewChange?: (view: "quantity" | "photo") => void }) {
+export function EmptyResultWorkspace({ tools, onWorkspaceViewChange, overviewRequest = 0 }: { tools: ReactNode; overviewRequest?: number; onWorkspaceViewChange?: (view: "quantity" | "photo") => void }) {
   const id = useId(), [view, setView] = useState<"quantity" | "photo">("quantity");
   useLayoutEffect(() => { onWorkspaceViewChange?.(view); }, [view, onWorkspaceViewChange]);
   const [keyboard, setKeyboard] = useState(false);
@@ -14,6 +14,12 @@ export function EmptyResultWorkspace({ tools, onWorkspaceViewChange }: { tools: 
     if (state.sokupaEmptyResult?.id !== id) window.history.replaceState({ ...state, sokupaEmptyResult: { id, view } }, "");
     window.history.pushState({ ...(window.history.state ?? {}), sokupaEmptyResult: { id, view: next } }, ""); setView(next);
   };
+  const lastOverviewRequest = useRef(overviewRequest), overviewNavigation = useRef<() => void>(() => undefined);
+  useLayoutEffect(() => { overviewNavigation.current = () => select("quantity"); });
+  useLayoutEffect(() => {
+    if (lastOverviewRequest.current === overviewRequest) return;
+    lastOverviewRequest.current = overviewRequest; overviewNavigation.current();
+  }, [overviewRequest]);
   useEffect(() => {
     const back = (event: PopStateEvent) => setView(event.state?.sokupaEmptyResult?.id === id && event.state.sokupaEmptyResult.view === "photo" ? "photo" : "quantity");
     const resize = () => setKeyboard(Boolean(window.visualViewport && innerHeight - window.visualViewport.height > 150));
@@ -21,10 +27,7 @@ export function EmptyResultWorkspace({ tools, onWorkspaceViewChange }: { tools: 
     return () => { window.removeEventListener("popstate", back); window.visualViewport?.removeEventListener("resize", resize); };
   }, [id]);
   return <div className="space-y-3 pb-[calc(5rem+env(safe-area-inset-bottom))]" onKeyDown={event => { if (event.key === "Escape") select("quantity"); }}>
-    <section role="tabpanel" aria-label="概要" hidden={view !== "quantity"} className="space-y-3 rounded-xl border p-3">
-      <p className="text-sm">表示中の結果はありません。新しい写真を選ぶか、メモ画像タブから前回の1件を戻せます。</p>
-      <button type="button" className="min-h-11 text-sm underline" onClick={() => select("photo")}>メモ画像・前回の結果を開く</button>
-    </section>
+    <section role="tabpanel" aria-label="概要" hidden={view !== "quantity"} />
     <section role="tabpanel" aria-label="メモ画像" hidden={view !== "photo"} className="space-y-3">
       <h2 className="text-xl font-bold">メモ画像</h2>{tools}
     </section>

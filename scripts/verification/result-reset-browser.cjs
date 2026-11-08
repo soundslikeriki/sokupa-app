@@ -47,11 +47,29 @@ const make=()=>{
   const saved=async()=>{let previous='',stable=0;await wait(async()=>{const raw=await bytes();stable=raw===previous?stable+1:0;previous=raw;return stable>=3&&(await page.getByLabel('結果の保存状態').innerText()).includes('保存済み');});};
   const photo=async()=>{await ui.view(page,'メモ画像');};
   const inputSite=()=>page.getByRole('region',{name:'メモ計測',exact:true}).getByLabel('現場名（任意）',{exact:true});
-  const reset=()=>page.getByRole('button',{name:'この結果の表示をリセット',exact:true});
-  const restore=()=>page.getByRole('button',{name:'前回の結果だけ戻す',exact:true});
+  const reset=()=>page.getByRole('button',{name:'すべてリセット',exact:true});
+  const restore=()=>page.getByRole('button',{name:/^(前回の結果だけ戻す|リセット前の状態を復元)$/});
   await page.goto(base);await page.getByLabel('結果の保存状態').waitFor();await saved();
   return {context,page,owner,key,latestKey,control,dialogs,calls,errors,unexpected,read,bytes,saved,photo,inputSite,reset,restore,choice};
  };
+ // Full manual reset is local-only; no history, images or server state are removed.
+ for(const base of bases){
+  const seed=make();seed.orderDraftItems.push({...structuredClone(seed.orderDraftItems[0]),id:'area',productCode:'AREA',sourceType:'area',quantity:12},{...structuredClone(seed.orderDraftItems[0]),id:'dimension',productCode:'OTHER-JOB',sourceType:'dimension',quantity:8});
+  const h=await fixture(base,{initial:await resumeResultDraft(seed,now)});await h.photo();await h.reset().click();await h.saved();
+  let d=await h.read();check(d.parsed===null&&d.originalParsed===null&&d.siteName===''&&d.resultSiteName===''&&d.orderDraftItems.length===0,'manual reset clears result, both names and the entire mixed list after save');
+  check(h.dialogs.length===1&&h.dialogs[0].includes('発注リスト全体')&&h.dialogs[0].includes('手入力・実寸計測'),'one confirmation explicitly names the full reset scope');
+  check(d.resultSession.undo.workspaceInputs.siteName==='Next B'&&d.resultSession.undo.workspaceInputs.orderDraftItems.length===3&&d.resultSession.undo.parsed.items[0].order_quantity===30,'single undo preserves both names, all list sources and edited quantity');
+  check(!('resultSession' in d.resultSession.undo)&&!('undo' in d.resultSession.undo),'undo contains no recursive older backup');
+  await h.page.reload();await h.saved();await h.photo();await h.restore().click();await h.saved();d=await h.read();check(d.siteName==='Next B'&&d.resultSiteName==='Result A'&&d.orderDraftItems.length===3&&d.parsed.items[0].order_quantity===30,'reload then undo restores the full corresponding state');
+  check(d.resultSession.undo===null&&d.resultSession.meaningfulAt===now,'explicit restore consumes one slot and restarts result age');check(h.errors.length===0&&h.unexpected.length===0,'full reset/undo performs only read-only stubbed auth/jobs/photo requests');await h.context.close();
+  for(const field of['site','list']){
+   const h=await fixture(base);await h.photo();await h.reset().click();await h.saved();
+   if(field==='site'){await ui.view(h.page,'概要');await ui.disclosure(h.page,'画像・現場名');await h.inputSite().fill('New C');}
+   else{await h.page.getByRole('button',{name:'計測・発注メニュー',exact:true}).click();await h.page.locator('[data-mode-choice]').filter({hasText:'発注リスト'}).click();await h.page.getByRole('button',{name:'材料を手動追加',exact:true}).click();await h.page.getByLabel('品番（任意）',{exact:true}).fill('NEW-C');await h.page.getByLabel('数量',{exact:true}).fill('9');await h.page.getByRole('button',{name:'発注リストに追加',exact:true}).click();await h.page.getByRole('button',{name:'計測・発注メニュー',exact:true}).click();await h.page.locator('[data-mode-choice]').filter({hasText:'メモ計測'}).click();}
+   await h.saved();await h.photo();const before=await h.bytes();await h.restore().click();await h.page.getByRole('heading',{name:'エラー',exact:true}).waitFor();check(await h.bytes()===before&&!(await h.read()).parsed&&(await h.read()).resultSession.undo.workspaceInputs,'new post-reset '+field+' blocks destructive undo and keeps the saved backup');await h.context.close();
+  }
+  for(const list of[[],seed.orderDraftItems]){const initial={version:1,siteName:'Only input',parsed:null,orderDraftItems:list};const h=await fixture(base,{initial});await h.photo();await h.reset().click();await h.saved();check((await h.read()).siteName===''&&(await h.read()).orderDraftItems.length===0,'no-result reset clears name/list without requiring an analysis');await h.page.reload();await h.saved();await h.photo();await h.restore().click();await h.saved();check((await h.read()).siteName==='Only input'&&(await h.read()).parsed===null&&(await h.read()).orderDraftItems.length===list.length,'no-result full undo survives reload including an explicitly empty list');await h.context.close();}
+ }
  for(const base of bases){
   // No reconfirmation or text input: quantity buttons alone must renew saved age.
   for(const editView of[false,true])for(const boundary of[DAY,2*DAY]){
@@ -93,7 +111,7 @@ const make=()=>{
   }
   {
    const h=await fixture(base,{recover:true});await ui.disclosure(h.page,'画像・現場名');await h.page.locator('input[type=file]').setInputFiles({name:'synthetic.png',mimeType:'image/png',buffer:png});await h.page.getByAltText('プレビュー 1',{exact:true}).waitFor();await h.photo();await h.reset().click();await h.saved();
-   check((await h.read()).parsed===null&&(await h.read()).resultSession.undo.resultJobId===A&&h.dialogs.length===1,'manual reset uses one explicit warning and saves this job only');await ui.disclosure(h.page,'画像・現場名');check(await h.page.getByAltText('プレビュー 1',{exact:true}).isVisible(),'reset preserves unsubmitted selected photo');
+   check((await h.read()).parsed===null&&(await h.read()).resultSession.undo.resultJobId===A&&h.dialogs.length===1,'manual reset uses one explicit warning and saves this job plus the full input/list state');await ui.disclosure(h.page,'画像・現場名');check(await h.page.getByAltText('プレビュー 1',{exact:true}).isVisible(),'reset preserves unsubmitted selected photo');
    await h.page.reload();await h.saved();check((await h.read()).parsed===null,'manual reset wins over under24h and unseen server discovery');await h.photo();await h.restore().click();await h.saved();check((await h.read()).resultSiteName==='Result A'&&(await h.read()).siteName==='Next B','restore keeps A source name independent of next input B');
    check((await h.read()).orderDraftItems[0].quantity===7&&(await h.read()).parsed.items[0].order_quantity===30,'restore changes no order draft or edited final quantity');
    await ui.view(h.page,'概要');check(Boolean((await h.read()).parsed.items[0].reading_review_confirmation&&(await h.read()).parsed.items[0].quantity_confirmation),'restored source and quantity fingerprints remain valid for unchanged A');await h.page.getByRole('button',{name:'確認してコピー',exact:true}).click();await h.page.getByRole('button',{name:'発注用テキストをコピー',exact:true}).click();check(await h.page.evaluate(()=>window.copied.at(-1).includes('Result A')&&!window.copied.at(-1).includes('Next B')),'copy uses the restored result name, never the next input name');await h.context.close();

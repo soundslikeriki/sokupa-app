@@ -74,7 +74,7 @@ function matches(a, b) {
  * Every writer MUST use this service and this lock. Missing lock support fails closed.
  * ownerId must come from a verified signed-in session, never a user-editable form.
  */
-export function createLatestResultRecovery({ ownerId, storage, locks, maxBytes = DEFAULT_MAX_BYTES, now = () => new Date().toISOString() }) {
+export function createLatestResultRecovery({ ownerId, storage, locks, maxBytes = DEFAULT_MAX_BYTES, now = () => new Date().toISOString(), allowEmptySnapshots = false }) {
   if (!text(ownerId)) throw new Invalid('owner-required');
   if (!safeInt(maxBytes) || maxBytes < 1024) throw new Invalid('size-limit-invalid');
   const key = `sokupa:latest-result:v${VERSION}:${encodeURIComponent(ownerId)}`;
@@ -140,7 +140,7 @@ export function createLatestResultRecovery({ ownerId, storage, locks, maxBytes =
       });
     },
     complete(token, snapshot) {
-      const input = prepare(snapshot, true);
+      const input = prepare(snapshot, !allowEmptySnapshots);
       if (input.error) return Promise.resolve(input.error);
       const expected = record(token) ? { generation: token.generation, operationId: token.operationId } : null;
       return run((state) => {

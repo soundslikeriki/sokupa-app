@@ -64,6 +64,7 @@ function groupByManufacturer(items: any[]) {
 
 type OrderListProps = {
   basicView?: boolean;
+  overviewRequest?: number;
   items: MemoProductItem[];
   sourceItems?: MemoProductItem[];
   sourceJobId?: string | null;
@@ -157,7 +158,7 @@ function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
   };
 }
 
-export function OrderList({ basicView = false, items: incomingItems, sourceItems, sourceJobId, readingReviewSourceJobId, notes, siteName = "", onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft, resultTools, onMeaningfulEdit, onEditorBlocked, onResetResult, resetDisabledReason, onWorkspaceViewChange }: OrderListProps) {
+export function OrderList({ basicView = false, overviewRequest = 0, items: incomingItems, sourceItems, sourceJobId, readingReviewSourceJobId, notes, siteName = "", onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft, resultTools, onMeaningfulEdit, onEditorBlocked, onResetResult, resetDisabledReason, onWorkspaceViewChange }: OrderListProps) {
   const privatePhotoJobId = sourceJobId ?? readingReviewSourceJobId;
   const materialContext = privatePhotoJobId ?? "legacy-workspace";
   const [materialState, setMaterialState] = useState(() => ({ incoming: incomingItems, context: materialContext,
@@ -190,7 +191,7 @@ export function OrderList({ basicView = false, items: incomingItems, sourceItems
   useLayoutEffect(() => { currentPhotoRef.current = photoKey; }, [photoKey]);
   useLayoutEffect(() => { if (items.length) onWorkspaceViewChange?.(resultView); }, [resultView, onWorkspaceViewChange, items.length]);
   const views = [{ value: "quantity", label: "概要" }, { value: "edit", label: "数量" }, { value: "photo", label: "メモ画像" }] as const;
-  const selectView = (view: typeof resultView, code = selectedProductCode, record = true) => {
+  const selectView = (view: typeof resultView, code = selectedProductCode, record = true, scroll = true) => {
     if (view === resultView && code === selectedProductCode) return;
     if (record && (view !== resultView || code !== selectedProductCode)) {
       const previous = window.history.state ?? {};
@@ -198,6 +199,7 @@ export function OrderList({ basicView = false, items: incomingItems, sourceItems
       window.history.pushState({ ...(window.history.state ?? {}), sokupaResult: { id: workspaceId, view, code } }, "");
     }
     setSelectedProductCode(code); setResultView(view);
+    if (!scroll) return;
     window.requestAnimationFrame(() => {
       const panel = resultRoot.current?.querySelector<HTMLElement>(`[data-result-panel="${view}"]`);
       if (panel && panel.getClientRects().length && !document.activeElement?.matches("input,select,textarea")) { panel.focus({ preventScroll: true }); panel.scrollIntoView({ block: "start" }); }
@@ -207,6 +209,13 @@ export function OrderList({ basicView = false, items: incomingItems, sourceItems
       }
     });
   };
+  const lastOverviewRequest = useRef(overviewRequest);
+  const overviewNavigation = useRef<() => void>(() => undefined);
+  useLayoutEffect(() => { overviewNavigation.current = () => selectView("quantity", selectedProductCode, true, false); });
+  useLayoutEffect(() => {
+    if (lastOverviewRequest.current === overviewRequest) return;
+    lastOverviewRequest.current = overviewRequest; overviewNavigation.current();
+  }, [overviewRequest]);
   const openPhoto = (index: number) => { setPhotoError(false); setPhotoIndex(index); selectView("photo"); };
   useEffect(() => {
     const restore = (event: PopStateEvent) => {
@@ -1174,8 +1183,8 @@ export function OrderList({ basicView = false, items: incomingItems, sourceItems
         {resultTools}
         {onResetResult ? <div className="space-y-2 rounded-xl border p-3 text-sm">
           <Button type="button" variant="outline" className="min-h-11" data-workspace-navigation disabled={Boolean(resetDisabledReason) || resetEditorBlocked}
-            onClick={() => void onResetResult(JSON.stringify(derivedItems.map(canonicalizeDerivedItem)))}>この結果の表示をリセット</Button>
-          <p className="text-xs text-muted-foreground">{resetEditorBlocked ? "入力中の品番・未追加の行・未完了の数値を確定または取消してから操作してください。" : resetDisabledReason || "確認後、編集済みの結果を端末に1件だけ残します。"}</p>
+            onClick={() => void onResetResult(JSON.stringify(derivedItems.map(canonicalizeDerivedItem)))}>すべてリセット</Button>
+          <p className="text-xs text-muted-foreground">{resetEditorBlocked ? "入力中の品番・未追加の行・未完了の数値を確定または取消してから操作してください。" : resetDisabledReason || "解析結果・現場名・発注リスト全体をリセット。確認後、直前の状態を端末に1件残します。"}</p>
         </div> : null}
       </section>
       <section id={`${navId}-edit`} data-result-panel="edit" role="tabpanel" aria-labelledby={`${navId}-edit-tab`} tabIndex={-1} hidden={resultView !== "edit"} className="scroll-mt-4 space-y-3 outline-none print:block">

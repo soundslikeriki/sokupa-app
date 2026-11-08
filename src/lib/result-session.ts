@@ -71,26 +71,35 @@ export async function stampResultSession(draft: WorkspaceDraft, now: number, mea
 /** One atomic workspace value contains both the blank display and its single undo. */
 export function resetResultDraft(draft: WorkspaceDraft, now: number, reason: "manual" | "age" | "declined" = "manual"): WorkspaceDraft {
   readWorkspaceDraft(JSON.stringify(draft));
-  if (!draft.parsed?.items.length) throw new Error("リセットする結果がありません。");
+  if (!draft.parsed?.items.length && (reason !== "manual" || !draft.siteName && !draft.orderDraftItems.length)) throw new Error("リセットする内容がありません。");
   const undo = { parsed: copy(draft.parsed), originalParsed: copy(draft.originalParsed ?? draft.parsed),
     resultJobId: draft.resultJobId ?? null, resultSiteName: draft.resultSiteName ?? draft.siteName,
-    meaningfulAt: draft.resultSession?.meaningfulAt ?? null };
-  const next: WorkspaceDraft = { ...draft, parsed: null, originalParsed: null, resultJobId: null, resultSiteName: "",
+    meaningfulAt: draft.resultSession?.meaningfulAt ?? null,
+    ...(reason === "manual" ? { workspaceInputs: { siteName: draft.siteName, orderDraftItems: copy(draft.orderDraftItems) } } : {}) };
+  const next: WorkspaceDraft = { ...draft, ...(reason === "manual" ? { siteName: "", orderDraftItems: [] } : {}), parsed: null, originalParsed: null, resultJobId: null, resultSiteName: "",
     resultSession: { version: 1, generation: generation(draft.resultSession), inactive: true, fingerprint: "",
       meaningfulAt: null, observedAt: time(now) ? now : null, allowedJobId: null, undo, reason } };
   return readWorkspaceDraft(JSON.stringify(next));
 }
 
-/** Result-only restore deliberately preserves the next-input site and order drafts. */
+/** Old result-only undo never clears the next input/list; full undo cannot replace newer work. */
+export function resultRestoreConflict(draft: WorkspaceDraft): string | null {
+  const inputs = draft.resultSession?.undo?.workspaceInputs;
+  if (!inputs) return null;
+  if (draft.siteName && draft.siteName !== inputs.siteName || draft.orderDraftItems.length && JSON.stringify(draft.orderDraftItems) !== JSON.stringify(inputs.orderDraftItems))
+    return "リセット後の現場名・発注リストを保持しています。新しい内容を確定・書き出し、不要な内容を明示的に取り除いてから復元してください。";
+  return null;
+}
 export async function restoreResultDraft(draft: WorkspaceDraft, now: number): Promise<WorkspaceDraft> {
   readWorkspaceDraft(JSON.stringify(draft));
   if (draft.parsed) throw new Error("現在の結果を保持するため、表示が空のときだけ戻せます。");
   const undo = draft.resultSession?.undo;
   if (!undo) throw new Error("戻せる結果がありません。");
+  const conflict = resultRestoreConflict(draft); if (conflict) throw new Error(conflict);
   if (!time(now)) throw new Error("端末の時刻を確認してください。保存は保持しています。");
-  const next: WorkspaceDraft = { ...draft, parsed: copy(undo.parsed), originalParsed: copy(undo.originalParsed ?? undo.parsed),
+  const next: WorkspaceDraft = { ...draft, ...(undo.workspaceInputs ? copy(undo.workspaceInputs) : {}), parsed: copy(undo.parsed), originalParsed: copy(undo.originalParsed ?? undo.parsed),
     resultJobId: undo.resultJobId ?? null, resultSiteName: undo.resultSiteName,
-    resultSession: { version: 1, generation: generation(draft.resultSession), inactive: false, fingerprint: "",
+    resultSession: { version: 1, generation: generation(draft.resultSession), inactive: !undo.parsed, fingerprint: "",
       meaningfulAt: now, observedAt: now, allowedJobId: null, undo: null } };
   next.resultSession!.fingerprint = await resultFingerprint(next);
   return readWorkspaceDraft(JSON.stringify(next));

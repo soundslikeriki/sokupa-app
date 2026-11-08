@@ -3,8 +3,8 @@ import { validMaterialId } from "./material-identity";
 
 export type ResultSession = { version: 1; generation: number; inactive: boolean; fingerprint: string;
   meaningfulAt: unknown; observedAt: unknown; allowedJobId: string | null; reason?: "manual" | "age" | "declined";
-  undo: { parsed: ParsedMemoPayload; originalParsed?: ParsedMemoPayload | null; resultJobId: string | null;
-    resultSiteName: string; meaningfulAt: unknown } | null };
+  undo: { parsed: ParsedMemoPayload | null; originalParsed?: ParsedMemoPayload | null; resultJobId: string | null;
+    resultSiteName: string; meaningfulAt: unknown; workspaceInputs?: { siteName: string; orderDraftItems: OrderDraftItem[] } } | null };
 
 export type WorkspaceDraft = {
   version: 1;
@@ -38,6 +38,11 @@ function memo(value: unknown): boolean {
     Array.isArray(item.entries) && item.entries.length <= 10000 && item.entries.every((entry: unknown) => object(entry) && typeof entry.original_formula === "string" && ["length_input", "quantity_input"].every(key => entry[key] === undefined || (typeof entry[key] === "string" && entry[key].length <= 100)) && number(entry.length_m) && number(entry.quantity) && number(entry.subtotal_m) && (entry.repeat_enabled === undefined || typeof entry.repeat_enabled === "boolean") && (entry.repeat_use_row_length === undefined || typeof entry.repeat_use_row_length === "boolean") && (entry.review_reason === undefined || typeof entry.review_reason === "string") && (entry.source_row_id === undefined || typeof entry.source_row_id === "string") && ["source_image_index","source_entry_index"].every(key => entry[key] === undefined || (number(entry[key]) && Number.isSafeInteger(entry[key])))));
 }
 
+function validOrderDraftItems(value: unknown): boolean {
+  return !(!Array.isArray(value) || value.length > 1000 ||
+      value.some((item: unknown) => !object(item) || typeof item.id !== "string" || typeof item.productCode !== "string" || !number(item.quantity) || (item.quantityInput !== undefined && (typeof item.quantityInput !== "string" || item.quantityInput.length > 100)) || typeof item.unit !== "string" || typeof item.sourceLabel !== "string" || !["manual", "area", "dimension"].includes(item.sourceType)));
+}
+
 /** Reject corrupt drafts before rendering, and let callers keep the original storage value intact. */
 export function readWorkspaceDraft(text: string): WorkspaceDraft {
   if (text.length > 4_000_000) throw new Error("保存した下書きが大きすぎます。端末内のデータは保持しています。");
@@ -45,8 +50,7 @@ export function readWorkspaceDraft(text: string): WorkspaceDraft {
   if (!object(value) || value.version !== 1 || typeof value.siteName !== "string" || !memo(value.parsed) ||
       (value.resultJobId != null && (typeof value.resultJobId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.resultJobId))) ||
       (value.resultSiteName !== undefined && typeof value.resultSiteName !== "string") || !validResultSession(value.resultSession) ||
-      (value.originalParsed !== undefined && !memo(value.originalParsed)) || !Array.isArray(value.orderDraftItems) || value.orderDraftItems.length > 1000 ||
-      value.orderDraftItems.some((item: unknown) => !object(item) || typeof item.id !== "string" || typeof item.productCode !== "string" || !number(item.quantity) || (item.quantityInput !== undefined && (typeof item.quantityInput !== "string" || item.quantityInput.length > 100)) || typeof item.unit !== "string" || typeof item.sourceLabel !== "string" || !["manual", "area", "dimension"].includes(item.sourceType))) {
+      (value.originalParsed !== undefined && !memo(value.originalParsed)) || !validOrderDraftItems(value.orderDraftItems)) {
     throw new Error("保存した下書きを復元できません。端末内のデータは保持しています。");
   }
   return value as WorkspaceDraft;
@@ -58,7 +62,8 @@ function validResultSession(value: unknown): boolean {
   if (!object(value) || value.version !== 1 || !Number.isSafeInteger(value.generation) || value.generation < 0 || typeof value.inactive !== "boolean" ||
     typeof value.fingerprint !== "string" || value.fingerprint.length > 128 || !(value.allowedJobId === null || uuid(value.allowedJobId))) return false;
   const undo = value.undo;
-  return undo === null || object(undo) && undo.parsed !== null && memo(undo.parsed) && undo.parsed.items.length > 0 &&
+  return undo === null || object(undo) && memo(undo.parsed) && (undo.parsed !== null && undo.parsed.items.length > 0 || undo.workspaceInputs !== undefined) &&
+    (undo.workspaceInputs === undefined || object(undo.workspaceInputs) && typeof undo.workspaceInputs.siteName === "string" && validOrderDraftItems(undo.workspaceInputs.orderDraftItems)) &&
     (undo.originalParsed === undefined || memo(undo.originalParsed)) && typeof undo.resultSiteName === "string" &&
     (undo.resultJobId === null || uuid(undo.resultJobId));
 }
