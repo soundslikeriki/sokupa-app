@@ -17,11 +17,11 @@ let checks=0;const check=(v,m)=>{assert.ok(v,m);console.log(`PASS ${++checks}: $
    if(u.pathname.startsWith(`/api/analysis-jobs/${job}/images/`)){requests.push(u.pathname);return route.fulfill(status===200?{contentType:'image/png',body:png}:{status,json:{error:'Synthetic photo refusal'}});}
    if(u.pathname.startsWith('/api/'))throw Error('Unexpected API '+u.pathname);return route.continue();
   });
-  const page=await context.newPage();await page.goto(base);await ui.edit(page,'PHOTO');await page.getByRole('button',{name:'PHOTO の訂正候補の写真 2を確認',exact:true}).click();
-  await page.getByText('指定された元写真が見つかりません。',{exact:false}).waitFor();check(requests.length===0,'invalid source index does not silently substitute another image');
+  const page=await context.newPage();await page.goto(base);await ui.edit(page,'PHOTO');await page.getByLabel('PHOTO の個別照合詳細',{exact:true}).locator(':scope > summary').click();await page.getByRole('button',{name:'PHOTO の訂正候補の写真 2を確認',exact:true}).click();
+  await page.getByText('指定されたメモ画像が見つかりません。',{exact:false}).waitFor();check(requests.length===0,'invalid source index does not silently substitute another image');
   await page.getByRole('button',{name:'写真 1',exact:true}).click();await page.getByRole('button',{name:'写真を再取得',exact:true}).waitFor();check(requests.length===1,`${failure} yields an explicit current-photo error`);
   status=200;await page.getByRole('button',{name:'写真を再取得',exact:true}).click();await page.getByAltText('解析元の写真 1',{exact:true}).waitFor();check(await page.getByAltText('解析元の写真 1',{exact:true}).getAttribute('src')===`/api/analysis-jobs/${job}/images/0`,'safe retry keeps the displayed owner job');
-  await page.getByRole('button',{name:'編集に戻る',exact:true}).click();check(await page.getByLabel('編集する品番').inputValue()==='PHOTO','photo failure and retry preserve selected editor');await context.close();
+  await page.getByRole('button',{name:'数量に戻る',exact:true}).click();check(await page.getByLabel('編集する品番').inputValue()==='PHOTO','photo failure and retry preserve selected editor');await context.close();
  }
  }
  console.log(JSON.stringify({checks,realAiCalls:0,realLineSends:0,synthetic:true}));

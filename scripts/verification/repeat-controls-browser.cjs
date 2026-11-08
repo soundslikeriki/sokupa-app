@@ -59,7 +59,7 @@ const until = async fn => { for(let i=0;i<250;i++){if(await fn())return;await ne
   };
   {
    const h=await fixture(seed),{page}=h;
-   check(await h.details().getAttribute('open')===null&&await page.getByLabel('SYN の壁の高さ (m)',{exact:true}).isHidden(),'common height and conditions start closed');
+   check(await h.details().getAttribute('open')===null&&await page.getByLabel('SYN の壁の高さ (m)',{exact:true}).isVisible(),'common height remains directly editable while conditions start closed');
    check(await page.getByLabel('SYN のリピート (cm)',{exact:true}).isVisible()&&await page.getByLabel('SYN の一括リピート計算',{exact:true}).isVisible(),'repeat cm and master toggle are immediate controls');
    check((await page.getByLabel('SYN の高さの適用状態',{exact:true}).innerText())==='各行の寸法で計算','row-based default is explicit');
    check((await page.getByTitle('タップして式を編集').first().innerText()).includes('2.7→3.2m'),'input length and repeat result are distinguished briefly');
@@ -104,7 +104,7 @@ const until = async fn => { for(let i=0;i<250;i++){if(await fn())return;await ne
     if(state==='all-individual')check(status.includes('各行の個別寸法')&&status.includes('未使用'),'all individual rows do not claim shared height is applied');
     if(state==='mixed')check(status.includes('共通高さ 2.7m')&&status.includes('個別寸法1行を優先'),'mixed height policy is visible while closed');
     if(state==='invalid'){check(status.includes('入力を確認')&&await h.copy().isDisabled(),'invalid hidden common input has visible blocker');await page.getByLabel('SYN のリピート条件を確認',{exact:true}).click();check(await page.getByLabel('SYN の壁の高さ (m)',{exact:true}).inputValue()==='-1','invalid input remains reachable and unchanged');}
-    if(state==='reading')check(await page.getByLabel('SYN の訂正・取消を確認済みにする',{exact:true}).isVisible()&&await h.copy().isDisabled()&&(await page.getByLabel('SYN のリピート条件を確認',{exact:true}).innerText()).includes('訂正・取消を確認'),'OCR review remains visible and blocks output outside closed settings');
+    if(state==='reading')check(await page.getByRole('button',{name:'SYN の確認画面を開く',exact:true}).isVisible()&&await page.getByLabel('SYN の訂正・取消を確認済みにする',{exact:true}).isHidden()&&!(await page.getByLabel('SYN の訂正・取消を確認済みにする',{exact:true}).isChecked())&&await h.copy().isDisabled()&&(await page.getByLabel('SYN のリピート条件を確認',{exact:true}).innerText()).includes('訂正・取消を確認'),'short OCR review entry stays visible while optional long controls are closed and output remains blocked');
     if(state==='blank')check(await page.getByText('未入力',{exact:true}).isVisible()&&await h.copy().isDisabled()&&(await page.getByLabel('SYN のリピート条件を確認',{exact:true}).innerText()).includes('入力未完了'),'unfinished row remains visible and blocked');
    }
    check((await h.read()).parsed.items[0].repeat_height_m===2.7,'existing common-height value is never silently cleared');await h.finish();

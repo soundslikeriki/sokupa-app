@@ -1,3 +1,4 @@
+const workspace = require('./result-workspace-helpers.cjs');
 // No external calls. Notification A fails while a different analysis B is accepted and completed.
 const{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),assert=require('node:assert/strict');
 const base=process.env.SOKUPA_TEST_URL||'http://127.0.0.1:3317',user='synthetic-user',a='00000000-0000-4000-8000-00000000000a',b='00000000-0000-4000-8000-00000000000b',key=`sokupa:workspace:v1:${user}`,pointer=`sokupa:lastJobId:${user}`;
@@ -8,7 +9,7 @@ const original=item('A-CODE',20,1,23),draft={version:1,siteName:'Site A',parsed:
  try{for(const scenario of [{status:202,delayed:false},{status:503,delayed:false},{status:503,delayed:true}]){
   const initialRetryStatus=scenario.status;let delayInitialA=scenario.delayed,releaseInitialA;const initialAGate=new Promise(resolve=>{releaseInitialA=resolve;});
   let statusA='failed',statusB='failed',created=false,doneB=false,recoverA=false,resumesA=0,resumesB=0,readsA=0,seenB=0,failAReadOnce=false,transientAReadObserved=false;
-  const context=await browser.newContext(),page=await context.newPage();page.on('pageerror',e=>{throw e;});
+  const context=await browser.newContext(),page=await context.newPage();await workspace.freshResultFixtures(context);page.on('pageerror',e=>{throw e;});
   await context.addInitScript(({key,pointer,a,draft})=>{if(!sessionStorage.getItem('seeded')){localStorage.setItem(key,JSON.stringify(draft));localStorage.setItem(pointer,a);sessionStorage.setItem('seeded','yes');}let offset=0;const realNow=Date.now;Date.now=()=>realNow()+offset;window.advanceNotificationClock=ms=>{offset+=ms;};},{key,pointer,a,draft});
   await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==base)return route.abort();
    if(url.pathname==='/api/auth/session')return route.fulfill({json:{authenticated:true,line_user_id:user}});
@@ -24,8 +25,8 @@ const original=item('A-CODE',20,1,23),draft={version:1,siteName:'Site A',parsed:
    if(url.pathname.startsWith('/api/'))throw Error('Unexpected API '+url.pathname);return route.continue();
   });
   const read=()=>page.evaluate(key=>JSON.parse(localStorage.getItem(key)),key);
-  const upload=async()=>{const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=4;return c.toDataURL('image/png').split(',')[1];});await page.locator('input[type=file]').setInputFiles({name:'next.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await page.getByAltText('プレビュー 1',{exact:true}).waitFor();};
-  await page.goto(base);if(!scenario.delayed)await page.getByText('LINE通知を再確認しています。',{exact:false}).waitFor();await page.getByLabel('A-CODE の発注数量を入力',{exact:true}).waitFor();
+  const upload=async()=>{const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=4;return c.toDataURL('image/png').split(',')[1];});await workspace.disclosure(page,'画像・現場名');await page.locator('input[type=file]').setInputFiles({name:'next.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await page.getByAltText('プレビュー 1',{exact:true}).waitFor();};
+  await page.goto(base);if(!scenario.delayed)await page.getByText('LINE通知を再確認しています。',{exact:false}).waitFor();await workspace.edit(page,'A-CODE');await page.getByLabel('A-CODE の発注数量を入力',{exact:true}).waitFor();
   await page.getByTitle('タップして式を編集').click();await page.getByLabel('A-CODE 1行目の幅数',{exact:true}).fill('3');await page.waitForFunction(key=>JSON.parse(localStorage.getItem(key)).parsed.items[0].order_quantity===69,key);
   await upload();const button=page.getByRole('button',{name:'1枚の画像を解析する',exact:true});await wait(()=>button.isEnabled());assert.equal(statusA,'failed');if(!scenario.delayed)assert.ok(resumesA>=1);checks++;
   if(initialRetryStatus===503)await page.evaluate(key=>{window.realArchiveSet=Storage.prototype.setItem;Storage.prototype.setItem=function(name,value){if(name.startsWith(key+':recovery:'))throw new DOMException('Synthetic archive quota','QuotaExceededError');return window.realArchiveSet.call(this,name,value);};},key);
@@ -37,15 +38,15 @@ const original=item('A-CODE',20,1,23),draft={version:1,siteName:'Site A',parsed:
   assert.equal(await page.evaluate(k=>localStorage.getItem(k),pointer),b);assert.equal(await button.isDisabled(),true);assert.ok(resumesA>=2&&readsA>=3);checks++;
   const whileB=await read();assert.equal(whileB.parsed?.items[0]?.product_code??null,'A-CODE');checks++;
   doneB=true;
-  await page.getByLabel('B-CODE の発注数量を入力',{exact:true}).waitFor();await wait(()=>button.isEnabled());assert.equal(statusB,'failed');assert.equal((await read()).parsed.items[0].order_quantity,12);checks++;
+  await workspace.edit(page,'B-CODE');await page.getByLabel('B-CODE の発注数量を入力',{exact:true}).waitFor();await wait(()=>button.isEnabled());assert.equal(statusB,'failed');assert.equal((await read()).parsed.items[0].order_quantity,12);checks++;
   assert.equal(await page.evaluate(key=>Object.keys(localStorage).filter(k=>k.startsWith(key+':recovery:')).length,key),0);checks++;
-  await page.reload();await page.getByLabel('B-CODE の発注数量を入力',{exact:true}).waitFor();await page.getByText('LINE通知を再確認しています。',{exact:false}).waitFor();await upload();await wait(()=>page.getByRole('button',{name:'1枚の画像を解析する',exact:true}).isEnabled());
+  await page.reload();await workspace.edit(page,'B-CODE');await page.getByLabel('B-CODE の発注数量を入力',{exact:true}).waitFor();await page.getByText('LINE通知を再確認しています。',{exact:false}).waitFor();await upload();await wait(()=>page.getByRole('button',{name:'1枚の画像を解析する',exact:true}).isEnabled());
   assert.equal((await read()).resultJobId,b);assert.equal((await read()).parsed.items[0].order_quantity,12);assert.ok(resumesB>=1);assert.equal(statusB,'failed');checks++;
   await context.close();
  }
  // A completed job can have an unavailable result endpoint. Its metadata must not lock new intake.
  {const c='00000000-0000-4000-8000-00000000000c';let created=false,reads=0,releaseOld=false,seenB=0;
-  const context=await browser.newContext(),page=await context.newPage();
+  const context=await browser.newContext(),page=await context.newPage();await workspace.freshResultFixtures(context);
   await context.addInitScript(({key,draft})=>localStorage.setItem(key,JSON.stringify(draft)),{key,draft});
   await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==base)return route.abort();
    if(url.pathname==='/api/auth/session')return route.fulfill({json:{authenticated:true,line_user_id:user}});
@@ -60,7 +61,7 @@ const original=item('A-CODE',20,1,23),draft={version:1,siteName:'Site A',parsed:
   });
   await page.goto(base);await page.getByText('解析が完了しました',{exact:true}).waitFor();await wait(()=>reads>=1);
   const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=4;return c.toDataURL('image/png').split(',')[1];});
-  await page.locator('input[type=file]').setInputFiles({name:'next.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await page.getByAltText('プレビュー 1',{exact:true}).waitFor();
+  await workspace.disclosure(page,'画像・現場名');await page.locator('input[type=file]').setInputFiles({name:'next.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await page.getByAltText('プレビュー 1',{exact:true}).waitFor();
   const button=page.getByRole('button',{name:'1枚の画像を解析する',exact:true});await wait(()=>button.isEnabled());assert.equal(seenB,0);checks++;
   await button.click();await page.getByText('解析を受け付けました',{exact:true}).waitFor();assert.ok(created);assert.equal(await page.evaluate(k=>localStorage.getItem(k),pointer),c);checks++;
   const before=reads;releaseOld=true;await wait(()=>reads>before);assert.equal(await button.isDisabled(),true);assert.equal(await page.getByText('別の解析結果があります',{exact:true}).count(),0);

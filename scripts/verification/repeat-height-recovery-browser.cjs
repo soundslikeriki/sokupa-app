@@ -68,7 +68,7 @@ const until = async fn => { for (let i=0;i<200;i++) { if(await fn()) return; awa
   await height().fill('-1');await until(async()=>(await item()).repeat_height_input==='-1');await saved();check(await copy().isDisabled(),'invalid common height blocks output without losing row priority');
   await reload();check(await height().inputValue()==='-1'&&(await item()).entries[1].repeat_use_row_length===true,'invalid common height and explicit row survive reload');
   await height().fill('3.8');await observe(6.6,8,'valid common height restores supported calculation');
-  await ui.view(page,'数量');await ui.edit(page);await ui.mode(page,'実寸計測');await ui.mode(page,'メモ計測');await ui.edit(page);
+  await ui.view(page,'概要');await ui.edit(page);await ui.mode(page,'実寸計測');await ui.mode(page,'メモ計測');await ui.edit(page);
   await observe(6.6,8,'tabs and modes preserve per-row height');
   // Row reset is also an explicit selection of that row's original dimensions.
   await editRow(2,'1.3');await observe(7.8,9,'new individual dimension is used');

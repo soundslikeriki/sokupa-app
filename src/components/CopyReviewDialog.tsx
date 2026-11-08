@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { readingEvidenceGroups } from "@/lib/order-presentation";
 import type { MemoReadingReview } from "@/types";
 
 export type CopyReviewRow = { id: string; code: string; quantity: number; quantityIncomplete: boolean; token: string; ready: boolean;
@@ -61,17 +62,19 @@ export function CopyReviewDialog({ open, rows, batchToken, copyReady, siteName, 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain p-3" aria-label="コピー前の確認内容">
         {notice || staleSelection || changedContent ? <p role="alert" className="rounded-lg border border-amber-500 p-2 text-sm">{notice || "内容が変わりました。表示中の候補と数量を確認し直してください。"}</p> : null}
         {photo}
+        {readingEvidenceGroups(rows).length ? <section aria-label="訂正・取消の照合内容" className="space-y-3 rounded-xl border p-3 text-xs">
+          <h3 className="font-bold">読み取りの確認</h3>
+          {readingEvidenceGroups(rows).map(({key,review,codes}) => <div key={key} className="space-y-1 break-words">
+            <p className="font-semibold">対象：{codes.join("・")}</p>
+            {review.reason.length > 140 ? <details data-workspace-navigation><summary>{review.reason.slice(0,100)}…（全文）</summary><p>{review.reason}</p></details> : <p>{review.reason}</p>}
+            {review.candidate_formulas.length ? <p>候補：{review.candidate_formulas.join(" ／ ")}</p> : null}
+            <p>{review.source_image_index === undefined ? "写真の対応も確認してください" : `写真${review.source_image_index+1}`}</p>
+          </div>)}
+          <p>有効な訂正は明細へ反映し、取消なら除外を照合してください。対象品番ごとに確認します。</p>
+        </section> : null}
         {rows.map(row => <section key={row.id} aria-label={`${row.code} のコピー前確認`} className="space-y-2 rounded-xl border p-3">
           <div className="flex items-start justify-between gap-2"><h3 className="min-w-0 break-all font-bold">{row.code}</h3><strong className="shrink-0 text-2xl tabular-nums text-indigo-700 dark:text-indigo-300">{row.quantityIncomplete || !Number.isFinite(row.quantity) || row.quantity <= 0 ? "未確定" : `${row.quantity}m`}</strong></div>
-          {row.reviews.length ? <div className="space-y-2 rounded-lg bg-amber-500/10 p-2 text-xs">
-            <p className="font-bold">対象：{row.code}・訂正／取消の照合</p>
-            {row.reviews.map((review,index) => <div key={index} className="break-words">
-              {review.reason.length > 140 ? <details><summary className="cursor-pointer">{review.reason.slice(0, 100)}…（全文）</summary><p>{review.reason}</p></details> : <p>{review.reason}</p>}
-              {review.candidate_formulas.length ? <p className="font-semibold">候補：{review.candidate_formulas.join(" ／ ")}</p> : null}
-              <p className="text-muted-foreground">{review.source_image_index === undefined ? "写真の対応も確認してください" : `写真${review.source_image_index + 1}`}</p>
-            </div>)}
-            <p>有効な訂正は明細へ反映、取消なら除外を照合してください。候補は自動加算しません。</p>
-          </div> : null}
+          {row.reviews.length ? <p className="text-xs">訂正・取消：上の「読み取りの確認」の対象 {row.code} と照合</p> : null}
           {row.imageIndexes.length ? <div className="flex flex-wrap gap-2">{row.imageIndexes.map(index => <Button key={index} type="button" variant="outline" className="min-h-11 text-xs" aria-label={`${row.code} の写真${index + 1}`} data-workspace-navigation onClick={() => onPhoto(index)}>写真{index + 1}を確認</Button>)}</div> : null}
           {ready(row) ? <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">確認済み</p> : <>
             {!row.confirmable ? <p role="status" className="text-sm text-amber-800 dark:text-amber-200">{row.blockedMessage}</p> : null}

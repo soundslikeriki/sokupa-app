@@ -43,7 +43,7 @@ const make=()=>{
   const read=()=>page.evaluate(k=>JSON.parse(localStorage.getItem(k)),key);
   const bytes=()=>page.evaluate(k=>localStorage.getItem(k),key);
   const saved=async()=>{await wait(()=>page.getByLabel('結果の保存状態').innerText().then(s=>s.includes('保存済み')));await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));};
-  const photo=async()=>{await ui.view(page,'元写真');};
+  const photo=async()=>{await ui.view(page,'メモ画像');};
   const inputSite=()=>page.getByRole('region',{name:'メモ計測',exact:true}).getByLabel('現場名（任意）',{exact:true});
   const reset=()=>page.getByRole('button',{name:'この結果の表示をリセット',exact:true});
   const restore=()=>page.getByRole('button',{name:'前回の結果だけ戻す',exact:true});
@@ -94,7 +94,7 @@ const make=()=>{
    check((await h.read()).parsed===null&&(await h.read()).resultSession.undo.resultJobId===A&&h.dialogs.length===1,'manual reset uses one explicit warning and saves this job only');await ui.disclosure(h.page,'画像・現場名');check(await h.page.getByAltText('プレビュー 1',{exact:true}).isVisible(),'reset preserves unsubmitted selected photo');
    await h.page.reload();await h.saved();check((await h.read()).parsed===null,'manual reset wins over under24h and unseen server discovery');await h.photo();await h.restore().click();await h.saved();check((await h.read()).resultSiteName==='Result A'&&(await h.read()).siteName==='Next B','restore keeps A source name independent of next input B');
    check((await h.read()).orderDraftItems[0].quantity===7&&(await h.read()).parsed.items[0].order_quantity===30,'restore changes no order draft or edited final quantity');
-   await ui.view(h.page,'数量');check(await h.page.getByLabel('ANON1 の一覧で訂正・取消と発注数量を確認した',{exact:true}).isChecked(),'restored fingerprint remains valid for unchanged A');await h.page.getByRole('button',{name:'確認してコピー',exact:true}).click();await h.page.getByRole('button',{name:'発注用テキストをコピー',exact:true}).click();check(await h.page.evaluate(()=>window.copied.at(-1).includes('Result A')&&!window.copied.at(-1).includes('Next B')),'copy uses the restored result name, never the next input name');await h.context.close();
+   await ui.view(h.page,'概要');check(Boolean((await h.read()).parsed.items[0].reading_review_confirmation&&(await h.read()).parsed.items[0].quantity_confirmation),'restored source and quantity fingerprints remain valid for unchanged A');await h.page.getByRole('button',{name:'確認してコピー',exact:true}).click();await h.page.getByRole('button',{name:'発注用テキストをコピー',exact:true}).click();check(await h.page.evaluate(()=>window.copied.at(-1).includes('Result A')&&!window.copied.at(-1).includes('Next B')),'copy uses the restored result name, never the next input name');await h.context.close();
   }
  }
  for(const extra of[{legacy:true},{badTime:'invalid'},{badTime:now+DAY}]){const h=await fixture(bases[0],{...extra,choice:false});check(h.dialogs.length===1&&(await h.read()).resultSession.undo.parsed.items[0].order_quantity===30,'unknown/invalid/future time requires a choice and retains edited data');await h.context.close();}
@@ -110,8 +110,7 @@ const make=()=>{
   check((await h.read()).parsed===null&&(await h.read()).resultSession.undo.resultJobId===B&&(await h.read()).resultSession.undo.resultSiteName===siteB,`${path}: B alone is retained as previous1 with its own name`);
   await h.photo();await h.restore().click();await h.saved();
   check((await h.read()).resultJobId===B&&(await h.read()).resultSiteName===siteB&&(await h.read()).siteName==='Next C',`${path}: restore B preserves next-input C and does not revive A's name`);
-  await ui.view(h.page,'数量');await h.page.getByLabel('ANONB の一覧で元メモと発注数量を確認した',{exact:true}).check();await h.saved();
-  await h.page.getByRole('button',{name:'確認してコピー',exact:true}).click();await h.page.getByRole('button',{name:'発注用テキストをコピー',exact:true}).click();
+  await ui.view(h.page,'概要');await h.page.getByRole('button',{name:'確認してコピー',exact:true}).click();await h.page.getByRole('dialog').getByLabel('ANONB の数量を確認した',{exact:true}).check();await h.page.getByRole('button',{name:'確認を反映',exact:true}).click();await h.saved();await h.page.getByRole('button',{name:'発注用テキストをコピー',exact:true}).click();
   const copied=await h.page.evaluate(()=>window.copied.at(-1));check(copied.includes('ANONB')&&!copied.includes('Result A')&&!copied.includes('Next C')&&(!siteB||copied.includes(siteB)),`${path}: B copy is bound to B or unnamed, never A/C`);
   check(h.errors.length===0&&h.unexpected.length===0,'pending-result regression has no runtime or unexpected API errors');await h.context.close();
  }

@@ -67,8 +67,8 @@ const fixture = (mode, legacy, included) => {
       const copy = () => page.getByRole('button', { name: '発注用テキストをコピー', exact: true, includeHidden: true });
       const bulk = () => page.getByRole('button', { name: 'すべて発注リストへ追加（2品番）', exact: true, includeHidden: true });
       const region = () => page.getByRole('region', { name: 'REVIEW の訂正・取消の確認', exact: true, includeHidden: true });
-      await page.goto(base); await workspace.edit(page, 'REVIEW'); await review().waitFor(); await saved();
-      for (const code of ['REVIEW','SAFE']) { await workspace.edit(page, code); const detail=page.locator(`details[aria-label="${code} の読み取り詳細"]`); if(await detail.count()) await detail.locator('summary').click(); }
+      await page.goto(base); await workspace.edit(page, 'REVIEW'); await page.getByLabel('REVIEW の個別照合詳細',{exact:true}).locator(':scope > summary').click(); await review().waitFor(); await saved();
+      for (const code of ['REVIEW','SAFE']) { await workspace.edit(page, code); const outer=page.getByLabel(`${code} の個別照合詳細`,{exact:true});if(await outer.count()&&await outer.getAttribute('open')===null)await outer.locator('summary').first().click(); const detail=page.locator(`details[aria-label="${code} の読み取り詳細"]`); if(await detail.count()) await detail.locator('summary').click(); }
       if (mixedGlobal || globalNotesOnly) {
         for (const code of ['REVIEW', 'SAFE']) { await workspace.edit(page, code);
           const warning = page.getByRole('region', { name: `${code} の訂正・取消の確認`, exact: true });
@@ -79,14 +79,14 @@ const fixture = (mode, legacy, included) => {
         check(await copy().isDisabled() && await bulk().isDisabled(), 'global-only evidence blocks all calculated output');
         check((await item()).entries.length === 1 && (await item()).order_quantity === 6, 'a global candidate is not automatically added');
         await until(() => read().then(value => value.parsed.items.every(entry => entry.reading_reviews?.some(review => review.candidate_formulas.includes('3×4'))))); await saved();
-        await page.reload(); await workspace.edit(page, 'REVIEW'); await review().waitFor();
+        await page.reload(); await workspace.edit(page, 'REVIEW'); await page.getByLabel('REVIEW の個別照合詳細',{exact:true}).locator(':scope > summary').click(); await review().waitFor();
         check(await general().isDisabled() && await copy().isDisabled(), 'legacy global notes remain gated after normalization and reload');
         check((await read()).originalParsed.notes.includes('3×4'), 'original global notes remain unchanged');
         await context.close(); continue;
       }
       await workspace.edit(page, 'REVIEW');
       if (view === 'basic') await page.getByText('基本表示中です。', { exact: false }).waitFor();
-      check((await region().getAttribute('class')).includes('amber'), `${view}/${mode}: dedicated amber warning`);
+      check(!(await region().getAttribute('class')).includes('bg-amber')&&await page.getByRole('button',{name:'REVIEW の確認画面を開く',exact:true}).isVisible(), `${view}/${mode}: short actionable review replaces the persistent amber frame`);
       check((await region().innerText()).includes('1.5×3'), 'candidate formula remains visible');
       if (!legacy) check(await region().locator('b').count() === 0 && (await region().innerText()).includes('<b>原画像を照合</b>'), 'OCR reason is escaped React text');
       check((await item()).entries.length === (included ? 2 : 1) && (await item()).total_m === (included ? 9.3 : 4.8), 'candidate is never automatically added, including an already-present row');
@@ -96,12 +96,13 @@ const fixture = (mode, legacy, included) => {
       await page.getByLabel('REVIEW の詳細を省略', { exact: true }).click();
       check(await page.getByRole('button', { name: '追加', exact: true }).isDisabled(), 'collapsed transfer remains blocked');
       await page.getByLabel('REVIEW の詳細を展開', { exact: true }).click();
+      const individual=page.getByLabel('REVIEW の個別照合詳細',{exact:true});if(await individual.getAttribute('open')===null)await individual.locator(':scope > summary').click();
       const photoIndex = legacy ? 0 : 1;
       await page.getByRole('button', { name: `REVIEW の訂正候補の写真 ${photoIndex + 1}を確認`, exact: true }).click();
       await page.getByAltText(`解析元の写真 ${photoIndex + 1}`, { exact: true }).waitFor();
       check(photos.includes(photoIndex), 'candidate source index or entry-source fallback uses the private photo route');
       if (view === 'basic') check(await page.getByRole('button', { name: 'REVIEW 明細1の写真を確認', exact: true }).count() === 0, 'basic exposes only the necessary correction photo, not optional row-photo UI');
-      await page.getByRole('button', { name: '編集に戻る', exact: true }).click();
+      await page.getByRole('button', { name: '数量に戻る', exact: true }).click();
       if (process.env.SOKUPA_REVIEW_SCREENSHOT && view === 'full' && mode === 'memo' && !included) await region().screenshot({ path: process.env.SOKUPA_REVIEW_SCREENSHOT });
       if (!included) {
         await page.getByLabel('REVIEW に追加する長さ (m)', { exact: true }).fill('1.5');
@@ -122,7 +123,7 @@ const fixture = (mode, legacy, included) => {
       await workspace.copy(page); check((await page.evaluate(() => window.copied.at(-1))).includes(`品番：REVIEW / 数量：${finalQuantity}m`), 'copy includes the reviewed corrected quantity exactly once');
       check((await item()).reading_reviews[0].candidate_formulas.includes('1.5×3'), 'candidate evidence is retained after confirmation');
       const snapshot = (await item()).reading_review_confirmation;
-      await page.reload(); await workspace.edit(page, 'REVIEW'); await review().waitFor(); await saved();
+      await page.reload(); await workspace.edit(page, 'REVIEW'); await page.getByLabel('REVIEW の個別照合詳細',{exact:true}).locator(':scope > summary').click(); await review().waitFor(); await saved();
       check(await review().isChecked() && await general().isChecked() && await copy().isEnabled(), 'both acknowledgements restore after reload');
       check((await item()).reading_review_confirmation === snapshot && (await item()).reading_reviews.some(review => review.candidate_formulas.includes('1.5×3')), 'reload keeps the review fingerprint and candidate record');
       await page.locator('details[aria-label="REVIEW の読み取り詳細"]').locator('summary').click();
@@ -130,7 +131,7 @@ const fixture = (mode, legacy, included) => {
       await page.getByRole('button', { name: '発注リストに追加', exact: true }).first().click();
       await until(() => read().then(value => value.orderDraftItems.length === 1));
       check((await read()).orderDraftItems[0].quantity === finalQuantity, 'individual draft transfer does not apply the candidate or reserve twice');
-      await workspace.mode(page, 'メモ計測'); await workspace.edit(page); await workspace.view(page, '数量'); await bulk().click();
+      await workspace.mode(page, 'メモ計測'); await workspace.edit(page); await workspace.view(page, '概要'); await bulk().click();
       await page.getByText('REVIEW はすでに発注リストにあります', { exact: true }).waitFor();
       await page.getByRole('button', { name: '別項目で追加', exact: true }).click();
       await until(() => read().then(value => value.orderDraftItems.length === 3));

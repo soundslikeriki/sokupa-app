@@ -50,7 +50,7 @@ async function uploadEdit(browser){
 async function incompleteMeasurements(browser){
  const h=await setup(browser,'blank',memo('CHECK'));
  try{const {page,saved,read}=h;const confirm=page.getByLabel('CHECK のメモと発注数量を確認済みにする',{exact:true});
-  await confirm.check();await wait(()=>page.getByLabel('CHECK の発注量チェック').innerText().then(t=>t.includes('確認済み')));
+  await confirm.check();await wait(()=>read().then(d=>Boolean(d.parsed.items[0].quantity_confirmation)));
   for(const field of ['length','quantity']){
    await page.getByTitle('タップして式を編集').first().click();const label=field==='length'?'CHECK 1行目の長さ (m)':'CHECK 1行目の幅数';const prop=field==='length'?'length_input':'quantity_input';
    await page.getByLabel(label,{exact:true}).fill('');await wait(()=>read().then(d=>d.parsed.items[0].entries[0][prop]===''));await saved();
@@ -60,7 +60,7 @@ async function incompleteMeasurements(browser){
    check(await page.evaluate(({k,prop})=>JSON.parse(localStorage.getItem(k)).latest.snapshot.parsed.items[0].entries[0][prop]==='',{k:h.latestKey,prop}),'latest snapshot retains blank '+field);
    await page.reload();await ui.edit(page,'CHECK');await page.getByTitle('タップして式を編集').first().click();check(await page.getByLabel(label,{exact:true}).inputValue()==='','blank '+field+' restores after reload');
    await page.getByLabel(label,{exact:true}).fill(field==='length'?'20':'1');await saved();check(!(await confirm.isChecked()),'completing '+field+' does not silently reconfirm');
-   await confirm.check();await wait(()=>page.getByLabel('CHECK の発注量チェック').innerText().then(t=>t.includes('確認済み')));checks++;
+   await confirm.check();await wait(()=>read().then(d=>Boolean(d.parsed.items[0].quantity_confirmation)));checks++;
   }
  }finally{await h.context.close();}
 }

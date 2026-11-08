@@ -1,10 +1,10 @@
 // Public UI paths, shared by synthetic browser suites after result navigation changed.
 const view = async (page, name) => { await page.getByRole('tab', { name, exact: true }).click(); };
-const edit = async (page, code) => { if (code) await page.getByLabel(`${code} の一覧発注数量`, { exact: true }).waitFor({ state: 'attached' }); await view(page, '編集・リピート'); if (code) await page.getByLabel('編集する品番', { exact: true }).selectOption(code); };
+const edit = async (page, code) => { if (code) await page.getByLabel(`${code} の一覧発注数量`, { exact: true }).waitFor({ state: 'attached' }); await view(page, '数量'); if (code) await page.getByLabel('編集する品番', { exact: true }).selectOption(code); };
 const mode = async (page, name) => { await page.getByRole('button', { name: '計測・発注メニュー', exact: true }).click(); await page.getByRole('group', { name: '既存機能へ切り替え' }).getByRole('button', { name: new RegExp(name) }).click(); };
-const disclosure = async (page, text) => { const summary = page.locator('summary').filter({ hasText: text }).first(); if (await summary.locator('..').getAttribute('open') === null) await summary.click(); };
+const disclosure = async (page, text) => { const summary = page.locator('summary').filter({ hasText: text }).first(); if(await summary.isHidden()&&await page.getByRole('tab',{name:'概要',exact:true}).isVisible())await view(page,'概要'); if (await summary.locator('..').getAttribute('open') === null) await summary.click(); };
 const repeatSettings = async (page, code) => { const details = page.getByLabel(`${code} のリピート詳細設定`, { exact: true }); if (await details.getAttribute('open') === null) await details.locator('summary').click(); };
-const copy = async page => { await view(page, '数量'); await page.getByRole('button', { name: '確認してコピー', exact: true }).click(); const dialog=page.getByRole('dialog',{name:'発注内容を確認してコピー',exact:true}); await dialog.getByRole('button', { name: '発注用テキストをコピー', exact: true }).click(); await dialog.getByRole('button',{name:'戻る',exact:true}).click(); await dialog.waitFor({state:'hidden'}); await edit(page); };
+const copy = async page => { await view(page, '概要'); await page.getByRole('button', { name: '確認してコピー', exact: true }).click(); const dialog=page.getByRole('dialog',{name:'発注内容を確認してコピー',exact:true}); await dialog.getByRole('button', { name: '発注用テキストをコピー', exact: true }).click(); await dialog.getByRole('button',{name:'戻る',exact:true}).click(); await dialog.waitFor({state:'hidden'}); await edit(page); };
 // Existing calculation/navigation suites seed current, freshly saved results. Time-policy
 // suites do not use this helper and exercise the legacy/unknown-time path explicitly.
 const freshResultFixtures = async context => context.addInitScript(() => {

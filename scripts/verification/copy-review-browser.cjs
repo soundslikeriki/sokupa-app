@@ -28,59 +28,34 @@ const wait=async fn=>{for(let i=0;i<250;i++){if(await fn())return;await new Prom
   },{seed,basic,profile,confirmed,holdMetadata,failMetadata});
   page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.dismiss());await page.goto(origin+'/harness');await page.addScriptTag({content:bundle});
   const dialog=()=>page.getByRole('dialog',{name:'発注内容を確認してコピー',exact:true}),copy=()=>dialog().getByRole('button',{name:'発注用テキストをコピー',exact:true});
-  const open=async()=>{await page.getByRole('tab',{name:'数量',exact:true}).click();await page.getByRole('button',{name:'確認してコピー',exact:true}).click();await dialog().waitFor();};
+  const open=async()=>{await page.getByRole('tab',{name:'概要',exact:true}).click();await page.getByRole('button',{name:'確認してコピー',exact:true}).click();await dialog().waitFor();};
   const close=async()=>{await dialog().getByRole('button',{name:'戻る',exact:true}).click();await dialog().waitFor({state:'hidden'});};
   const read=()=>page.evaluate(()=>({items:window.items,calls:window.calls,copied:window.copied}));
   const ack=(code='SYN-A')=>dialog().getByLabel(`${code} の訂正候補と数量を確認した`,{exact:true});
-  const top=(code='SYN-A')=>page.getByRole('checkbox',{name:new RegExp(`^${code} の一覧で`)});
+  const status=(code='SYN-A')=>page.getByLabel(`${code} の発注量チェック`,{exact:true});
   const details=(code='SYN-A')=>page.getByLabel(`${code} の一覧確認詳細`,{exact:true});
   const apply=()=>dialog().getByRole('button',{name:'確認を反映',exact:true});
   const all=async()=>{for(const checkbox of await dialog().getByRole('checkbox').all())if(await checkbox.isEnabled())await checkbox.check();await apply().click();await wait(()=>copy().isEnabled());};
   await wait(()=>read().then(r=>r.items.every(item=>item.memo_allowance!==undefined&&item.loss_rate_percent!==undefined)));await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-  return {context,page,dialog,copy,open,close,read,ack,top,details,apply,all,errors,unexpected,imageRequests,repairImage:()=>{imageStatus=200;},release:()=>releaseImage?.()};
+  return {context,page,dialog,copy,open,close,read,ack,status,details,apply,all,errors,unexpected,imageRequests,repairImage:()=>{imageStatus=200;},release:()=>releaseImage?.()};
  };
  for(const basic of[false,true]){
   const h=await fixture({basic,seed:make(2)}),{page}=h;
-  check(!(await h.top().isChecked())&&!(await h.top('SYN-B').isChecked()),'quantity list never defaults any product to confirmed');
+  check(await page.getByRole('tabpanel').filter({visible:true}).getByRole('checkbox').count()===0,'overview has numerical status instead of manual acknowledgement controls');
   const before=JSON.stringify((await h.read()).items);await h.details().locator('summary').first().click();
-  check((await h.details().innerText()).includes('対象：SYN-A')&&(await h.details().innerText()).includes('候補：1×2'),'list disclosure names the target product and its own candidate');
-  await h.details().getByRole('button',{name:'SYN-A の一覧から写真1を確認',exact:true}).click();await wait(()=>page.getByRole('tabpanel').filter({visible:true}).getByAltText('解析元の写真 1',{exact:true}).isVisible());
-  check((await page.getByAltText('解析元の写真 1',{exact:true}).getAttribute('src')).includes('000a/images/0'),'list photo link uses the displayed result job and image');await page.getByRole('tab',{name:'数量',exact:true}).click();
-  check(JSON.stringify((await h.read()).items)===before,'list disclosure and photo viewing never acknowledge or edit quantities');
-  await h.top().check();await wait(()=>h.read().then(r=>Boolean(r.items[0].reading_review_confirmation&&r.items[0].quantity_confirmation)));
-  check(!(await h.read()).items[1].reading_review_confirmation&&!(await h.read()).items[1].quantity_confirmation,'one list check never confirms another product with the same note');
-  check((await h.read()).items[0].order_quantity===23&&(await h.read()).copied.length===0,'direct confirmation changes no quantity and never copies');
-  await page.getByRole('button',{name:'SYN-A を確認・編集',exact:true}).click();check(await page.getByLabel('SYN-A の訂正・取消を確認済みにする',{exact:true}).isChecked()&&await page.getByLabel('SYN-A のメモと発注数量を確認済みにする',{exact:true}).isChecked(),'list and editor share both accepted confirmations');
-  await h.open();check(await h.ack().count()===0&&await h.ack('SYN-B').count()===1,'combined review reuses valid list confirmation without another check');await h.close();
-  await h.top().uncheck();await wait(()=>h.read().then(r=>!r.items[0].quantity_confirmation&&!r.items[0].reading_review_confirmation));check(!(await h.top().isChecked()),'list uncheck removes only that product source and quantity acknowledgements');
-  await h.top().check();await page.getByRole('button',{name:'SYN-A の発注数量を1m増やす',exact:true}).click();await wait(()=>h.read().then(r=>r.items[0].order_quantity===24&&!r.items[0].quantity_confirmation));check(!(await h.top().isChecked()),'list quantity editing keeps the edited amount and requires reconfirmation');await h.top().check();await wait(()=>h.read().then(r=>Boolean(r.items[0].quantity_confirmation)));check((await h.read()).items[0].order_quantity===24,'reconfirmation uses the current final amount');
-  check(h.errors.length===0&&h.unexpected.length===0&&(await h.read()).calls.every(c=>c.method==='GET'),'list operations perform no correction, AI, LINE or job submission');await h.context.close();
- }
- {
-  const seed=make(2);delete seed[1].reading_reviews;const h=await fixture({seed,confirmed:true});check(await h.top().isChecked()&&await h.top('SYN-B').isChecked(),'list preserves matching existing confirmations on load');await h.top().uncheck();await wait(()=>h.read().then(r=>!r.items[0].quantity_confirmation));check(await h.top('SYN-B').isChecked(),'unchecking one product preserves another existing confirmation');check((await h.top('SYN-B').getAttribute('aria-label')).includes('元メモと発注数量'),'plain product acknowledgement does not invent correction evidence');await h.context.close();
- }
- for(const basic of[false,true]){
-  const seed=make(2).map(item=>({...item,total_m:20,order_quantity:23,entries:item.entries.map(entry=>({...entry,length_m:20,subtotal_m:20,original_formula:'20×1'}))}));
-  const h=await fixture({basic,seed});await h.page.evaluate(()=>window.change('site'));await wait(()=>h.page.evaluate(()=>window.site==='Changed site'));await h.top().check();await wait(()=>h.read().then(r=>Boolean(r.items[0].quantity_confirmation)));
-  check(await h.top().isChecked()&&!(await h.top('SYN-B').isChecked()),`${basic}: site change before any review needs exactly one direct check for A only`);check((await h.read()).items.every(i=>i.order_quantity===23),`${basic}: first direct check after scope change preserves both 23m quantities`);await h.open();check(await h.ack().count()===0&&await h.ack('SYN-B').count()===1,`${basic}: first direct check is shared with the review screen`);await h.context.close();
- }
- {
-  const h=await fixture({seed:make(2),confirmed:true});await h.page.evaluate(()=>window.change('site'));await wait(()=>h.read().then(r=>r.items.every(i=>!i.quantity_confirmation)));check(!(await h.top().isChecked())&&!(await h.top('SYN-B').isChecked()),'a loaded confirmation cannot silently carry across a changed site before any review interaction');await h.context.close();
- }
- {
-  const h=await fixture({seed:make(2),confirmed:true});await h.page.evaluate(()=>window.change('image'));await wait(()=>h.read().then(r=>!r.items[0].quantity_confirmation));check(!(await h.top().isChecked())&&await h.top('SYN-B').isChecked(),'changing A source preserves the still-valid B confirmation outside an in-progress whole-list review');await h.top().check();await h.open();check(await h.dialog().getByRole('checkbox').count()===0&&await h.copy().isEnabled(),'only the changed product requires reconfirmation across all three views');await h.context.close();
+  check((await h.details().innerText()).includes('対象：SYN-A')&&(await h.details().innerText()).includes('候補：1×2'),'list disclosure preserves exact target/candidate');
+  await h.details().getByRole('button',{name:'SYN-A の一覧から写真1を確認',exact:true}).click();await page.getByAltText('解析元の写真 1',{exact:true}).waitFor();await page.getByRole('tab',{name:'概要',exact:true}).click();
+  check(JSON.stringify((await h.read()).items)===before,'numerical/photo viewing never acknowledges or edits quantities');
+  await h.open();await h.ack().check();await h.apply().click();await wait(()=>h.read().then(r=>Boolean(r.items[0].reading_review_confirmation&&r.items[0].quantity_confirmation)));await h.close();
+  check(!(await h.read()).items[1].reading_review_confirmation&&!(await h.read()).items[1].quantity_confirmation,'explicit A review never confirms B with the same note');
+  check((await h.read()).items[0].order_quantity===23&&(await h.read()).copied.length===0,'explicit confirmation changes no quantity and never copies');
+  await page.getByRole('button',{name:'SYN-A を確認・編集',exact:true}).click();check(await page.getByLabel('SYN-A の訂正・取消を確認済みにする',{exact:true}).isChecked(),'dialog/editor state stays consistent');
+  await h.open();check(await h.ack().count()===0&&await h.ack('SYN-B').count()===1,'valid acknowledgement is reused without duplicate checking');await h.close();
+  await page.getByRole('button',{name:'SYN-A の発注数量を1m増やす',exact:true}).click();await wait(()=>h.read().then(r=>r.items[0].order_quantity===24&&!r.items[0].quantity_confirmation));await h.open();check(await h.ack().count()===1&&await h.copy().isDisabled(),'quantity change preserves24m and requires explicit copy re-review');
+  check(h.errors.length===0&&h.unexpected.length===0&&(await h.read()).calls.every(c=>c.method==='GET'),'overview/review uses only synthetic reads');await h.context.close();
  }
  for(const kind of['job','site','add','remove','duplicate','image','code']){
-  const h=await fixture({seed:make(2)});await h.top().check();await wait(()=>h.read().then(r=>Boolean(r.items[0].quantity_confirmation)));await h.page.evaluate(kind=>window.change(kind),kind);await wait(()=>h.read().then(r=>!r.items[0].quantity_confirmation));check((await h.read()).items[0].order_quantity===23,`${kind}: closed-list scope change preserves quantities and invalidates the prior acknowledgement`);await h.open();check(await h.copy().isDisabled(),`${kind}: list scope change cannot reappear confirmed in the review`);await h.context.close();
- }
- {
-  const h=await fixture({seed:make(1)}),box=h.top();await box.hover();await h.page.mouse.down();await h.page.evaluate(()=>window.change('candidate'));await wait(()=>h.details().textContent().then(text=>text.includes('新しい訂正候補')));await h.page.mouse.up();await h.page.getByRole('alert').filter({hasText:'内容が変わりました'}).waitFor();check(!(await box.isChecked())&&!(await h.read()).items[0].quantity_confirmation,'content replacement between pointer-down and click rejects the old explicit intent');await box.check();check(await box.isChecked(),'a fresh list click can acknowledge the currently displayed candidate');await h.context.close();
- }
- {
-  const seed=make(2);seed[1].product_code=seed[0].product_code;const h=await fixture({seed,confirmed:true});check(await h.page.getByRole('checkbox',{name:/の一覧で/}).count()===2&&await h.page.getByRole('checkbox',{name:/の一覧で/,disabled:true}).count()===2,'duplicate codes cannot be acknowledged through either list checkbox');await h.context.close();
- }
- {
-  const h=await fixture({seed:make(1)}),box=h.top();await box.hover();await h.page.mouse.down();await box.dispatchEvent('pointercancel');await h.page.mouse.move(0,0);await h.page.mouse.up();check(!(await box.isChecked()),'cancelled list gesture never confirms');await h.page.evaluate(()=>window.change('site'));await wait(()=>h.page.evaluate(()=>window.site==='Changed site'));await box.check();check(await box.isChecked(),'cancelled intent cannot suppress a later fresh list confirmation');await h.context.close();
+  const h=await fixture({seed:make(2),confirmed:true});await h.page.evaluate(kind=>window.change(kind),kind);await wait(()=>h.read().then(r=>!r.items[0].quantity_confirmation));check((await h.read()).items[0].order_quantity===23,`${kind}: closed overview scope change preserves amounts and invalidates prior acknowledgement`);await h.open();check(await h.copy().isDisabled(),`${kind}: scope change stays protected in the review`);await h.context.close();
  }
  for(const basic of [false,true]){
   const h=await fixture({basic}),{page}=h;await h.open();check(await h.dialog().getByRole('checkbox').count()===6,'six products retain six explicitly scoped combined confirmations');
@@ -113,7 +88,7 @@ const wait=async fn=>{for(let i=0;i<250;i++){if(await fn())return;await new Prom
  for(const kind of ['blank','shortage','unknown','other','adjusted','invalid-setting']){
   const seed=make(1);if(kind==='blank')seed[0].entries[0].length_input='';if(kind==='shortage')seed[0].manual_order_quantity=1;
   if(['unknown','other','adjusted','invalid-setting'].includes(kind)){Object.assign(seed[0],{order_mode:'pattern',repeat_cm:60,measurement_basis:kind==='adjusted'?'repeat-adjusted':kind==='unknown'?'unconfirmed':'trim-included',pattern_match:kind==='other'?'other':'straight'});seed[0].entries[0].repeat_enabled=true;}
-  if(kind==='invalid-setting')seed[0].repeat_height_input='-1';const h=await fixture({seed});check(await h.top().isDisabled(),`${kind}: list confirmation keeps the existing guard`);await h.open();check(await h.ack().isDisabled()&&await h.copy().isDisabled(),`${kind} cannot bypass input/math/shortage guards`);check(!(await h.read()).items[0].quantity_confirmation,`${kind} remains unconfirmed`);await h.context.close();
+  if(kind==='invalid-setting')seed[0].repeat_height_input='-1';const h=await fixture({seed});check((await h.status().innerText()).includes('判定不可'),`${kind}: read-only numerical status remains unknown`);await h.open();check(await h.ack().isDisabled()&&await h.copy().isDisabled(),`${kind} cannot bypass input/math/shortage guards`);check(!(await h.read()).items[0].quantity_confirmation,`${kind} remains unconfirmed`);await h.context.close();
  }
  {
   const h=await fixture({seed:make(1),confirmed:true,holdMetadata:true});await h.open();check(await h.copy().isEnabled(),'existing confirmation survives pending photo metadata');await h.copy().click();check((await h.read()).copied.length===1&&(await h.read()).copied[0].active,'copy does not await metadata/image communication');await h.context.close();
@@ -125,13 +100,13 @@ const wait=async fn=>{for(let i=0;i<250;i++){if(await fn())return;await new Prom
   const h=await fixture({seed:make(1),holdMetadata:true});await h.open();await wait(()=>h.read().then(r=>r.calls.length>0));await h.page.evaluate(()=>window.change('job'));await wait(()=>h.dialog().getByAltText('解析元の写真 1',{exact:true}).getAttribute('src').then(src=>src?.includes('000b/')));await h.page.evaluate(()=>window.releaseMetadata());check(await h.dialog().getByRole('button',{name:'写真 2',exact:true}).count()===0,'late old-job metadata cannot replace the current job image count');await h.context.close();
  }
  {
-  const h=await fixture({seed:make(1),failMetadata:true});await h.open();await h.dialog().getByText('元写真の一覧を取得できませんでした。結果と編集は保持しています。',{exact:true}).waitFor();check((await h.read()).items[0].order_quantity===23&&!(await h.read()).items[0].quantity_confirmation,'metadata refusal keeps quantities and never confirms');await h.page.evaluate(()=>window.failMetadata=false);await h.dialog().getByRole('button',{name:'写真一覧を再取得',exact:true}).click();await h.dialog().getByAltText('解析元の写真 1',{exact:true}).waitFor();check((await h.dialog().getByAltText('解析元の写真 1',{exact:true}).getAttribute('src')).includes('000a/images/0'),'metadata retry stays tied to the displayed job');await h.context.close();
+  const h=await fixture({seed:make(1),failMetadata:true});await h.open();await h.dialog().getByText('メモ画像の一覧を取得できませんでした。結果と編集は保持しています。',{exact:true}).waitFor();check((await h.read()).items[0].order_quantity===23&&!(await h.read()).items[0].quantity_confirmation,'metadata refusal keeps quantities and never confirms');await h.page.evaluate(()=>window.failMetadata=false);await h.dialog().getByRole('button',{name:'写真一覧を再取得',exact:true}).click();await h.dialog().getByAltText('解析元の写真 1',{exact:true}).waitFor();check((await h.dialog().getByAltText('解析元の写真 1',{exact:true}).getAttribute('src')).includes('000a/images/0'),'metadata retry stays tied to the displayed job');await h.context.close();
  }
  for(const imageStatus of[403,404]){
   const h=await fixture({seed:make(1),imageStatus});await h.open();await h.dialog().getByText('写真を取得できませんでした。通信とログイン状態を確認してください。',{exact:true}).waitFor();check((await h.read()).items[0].order_quantity===23&&!(await h.read()).items[0].quantity_confirmation,`${imageStatus}: photo failure preserves quantities without confirmation`);h.repairImage();await h.dialog().getByRole('button',{name:'写真を再取得',exact:true}).click();await h.dialog().getByAltText('解析元の写真 1',{exact:true}).waitFor();check((await h.dialog().getByAltText('解析元の写真 1',{exact:true}).getAttribute('src')).includes('000a/images/0'),`${imageStatus}: photo retry cannot switch job or image`);await h.context.close();
  }
  for(const basic of [false,true])for(const profile of ['default','null','ancestor']){
-  const h=await fixture({basic,profile,seed:make(1)}),{page}=h;await page.getByRole('tab',{name:'編集・リピート',exact:true}).click();await page.getByTitle('タップして品番を編集',{exact:true}).click();await page.getByLabel('品番を編集',{exact:true}).fill('UNCOMMITTED');await h.open();check((await h.read()).items[0].product_code==='SYN-A'&&(await h.read()).calls.every(c=>c.method==='GET'),`${profile}/${basic}: opening review never commits pending code`);await h.close();await h.top().check();check((await h.read()).items[0].product_code==='SYN-A'&&(await h.read()).calls.every(c=>c.method==='GET'),`${profile}/${basic}: direct list check never commits a hidden code draft`);await page.getByRole('tab',{name:'編集・リピート',exact:true}).click();check(await page.getByLabel('品番を編集',{exact:true}).inputValue()==='UNCOMMITTED',`${profile}/${basic}: Cancel preserves code draft`);await h.context.close();
+  const h=await fixture({basic,profile,seed:make(1)}),{page}=h;await page.getByRole('tab',{name:'数量',exact:true}).click();await page.getByTitle('タップして品番を編集',{exact:true}).click();await page.getByLabel('品番を編集',{exact:true}).fill('UNCOMMITTED');await h.open();check((await h.read()).items[0].product_code==='SYN-A'&&(await h.read()).calls.every(c=>c.method==='GET'),`${profile}/${basic}: opening review never commits pending code`);await h.close();check(await page.getByRole('tabpanel').filter({visible:true}).getByRole('checkbox').count()===0&&(await h.read()).items[0].product_code==='SYN-A',`${profile}/${basic}: overview status cannot commit or confirm a hidden draft`);await page.getByRole('tab',{name:'数量',exact:true}).click();check(await page.getByLabel('品番を編集',{exact:true}).inputValue()==='UNCOMMITTED',`${profile}/${basic}: Cancel preserves code draft`);await h.context.close();
  }
  console.log(JSON.stringify({checks,synthetic:true,normalBasic:true,physicalSafari:false,realProviderCalls:0,realLineSends:0}));
  }finally{await browser.close();}

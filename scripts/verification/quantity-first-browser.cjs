@@ -42,12 +42,12 @@ const until=async fn=>{for(let n=0;n<200;n++){if(await fn())return;await new Pro
    const firstY=(await page.getByLabel('ANON1 の一覧発注数量',{exact:true}).boundingBox()).y;
    check(firstY>0&&await page.locator('#material-ANON1').isHidden(),'quantity summary is immediate while product editors are hidden');
    check(await copy.isDisabled(),'unconfirmed output remains blocked');
-   if(process.env.SOKUPA_SCREENSHOT_DIR){fs.mkdirSync(process.env.SOKUPA_SCREENSHOT_DIR,{recursive:true});await page.getByRole('heading',{name:'発注内容の確認',exact:true}).locator('..').locator('..').screenshot({path:`${process.env.SOKUPA_SCREENSHOT_DIR}/initial-quantity-first-${base===bases[0]?'normal':'basic'}-${width}.png`});}
+   if(process.env.SOKUPA_SCREENSHOT_DIR){fs.mkdirSync(process.env.SOKUPA_SCREENSHOT_DIR,{recursive:true});await page.getByRole('heading',{name:'発注量の自動チェック',exact:true}).locator('..').locator('..').screenshot({path:`${process.env.SOKUPA_SCREENSHOT_DIR}/initial-quantity-first-${base===bases[0]?'normal':'basic'}-${width}.png`});}
    await workspace.edit(page, 'ANON1'); await explanation.locator('summary').press('Enter');check(await explanation.getAttribute('open')!==null,'keyboard can expand warnings');
    check(await explanation.getByText(shared,{exact:false}).count()===1,'shared top warning is not repeated for each product');
    await explanation.locator('summary').press('Enter');check(await copy.isDisabled(),'hiding warnings cannot authorize copying');
    for(const product of items){ await workspace.edit(page, product.product_code);
-    const code=product.product_code,d=page.locator(`details[aria-label="${code} の読み取り詳細"]`);
+    const code=product.product_code;await page.getByLabel(`${code} の個別照合詳細`,{exact:true}).locator(':scope > summary').click();const d=page.locator(`details[aria-label="${code} の読み取り詳細"]`);
     check(await d.getAttribute('open')===null,'per-product lengthy reading evidence is collapsed');
     await d.locator('summary').click();check(await d.getByText(shared,{exact:true}).count()===1,'duplicate reason is shown once without removing evidence');await d.locator('summary').click();
     await page.getByLabel(`${code} の訂正・取消を確認済みにする`,{exact:true}).check();
@@ -58,7 +58,7 @@ const until=async fn=>{for(let n=0;n<200;n++){if(await fn())return;await new Pro
    await workspace.edit(page, 'ANON1'); const quantity=page.getByLabel('ANON1 の発注数量を入力',{exact:true});await quantity.fill('');await until(()=>h.read().then(d=>d.parsed.items[0].order_quantity_input==='')).catch(async error=>{console.log('SYNTHETIC_BLANK_DIAGNOSTIC',JSON.stringify({input:await quantity.inputValue(),item:(await h.read()).parsed.items[0]}));throw error;});await h.saved();
    check(await page.getByLabel('ANON1 の一覧発注数量',{exact:true}).innerText()==='未確定'&&await copy.isDisabled(),'missing quantity is visibly unresolved and blocks output');
    check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'no horizontal overflow at narrow width');
-   if(process.env.SOKUPA_SCREENSHOT_DIR){await workspace.view(page, '数量');fs.mkdirSync(process.env.SOKUPA_SCREENSHOT_DIR,{recursive:true});const card=page.getByRole('heading',{name:'発注内容の確認',exact:true}).locator('..').locator('..');await card.screenshot({path:`${process.env.SOKUPA_SCREENSHOT_DIR}/quantity-first-${base===bases[0]?'normal':'basic'}-${width}.png`});}
+   if(process.env.SOKUPA_SCREENSHOT_DIR){await workspace.view(page, '概要');fs.mkdirSync(process.env.SOKUPA_SCREENSHOT_DIR,{recursive:true});const card=page.getByRole('heading',{name:'発注量の自動チェック',exact:true}).locator('..').locator('..');await card.screenshot({path:`${process.env.SOKUPA_SCREENSHOT_DIR}/quantity-first-${base===bases[0]?'normal':'basic'}-${width}.png`});}
    await h.context.close();
   }
   const height={...item('HEIGHT'),measurement_basis:'trim-included',pattern_match:'straight',repeat_cm:60,loss_rate_percent:0,entries:[{source_row_id:'row0',original_formula:'2.7×2',length_m:2.7,quantity:2,subtotal_m:5.4},{source_row_id:'row1',original_formula:'3.8×1',length_m:3.8,quantity:1,subtotal_m:3.8}],total_m:9.2,order_quantity:10};

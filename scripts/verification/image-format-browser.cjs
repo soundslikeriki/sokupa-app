@@ -9,7 +9,7 @@ const base=process.env.SOKUPA_TEST_URL||'http://127.0.0.1:3317';
    if(u.pathname==='/api/memo-images'){uploads++;return route.abort();}
    if(u.pathname.startsWith('/api/'))throw Error('Unexpected API '+u.pathname);return route.continue();
   });
-  await page.goto(base);await page.getByRole('button',{name:'保存済みの解析結果を探す',exact:true}).waitFor();
+  await page.goto(base);await page.getByRole('tab',{name:'概要',exact:true}).waitFor();
   if(extension==='broken')await page.locator('input[type=file]').setInputFiles({name:'broken.heic',mimeType:'image/heic',buffer:Buffer.from('not a valid HEIC image')});
   else await page.locator('input[type=file]').setInputFiles(`/tmp/sokupa-synthetic-format.${extension}`);
   const button=page.getByRole('button',{name:'1枚の画像を解析する',exact:true});

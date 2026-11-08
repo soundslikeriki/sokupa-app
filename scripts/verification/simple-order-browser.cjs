@@ -105,7 +105,7 @@ const until = async predicate => { for (let n = 0; n < 200; n++) { if (await pre
     check((await read()).parsed.items[0].entries[0].quantity_input === '-1' && await copy().isDisabled(), 'invalid measurement stays blocked after reload');
     await page.getByTitle('タップして式を編集').first().click();
     await page.getByLabel('MEMO 1行目の幅数', { exact: true }).fill('1');
-    await ack('MEMO').check(); await saved(); await workspace.view(page, '数量'); await bulk.click();
+    await ack('MEMO').check(); await saved(); await workspace.view(page, '概要'); await bulk.click();
     await page.getByText('MEMO はすでに発注リストにあります', { exact: true }).waitFor();
     check((await read()).orderDraftItems[0].quantity === 23, 'bulk duplicate flow preserves existing reviewed quantity pending a choice');
     await page.getByRole('button', { name: '別項目で追加', exact: true }).click();
@@ -144,7 +144,7 @@ const until = async predicate => { for (let n = 0; n < 200; n++) { if (await pre
     check((await p.read()).parsed.items[0].total_m === 10.2, 'clearing common height restores distinct row heights');
     await q.getByLabel('HEIGHT の柄合わせ方式', { exact: true }).selectOption('other'); await p.saved();
     check(await p.copy().isDisabled() && await advancedAck().isDisabled(), 'half-drop cannot be acknowledged into a final order');
-    check((await q.getByLabel('HEIGHT の発注量チェック').innerText()).includes('職人さんに確認'), 'half-drop tells user to ask a craftsperson');
+    check((await q.getByLabel('HEIGHT の発注量チェック').innerText()).includes('判定不可') && (await q.getByLabel('HEIGHT のリピート条件を確認',{exact:true}).innerText()).includes('職人さんに確認'), 'unsupported pattern shows unknown numerical status and a reachable craftsperson/settings action');
     await q.getByLabel('HEIGHT の柄合わせ方式', { exact: true }).selectOption('straight');
     await q.getByLabel('HEIGHT の寸法区分', { exact: true }).selectOption('repeat-adjusted'); await p.saved();
     check(await advancedAck().isDisabled() && await p.copy().isDisabled(), 'already pattern-adjusted dimensions cannot be recalculated');

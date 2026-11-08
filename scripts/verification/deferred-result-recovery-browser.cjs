@@ -71,7 +71,7 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
       state.detailReady = false; await page.reload(); await workspace.mode(page, '実寸計測'); await page.getByText(/^退避した下書きを確認/).click();
       await page.getByRole('button', { name: /「Server A」を復元/ }).first().click();
       await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor();
-      assert.equal((await f.read()).resultJobId, a); assert.ok(state.seenA > 0); assert.equal(await page.getByRole('tab',{name:'数量',exact:true}).isVisible(),true); checks++;
+      assert.equal((await f.read()).resultJobId, a); assert.ok(state.seenA > 0); assert.equal(await page.getByRole('tab',{name:'概要',exact:true}).isVisible(),true); checks++;
       assert.ok(await page.evaluate(({ key, b }) => Object.keys(localStorage).filter(k => k.startsWith(key + ':recovery:')).some(k => { const d = JSON.parse(localStorage.getItem(k)); return d.resultJobId === b && d.parsed.items[0].order_quantity === 46; }), { key, b })); checks++;
       await f.context.close();
     }

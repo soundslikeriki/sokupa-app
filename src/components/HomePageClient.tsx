@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Loader2, Upload, X } from "lucide-react";
 
+import { LineNotificationEntry } from "@/components/LineNotificationEntry";
 import { WorkspaceModeMenu, type CalculationMode } from "@/components/WorkspaceModeMenu";
 import { AreaCalculator } from "@/components/AreaCalculator";
 import { OrderDraftList, type PendingOrderDraftDuplicate } from "@/components/OrderDraftList";
@@ -150,6 +151,7 @@ async function fetchAnalysisJob(id: string) {
 }
 
 export default function HomePageClient({ basicView = false }: { basicView?: boolean }) {
+  const [resultWorkspaceView, setResultWorkspaceView] = useState<"quantity" | "edit" | "photo">("quantity");
   const uploadInputId = useId();
   const siteNameId = useId();
   const [siteName, setSiteName] = useState("");
@@ -888,7 +890,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       const policy = resultAgePolicy(current.resultSession, Date.now());
       try {
         if (policy === "confirm") {
-          const accepted = window.confirm(`前回の編集済み結果に戻りますか？\n現場：${(current.resultSiteName ?? current.siteName) || "現場名なし"}\n24時間以上経過、または保存時刻を確認できません。戻さない場合も1件を残し、元写真タブから復元できます。`);
+          const accepted = window.confirm(`前回の編集済み結果に戻りますか？\n現場：${(current.resultSiteName ?? current.siteName) || "現場名なし"}\n24時間以上経過、または保存時刻を確認できません。戻さない場合も1件を残し、メモ画像タブから復元できます。`);
           await resultActionCallback.current(accepted ? "resume" : "declined");
         } else if (policy === "hide") await resultActionCallback.current("age");
         else { setResultSession(previous => previous ? { ...previous, observedAt: Date.now() } : previous); setResultBootPending(false); }
@@ -910,20 +912,19 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 px-2 py-4 sm:gap-4 sm:px-4 sm:py-6 md:px-6 lg:px-8" onPointerDownCapture={() => { resultWorkedRef.current = true; }} onKeyDownCapture={() => { resultWorkedRef.current = true; }}>
       {basicView ? <p role="status" className="rounded-xl border border-amber-500/40 p-3 text-sm">基本表示中です。解析・編集・保存・発注の基本機能を使えます。数量は元メモと照合してください。</p> : null}
       <header className="flex items-center justify-between gap-3">
-        <div className="min-w-0"><h1 className="text-xl font-bold">ソクパ <span className="text-xs font-normal text-muted-foreground">Sokupa</span></h1>
+        <div className="min-w-0">{/* eslint-disable-next-line @next/next/no-img-element */}
+        <h1 className="w-[148px] max-w-[46vw] rounded-md bg-white px-1 py-2"><img src="/sokupa-header-logo.webp" alt="ソクパ SOKUPA" width={578} height={80} className="block h-auto w-full" /></h1>
           {parsed && resultSiteName ? <p className="truncate text-xs text-muted-foreground">{resultSiteName}</p> : null}
         </div>
-        <WorkspaceModeMenu value={calculationMode} count={orderDraftItems.length} onChange={mode => {
+        <div className="flex shrink-0 items-center gap-2">{!qaSynthetic ? <LineNotificationEntry /> : null}
+        <WorkspaceModeMenu help={<p>メモ画像の寸法を読み取り、必要量に予備分{DEFAULT_LOSS_RATE_PERCENT}%を加えて発注数量を計算します。予備分は変更できます。</p>} value={calculationMode} count={orderDraftItems.length} onChange={mode => {
           if (mode === "area") setAreaCalculatorMounted(true);
           setCalculationMode(mode);
           window.scrollTo({ top: 0, behavior: "instant" });
         }} />
+        </div>
       </header>
-      <details className="text-xs text-muted-foreground">
-        <summary className="min-h-6 cursor-pointer">使い方・LINE通知</summary>
-        <p className="mt-2">メモ画像の寸法を読み取り、必要量に予備分{DEFAULT_LOSS_RATE_PERCENT}%を加えて発注数量を計算します。予備分は変更できます。</p>
-        {!qaSynthetic ? <a href="https://lin.ee/Xr6sd53" target="_blank" rel="noopener noreferrer" className="mt-2 inline-block min-h-11 content-center font-semibold text-[#06C755]">LINE通知を有効にする（友だち追加）</a> : null}
-      </details>
+
 
       {orderDraftFeedback ? (
         <div
@@ -943,7 +944,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         className="space-y-6 sm:space-y-8"
       >
 
-      <details open={!hasResult || memoInputOpen} onToggle={event => { if (hasResult) setMemoInputOpen(event.currentTarget.open); }} className="text-sm">
+      <details hidden={resultWorkspaceView !== "quantity"} data-workspace-overview="input" open={!hasResult || memoInputOpen} onToggle={event => { if (hasResult) setMemoInputOpen(event.currentTarget.open); }} className="text-sm">
         <summary className="min-h-8 cursor-pointer font-semibold">画像・現場名{images.length ? `（選択中${images.length}枚）` : ""}</summary>
       <div className="mt-3 space-y-5">
         <div>
@@ -959,7 +960,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
             placeholder="例: 渋谷区〇〇マンション リビング"
             className="rounded-lg px-4 py-2 focus-visible:ring-black"
           />
-          {parsed ? <p className="mt-1 text-xs text-muted-foreground">表示中の結果：{resultSiteName || "現場名なし"}。結果の現場名は元写真タブで変更できます。</p> : null}
+          {parsed ? <p className="mt-1 text-xs text-muted-foreground">表示中の結果：{resultSiteName || "現場名なし"}。結果の現場名はメモ画像タブで変更できます。</p> : null}
         </div>
 
         <div>
@@ -1054,12 +1055,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
             `${images.length}枚の画像を解析する`
           )}
         </Button>
-        {!qaSynthetic ? <p className="mt-3 text-center text-xs text-muted-foreground sm:text-sm">
-          ※通知が届かない場合は
-          <a href="https://lin.ee/Xr6sd53" target="_blank" rel="noopener noreferrer" className="mx-1 font-bold text-[#06C755] hover:underline">
-            こちらから友だち追加
-          </a>
-        </p> : null}
+
       </div>
       </details>
       </section>
@@ -1102,7 +1098,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         </Card>
       ) : null}
 
-      <details ref={historyPanelRef} className="text-sm">
+      <details hidden={resultWorkspaceView !== "quantity"} data-workspace-overview="history" ref={historyPanelRef} className="text-sm">
         <summary className="min-h-8 cursor-pointer text-sm font-semibold">保存済みの結果を開く</summary>
       <Card>
         <CardHeader className="space-y-3">
@@ -1240,7 +1236,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       {parsed && analysisBlocksIntake(jobAccepted) ? <p className="mb-3 text-sm">前回の結果を表示しています。新しい解析はサーバー側で処理中です。</p> : null}
       <section aria-label="メモの解析結果" hidden={calculationMode !== "dimensions"}>
       {resultBootPending ? <p role="status">前回の結果と保存時刻を確認しています…</p> : <>
-      {!parsed ? <EmptyResultWorkspace tools={resultTools} /> : null}
+      {!parsed ? <EmptyResultWorkspace tools={resultTools} onWorkspaceViewChange={setResultWorkspaceView} /> : null}
       <OrderList
         key={resultJobId ?? "legacy-workspace"}
         items={parsed?.items ?? []}
@@ -1251,6 +1247,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         notes={parsed?.notes}
         siteName={resultSiteName}
         resultTools={resultTools}
+        onWorkspaceViewChange={setResultWorkspaceView}
         onMeaningfulEdit={noteResultEdit}
         onEditorBlocked={reportEditorBlocked}
         resetDisabledReason={resultActionBlocked ? "解析・入力・保存の完了後にリセットできます。" : undefined}

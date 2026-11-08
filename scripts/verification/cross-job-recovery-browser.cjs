@@ -27,7 +27,7 @@ const item=(m,q,order)=>({product_code:'VS2067',manufacturer:'Synthetic',entries
     await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).waitFor();
     await page.evaluate(key=>{window.firstArchiveSet=Storage.prototype.setItem;Storage.prototype.setItem=function(name,value){if(name.startsWith(key+':recovery:'))throw new DOMException('Synthetic initial archive quota','QuotaExceededError');return window.firstArchiveSet.call(this,name,value);};},key);
     const png=await page.evaluate(()=>{const c=document.createElement('canvas');c.width=c.height=4;return c.toDataURL('image/png').split(',')[1];});
-    await page.locator('input[type=file]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await page.getByRole('button',{name:'1枚の画像を解析する',exact:true}).click();
+    await workspace.disclosure(page,'画像・現場名');await page.locator('input[type=file]').setInputFiles({name:'fixture.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')});await page.getByRole('button',{name:'1枚の画像を解析する',exact:true}).click();
     await page.waitForFunction(({key,b})=>JSON.parse(localStorage.getItem(key)).resultJobId===b,{key,b});
     await page.evaluate(()=>{Storage.prototype.setItem=window.firstArchiveSet;});assert.equal(submitted,true);checks++;
     assert.equal((await current()).parsed.items[0].order_quantity,12);checks++;

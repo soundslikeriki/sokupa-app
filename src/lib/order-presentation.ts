@@ -10,9 +10,28 @@ export function compactReadingReviews(reviews: MemoReadingReview[]): MemoReading
   return [...grouped.values()];
 }
 
+/** Show concrete reading risks, not generic catalog/calculation advice as repeated warnings. */
+export function concreteReadingReason(reason: string): boolean {
+  if (/^商品情報[：:]/u.test(reason) || reason === "画像：解析結果を原画像で確認してください") return false;
+  return /訂正|取消|取り?消|除外|不鮮明|判読|読み取れ|読めな|解析でき|(?:画像|品番|式)[：:]/u.test(reason);
+}
+
+/** Display deduplication only. The exact affected product set remains explicit; no shared acknowledgement. */
+export function readingEvidenceGroups(rows: { code: string; reviews: MemoReadingReview[] }[]) {
+  const groups = new Map<string, { key: string; review: MemoReadingReview; codes: string[] }>();
+  for (const row of rows) for (const review of normalizeDisplayReviews(row.reviews)) {
+    const key = JSON.stringify(review), current = groups.get(key);
+    if (current) { if (!current.codes.includes(row.code)) current.codes.push(row.code); }
+    else groups.set(key, { key, review, codes: [row.code] });
+  }
+  return [...groups.values()];
+}
+const normalizeDisplayReviews = (reviews: MemoReadingReview[]) => reviews.map(review => ({ ...review, candidate_formulas: [...review.candidate_formulas] }));
+
 export function compactReviewReasons(items: { product_code: string; review_reasons?: string[] }[]) {
   const grouped = new Map<string, Set<string>>();
   for (const item of items) for (const reason of item.review_reasons ?? []) {
+    if (!concreteReadingReason(reason)) continue;
     const codes = grouped.get(reason) ?? new Set<string>(); codes.add(item.product_code); grouped.set(reason, codes);
   }
   return [...grouped].map(([reason, codes]) => ({ reason, codes: [...codes] }));

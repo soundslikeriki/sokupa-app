@@ -1,5 +1,5 @@
 // Isolated actual-component fixture. All fetch responses and data are synthetic.
-import React, { useLayoutEffect, useState } from "react";
+import React, { useCallback, useLayoutEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { OrderList } from "../../src/components/OrderList";
 import { WorkspaceModeMenu, type CalculationMode } from "../../src/components/WorkspaceModeMenu";
@@ -10,9 +10,15 @@ state.calls = [];
 window.fetch = async (input, options) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
   state.calls.push({ url, method: options?.method ?? "GET", body: options?.body });
+  if (url === "/api/memo-corrections") {
+    if (state.holdCorrection) await new Promise<void>(resolve => { state.releaseCorrection = resolve; });
+    if (state.failCorrection) throw new Error("Synthetic correction transport failure");
+    if (state.correctionStatus) return new Response("{}", { status: state.correctionStatus });
+  }
   return new Response(JSON.stringify({ success: true, data: { id: "00000000-0000-4000-8000-00000000000a", total_images: 2 } }), { status: 200, headers: { "Content-Type": "application/json" } });
 };
 function Fixture() {
+  const [job, setJob] = useState("00000000-0000-4000-8000-00000000000a");
   const [mode, setMode] = useState<CalculationMode>("dimensions");
   const [items, setItems] = useState<MemoProductItem[]>([{
     product_code: "SYNA", manufacturer: "Synthetic", measurement_basis: "trim-included", pattern_match: "straight", repeat_cm: 60,
@@ -21,10 +27,12 @@ function Fixture() {
     reading_reviews: [{ reason: "Synthetic correction", candidate_formulas: ["1×2"], source_image_index: 0 }],
   }]);
   useLayoutEffect(() => { state.items = items; }, [items]);
+  useLayoutEffect(() => { state.replaceResult = (nextJob: string, next: MemoProductItem[]) => { setJob(nextJob); setItems(next); }; }, []);
+  const update = useCallback((next: MemoProductItem[]) => { (state.updates ??= []).push(next.map(item => item.product_code)); setItems(next); }, []);
   return <>
     <WorkspaceModeMenu value={mode} count={0} onChange={setMode} />
     <div hidden={mode !== "dimensions"}>
-      <OrderList items={items} sourceJobId={state.basic ? null : "00000000-0000-4000-8000-00000000000a"} readingReviewSourceJobId="00000000-0000-4000-8000-00000000000a" basicView={Boolean(state.basic)} onItemsChange={setItems} />
+      <OrderList key={job} items={items} sourceJobId={state.basic ? null : job} readingReviewSourceJobId={job} basicView={Boolean(state.basic)} onItemsChange={update} />
     </div>
     <p hidden={mode === "dimensions"}>Existing-function mode placeholder in focus-only fixture</p>
   </>;

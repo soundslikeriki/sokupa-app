@@ -1,0 +1,16 @@
+{
+  "line": {
+    "source": "https://www.line.me/static/logo/top/LINE_Brand_icon.zip",
+    "guidelines": "https://www.line.me/ja/logo",
+    "file": "public/line-brand-icon.png",
+    "sha256": "5e93437eb5ec0dcdece92d1562fcd435d1d521cca5c013d2d9e15b544a1d8a39",
+    "unmodified": true,
+    "mobileIconHeightPx": 40,
+    "owner": "LY Corporation"
+  },
+  "sokupa": {
+    "file": "public/sokupa-header-logo.webp",
+    "sourceSha256": "e21a3bbd58223c03b44f4999eee7808791c9acaf1cabd1e9adc49874668f58fe",
+    "method": "User-approved existing symbol and SOKUPA wordmark cropped separately and scaled to equal optical height, white background. No generation."
+  }
+}

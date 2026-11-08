@@ -10,7 +10,8 @@ import { Input } from "@/components/ui/input";
 import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ListPlus, ImageIcon } from "lucide-react";
 import { roundMeters } from "@/lib/memo-calculation";
 import { orderModeForItem, planMemoOrder } from "@/lib/order-planning";
-import { compactReadingReviews, compactReviewReasons, shortOrderStatus } from "@/lib/order-presentation";
+import { compactReadingReviews, compactReviewReasons, concreteReadingReason, shortOrderStatus } from "@/lib/order-presentation";
+import { numericalOrderStatus } from "@/lib/order-quantity-status";
 import { findOriginalMemoEntry } from "@/lib/original-memo-entry";
 import { calculateOrderQuantity, DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
 import {
@@ -71,6 +72,7 @@ type OrderListProps = {
   onEditorBlocked?: (blocked: boolean) => void;
   onResetResult?: (expectedItems: string) => Promise<void>;
   resetDisabledReason?: string;
+  onWorkspaceViewChange?: (view: "quantity" | "edit" | "photo") => void;
 };
 
 type ItemOverride = {
@@ -139,12 +141,10 @@ function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
   };
 }
 
-export function OrderList({ basicView = false, items, sourceItems, sourceJobId, readingReviewSourceJobId, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft, resultTools, onMeaningfulEdit, onEditorBlocked, onResetResult, resetDisabledReason }: OrderListProps) {
+export function OrderList({ basicView = false, items, sourceItems, sourceJobId, readingReviewSourceJobId, notes, siteName = "", onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft, resultTools, onMeaningfulEdit, onEditorBlocked, onResetResult, resetDisabledReason, onWorkspaceViewChange }: OrderListProps) {
   const privatePhotoJobId = sourceJobId ?? readingReviewSourceJobId;
   const [copyReviewOpen, setCopyReviewOpen] = useState(false);
   const [copyReviewSession, setCopyReviewSession] = useState(0);
-  const [quantityReviewError, setQuantityReviewError] = useState("");
-  const quantityReviewIntent = useRef<{ id: string; token: string; batch: string } | null>(null);
   const copyReviewOpenRef = useRef(false);
   const reviewAfterClose = useRef<(() => void) | null>(null);
   const copyPhotoRef = useRef<HTMLDetailsElement>(null);
@@ -165,7 +165,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const photoKey = `${privatePhotoJobId}:${photoIndex}:${photoRequest}:${copyReviewOpen ? "copy" : "photo"}`;
   const boundPhotoCount = photoMetadataJobId === privatePhotoJobId ? photoCount : null;
   useLayoutEffect(() => { currentPhotoRef.current = photoKey; }, [photoKey]);
-  const views = [{ value: "quantity", label: "数量" }, { value: "edit", label: "編集・リピート" }, { value: "photo", label: "元写真" }] as const;
+  useLayoutEffect(() => { if (items.length) onWorkspaceViewChange?.(resultView); }, [resultView, onWorkspaceViewChange, items.length]);
+  const views = [{ value: "quantity", label: "概要" }, { value: "edit", label: "数量" }, { value: "photo", label: "メモ画像" }] as const;
   const selectView = (view: typeof resultView, code = selectedProductCode, record = true) => {
     if (view === resultView && code === selectedProductCode) return;
     if (record && (view !== resultView || code !== selectedProductCode)) {
@@ -223,13 +224,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       const id = window.requestAnimationFrame(() => { frames.delete(id); callback(); });
       frames.add(id);
     };
-    const clear = () => { generation++; blurIntentRef.current = { navigation: false, row: false }; quantityReviewIntent.current = null; };
+    const clear = () => { generation++; blurIntentRef.current = { navigation: false, row: false }; };
     // Record intent before a non-focusing button can blur an input (Safari may
     // supply null or an ancestor as relatedTarget). New interaction resets it.
     const record = (event: Event) => {
       generation++;
       const target = event.target instanceof Element ? event.target : null;
-      quantityReviewIntent.current = null;
+
       blurIntentRef.current = {
         navigation: Boolean(target?.closest("[data-workspace-navigation]")),
         row: Boolean(target?.closest("[data-preserve-editor-input]")),
@@ -381,7 +382,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       i.product_code === fromCode ? { ...i, product_code: toCode, quantity_confirmation: "", reading_review_confirmation: "" } : i,
     );
     setSelectedProductCode(toCode);
-    setNewEntryInputs(previous => { const next = { ...previous, [toCode]: previous[fromCode] }; delete next[fromCode]; newEntryInputsRef.current = next; return next; });
+    setNewEntryInputs(previous => {
+      const next = { ...previous };
+      // A code may be edited before any add-row draft exists. Never create an
+      // undefined draft: reset safety inspects every actual draft's fields.
+      if (previous[fromCode]) next[toCode] = previous[fromCode];
+      delete next[fromCode]; newEntryInputsRef.current = next; return next;
+    });
     onItemsChange(updatedItems);
 
     // DBへ補正ログを保存（失敗してもUIは優先）
@@ -708,7 +715,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         }
         return DEFAULT_LOSS_RATE_PERCENT;
       })();
-      
+
       const r = typeof ovr.repeatCm === "number" ? ovr.repeatCm : ovr.repeatCm === "" ? null : item.repeat_cm ?? null;
       const h = typeof ovr.heightM === "number" ? ovr.heightM : ovr.heightM === "" ? null : item.repeat_height_m ?? null;
       const mode = ovr.orderMode ?? orderModeForItem(item);
@@ -897,9 +904,9 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     window.addEventListener("popstate", restore);
     return () => window.removeEventListener("popstate", restore);
   }, [workspaceId]);
-  const applyReviewConfirmations = (selections: { id: string; token: string }[], batch: string, fromQuantity = false) => {
+  const applyReviewConfirmations = (selections: { id: string; token: string }[], batch: string) => {
     const current = liveCopyReview.current;
-    if ((fromQuantity ? copyReviewOpenRef.current || current.view !== "quantity" : !copyReviewOpenRef.current)
+    if (!copyReviewOpenRef.current
       || batch !== current.batch || !selections.length || new Set(selections.map(row => row.id)).size !== selections.length) return false;
     const changes = selections.map(selection => {
       const row = current.rows.find(row => row.id === selection.id);
@@ -919,18 +926,6 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     return true;
   };
   const applyCopyReview = (selections: { id: string; token: string }[], batch: string) => applyReviewConfirmations(selections, batch);
-  const changeQuantityReview = (id: string, token: string, batch: string, checked: boolean) => {
-    const current = liveCopyReview.current;
-    const row = current.rows.find(row => row.id === id);
-    if (copyReviewOpenRef.current || current.view !== "quantity" || batch !== current.batch || !row || row.token !== token
-      || (checked && !applyReviewConfirmations([{ id, token }], batch, true))) {
-      setQuantityReviewError("内容が変わりました。表示中の候補と数量を確認して、もう一度チェックしてください。"); return;
-    }
-    if (!checked) {
-      setOverrides(previous => ({ ...previous, [row.code]: { ...previous[row.code], quantityConfirmation: "", readingReviewConfirmation: "" } }));
-    }
-    setQuantityReviewError("");
-  };
   const copyOrderText = async (expectedBatch: string) => {
     const current = liveCopyReview.current;
     if (!copyReviewOpenRef.current || expectedBatch !== current.batch || !current.items.length || current.items.some(item => !item.orderReady)
@@ -944,9 +939,9 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       alert("コピーに失敗しました。"); return false;
     }
   };
-  const sourcePhoto = (review = false) => !privatePhotoJobId ? <p role="status">この結果には元写真の参照がありません。お手元の写真と照合してください。</p> : photoCountError ? <div role="alert"><p>元写真の一覧を取得できませんでした。結果と編集は保持しています。</p><Button type="button" variant="outline" onClick={() => { setPhotoCountError(false); setPhotoRequest(value => value + 1); }}>写真一覧を再取得</Button></div> : boundPhotoCount === null ? <p role="status">元写真を確認中…</p> : <>
-    <div className="flex flex-wrap gap-2" role="group" aria-label="元写真を選択">{Array.from({ length: boundPhotoCount }, (_, index) => <Button key={index} type="button" variant={photoIndex === index ? "default" : "outline"} aria-pressed={photoIndex === index} data-workspace-navigation onClick={() => { if (review) { setPhotoError(false); setPhotoIndex(index); } else openPhoto(index); }}>写真 {index + 1}</Button>)}</div>
-    {photoIndex !== null && (photoIndex < 0 || photoIndex >= boundPhotoCount) ? <p role="alert">指定された元写真が見つかりません。上の写真番号から選び直してください。</p> : photoError ? <div role="alert"><p>写真を取得できませんでした。通信とログイン状態を確認してください。</p><Button type="button" variant="outline" onClick={() => { setPhotoError(false); setPhotoRequest(value => value + 1); }}>写真を再取得</Button></div> : <>
+  const sourcePhoto = (review = false) => !privatePhotoJobId ? <p role="status">この結果にはメモ画像の参照がありません。お手元の写真と照合してください。</p> : photoCountError ? <div role="alert"><p>メモ画像の一覧を取得できませんでした。結果と編集は保持しています。</p><Button type="button" variant="outline" onClick={() => { setPhotoCountError(false); setPhotoRequest(value => value + 1); }}>写真一覧を再取得</Button></div> : boundPhotoCount === null ? <p role="status">メモ画像を確認中…</p> : <>
+    <div className="flex flex-wrap gap-2" role="group" aria-label="メモ画像を選択">{Array.from({ length: boundPhotoCount }, (_, index) => <Button key={index} type="button" variant={photoIndex === index ? "default" : "outline"} aria-pressed={photoIndex === index} data-workspace-navigation onClick={() => { if (review) { setPhotoError(false); setPhotoIndex(index); } else openPhoto(index); }}>写真 {index + 1}</Button>)}</div>
+    {photoIndex !== null && (photoIndex < 0 || photoIndex >= boundPhotoCount) ? <p role="alert">指定されたメモ画像が見つかりません。上の写真番号から選び直してください。</p> : photoError ? <div role="alert"><p>写真を取得できませんでした。通信とログイン状態を確認してください。</p><Button type="button" variant="outline" onClick={() => { setPhotoError(false); setPhotoRequest(value => value + 1); }}>写真を再取得</Button></div> : <>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img key={photoKey} className={`${review ? "max-h-[45dvh]" : "max-h-[70dvh]"} w-full rounded-lg object-contain`} alt={`解析元の写真 ${(photoIndex ?? 0) + 1}`} src={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex ?? 0}`} onError={() => { if (currentPhotoRef.current === photoKey) setPhotoError(true); }} />
       <a className="inline-block min-h-11 content-center text-sm underline" href={`/api/analysis-jobs/${encodeURIComponent(privatePhotoJobId)}/images/${photoIndex ?? 0}`} target="_blank" rel="noopener noreferrer">写真を別画面で拡大</a>
@@ -988,11 +983,17 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         <CardContent id={`${navId}-copy-status`} className="px-3 pb-3 pt-0 text-xs text-muted-foreground">{derivedItems.some(item => !item.orderReady) ? "候補・写真・数量をまとめて確認できます。" : "確認済みの数量をコピーできます。"}</CardContent>
       </Card>
 
+      {reviewReasonGroups.length ? <details aria-label="読み取りの注意" className="rounded-lg border px-3 py-2 text-xs">
+        <summary data-workspace-navigation className="min-h-8 cursor-pointer">読み取りの確認 {reviewReasonGroups.length}件</summary>
+        <ul className="mt-2 space-y-2">{reviewReasonGroups.map(({reason,codes}) => <li key={reason}><p className="font-semibold">対象：{codes.join("・")}</p><p>{reason}</p></li>)}</ul>
+        <button type="button" data-workspace-navigation className="min-h-11 underline" onClick={openCopyReview}>候補・写真・数量をまとめて確認</button>
+      </details> : null}
+
       <Card className="border-none bg-white/70 shadow-lg ring-1 ring-inset ring-indigo-500/15 backdrop-blur-xl dark:bg-zinc-900/70">
         <CardHeader className="px-3 pb-2 pt-4 sm:px-6 sm:pt-5">
           <CardTitle className="flex items-center gap-2 text-sm font-bold text-indigo-900 dark:text-indigo-100 sm:text-base">
             <CopyIcon className="h-4 w-4" />
-            発注内容の確認
+            発注量の自動チェック
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-1.5 px-3 pb-4 pt-0 sm:px-6 sm:pb-5">
@@ -1000,6 +1001,14 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
             const code = String(item.product_code ?? "").trim() || "不明";
             const quantity = toFiniteNumber(item.order_quantity);
             const review = copyReviewRows[index];
+            const numeric = numericalOrderStatus({ ordered: quantity, required: item.comparison.strict.totals.selectedM,
+              inputsComplete: !item.incompleteMeasurements && !item.incompleteSettings && item.order_quantity_input === undefined && quantity >= 0,
+              conditionsKnown: item.order_mode === "memo" || item.comparison.premisesAvailable && item.pattern_match !== "other",
+              // Legacy evidence does not record which numerical candidate was adopted.
+              // Do not use a manual confirmation/quantity fingerprint to fabricate certainty.
+              measurementCertain: !item.readingReviews.length && !item.entries.some(entry => entry.needs_review)
+                && !item.review_reasons?.some((reason: string) => reason.startsWith("画像：") && concreteReadingReason(reason)),
+              duplicate: derivedItems.filter(other => other.product_code === code).length > 1 });
             return (
               <div
                 key={review.id}
@@ -1032,22 +1041,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                   </Button>
                 </div>
                 <div className="flex w-full items-center justify-between gap-2">
-                  <p className={`text-xs ${orderCheckColor(item.orderReady, basicView)}`} role="status" aria-label={`${code} の発注量チェック`}>{shortOrderStatus(item)}{item.orderReady || item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined ? "" : "・参考値"}</p>
+                  <p className={`text-xs ${numeric.state === "sufficient" ? "font-semibold text-emerald-700 dark:text-emerald-300" : numeric.state === "shortfall" ? "font-semibold text-rose-700 dark:text-rose-300" : "text-muted-foreground"}`} role="status" aria-label={`${code} の発注量チェック`}>
+                    <span aria-hidden="true">{numeric.state === "sufficient" ? "✅ " : numeric.state === "shortfall" ? "⚠️ " : "－ "}</span>{numeric.text}
+                  </p>
                   <button type="button" className="min-h-11 text-xs underline" aria-label={`${code} を確認・編集`} data-workspace-navigation onClick={() => { setCollapsedCodes(current => { const next = new Set(current); next.delete(code); return next; }); selectView("edit", code); }}>確認・編集</button>
                 </div>
-                <label data-workspace-navigation className="flex min-h-11 w-full items-center gap-2 text-xs"
-                  onPointerDownCapture={() => { quantityReviewIntent.current = { id: review.id, token: review.token, batch: copyBatchToken }; }}
-                  onMouseDownCapture={() => { quantityReviewIntent.current = { id: review.id, token: review.token, batch: copyBatchToken }; }}
-                  onKeyDownCapture={event => { if (event.key === " ") quantityReviewIntent.current = { id: review.id, token: review.token, batch: copyBatchToken }; }}>
-                  <input type="checkbox" className="h-5 w-5 shrink-0" aria-label={`${code} の一覧で${review.reviews.length ? "訂正・取消と発注数量" : "元メモと発注数量"}を確認した`}
-                    checked={review.ready} disabled={!review.confirmable && !review.ready}
-                    onChange={event => { const intent = quantityReviewIntent.current ?? { id: review.id, token: review.token, batch: copyBatchToken }; quantityReviewIntent.current = null;
-                      changeQuantityReview(intent.id, intent.token, intent.batch, event.target.checked); }} />
-                  {review.reviews.length ? "訂正・取消と発注数量を確認した" : "元メモと発注数量を確認した"}
-                </label>
-                {!review.confirmable && !review.ready ? <p className="w-full text-xs text-amber-800 dark:text-amber-200">{review.blockedMessage}</p> : null}
                 <details className="w-full text-xs" aria-label={`${code} の一覧確認詳細`}>
-                  <summary data-workspace-navigation className="min-h-11 cursor-pointer content-center underline">{review.reviews.length ? `訂正候補 ${review.reviews.length}件・元写真` : "元写真"}</summary>
+                  <summary data-workspace-navigation className="min-h-11 cursor-pointer content-center underline">{review.reviews.length ? `訂正候補 ${review.reviews.length}件・メモ画像` : "メモ画像"}</summary>
                   <div className="space-y-2 break-words rounded-lg bg-amber-500/10 p-2">
                     {review.reviews.length ? <p className="font-semibold">対象：{code}（候補は自動加算しません）</p> : null}
                     {review.reviews.map((evidence, evidenceIndex) => <div key={evidenceIndex}>
@@ -1056,8 +1056,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                       <p>{evidence.source_image_index === undefined ? "写真の対応も照合してください" : `写真${evidence.source_image_index + 1}`}</p>
                     </div>)}
                     {privatePhotoJobId && review.imageIndexes.length ? <div className="flex flex-wrap gap-2">{review.imageIndexes.map(imageIndex => <Button key={imageIndex} type="button" variant="outline" data-workspace-navigation className="min-h-11 text-xs" aria-label={`${code} の一覧から写真${imageIndex + 1}を確認`} onClick={() => openPhoto(imageIndex)}>写真{imageIndex + 1}を確認</Button>)}</div>
-                      : privatePhotoJobId ? <Button type="button" variant="outline" data-workspace-navigation className="min-h-11 text-xs" aria-label={`${code} の一覧から元写真を確認`} onClick={() => openPhoto(0)}>元写真を確認</Button>
-                        : <p>お手元の元写真と照合してください。</p>}
+                      : privatePhotoJobId ? <Button type="button" variant="outline" data-workspace-navigation className="min-h-11 text-xs" aria-label={`${code} の一覧からメモ画像を確認`} onClick={() => openPhoto(0)}>メモ画像を確認</Button>
+                        : <p>お手元のメモ画像と照合してください。</p>}
                   </div>
                 </details>
               </div>
@@ -1066,8 +1066,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         </CardContent>
       </Card>
 
-      {quantityReviewError ? <p role="alert" className="px-2 text-xs text-amber-800 dark:text-amber-200">{quantityReviewError}</p> : null}
 
+      <p className="px-2 text-xs text-muted-foreground">必要量と入力値の比較です。予備分込みの推奨量や施工の保証とは異なります。</p>
       <p className="px-2 text-xs text-muted-foreground">合計 {formatSummaryNumber(orderSummary.totalOrderQuantity, 0)}m ／ {formatSummaryNumber(orderSummary.totalSquareMeters)}㎡{derivedItems.some(item => !item.orderReady) ? "（確認前の参考値を含む）" : ""}</p>
       {onAddAllToOrderDraft && derivedItems.length > 1 ? (
         <div className="flex justify-end">
@@ -1089,7 +1089,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
       </section>
       <section id={`${navId}-photo`} data-result-panel="photo" role="tabpanel" aria-labelledby={`${navId}-photo-tab`} tabIndex={-1} hidden={resultView !== "photo"} className="scroll-mt-4 space-y-3 outline-none print:hidden">
-        <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">元写真</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("edit", activeProductCode)}>編集に戻る</Button></div>
+        <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">メモ画像</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("edit", activeProductCode)}>数量に戻る</Button></div>
         {!copyReviewOpen ? sourcePhoto() : null}
         {resultTools}
         {onResetResult ? <div className="space-y-2 rounded-xl border p-3 text-sm">
@@ -1099,14 +1099,14 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         </div> : null}
       </section>
       <section id={`${navId}-edit`} data-result-panel="edit" role="tabpanel" aria-labelledby={`${navId}-edit-tab`} tabIndex={-1} hidden={resultView !== "edit"} className="scroll-mt-4 space-y-3 outline-none print:block">
-        <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">編集・リピート</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("quantity")}>数量に戻る</Button></div>
+        <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">数量</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("quantity")}>概要に戻る</Button></div>
         <label className="block text-sm font-semibold">編集する品番<select aria-label="編集する品番" data-workspace-navigation className="mt-1 min-h-11 w-full rounded-lg border bg-background px-3" value={activeProductCode} onChange={event => setSelectedProductCode(event.target.value)}>{groups.map(group => <optgroup key={group.label} label={group.label}>{group.rows.map(product => <option key={product.product_code} value={product.product_code}>{product.product_code}</option>)}</optgroup>)}</select></label>
       <details className="rounded-xl border bg-background p-3 text-sm" aria-label="読み取り・計算の説明">
-        <summary data-workspace-navigation className="min-h-6 cursor-pointer font-medium">説明・注意を表示{needs_review_any || reviewReasonGroups.length ? "（読み取り確認あり）" : ""}</summary>
+        <summary data-workspace-navigation className="min-h-6 cursor-pointer font-medium">読み取りの説明{reviewReasonGroups.length ? "（確認あり）" : ""}</summary>
         <div className="mt-3 space-y-2 text-xs text-muted-foreground">
           <p>自動計算は予備分を加えて1m単位に切り上げます。調整済み・手動指定の発注量には再上乗せしません。</p>
           {reviewReasonGroups.length ? <ul className="space-y-2 break-words text-amber-800 dark:text-amber-200">{reviewReasonGroups.map(({reason,codes}) => <li key={reason}><span className="font-semibold">{codes.join("・")}</span> — {reason}</li>)}</ul> : null}
-          {notes && !reviewReasonGroups.some(row => row.reason.includes(notes.trim())) ? <p>メモ備考：{notes}</p> : null}
+          {notes && concreteReadingReason(notes) && !reviewReasonGroups.some(row => row.reason.includes(notes.trim())) ? <p>メモ備考：{notes}</p> : null}
         </div>
       </details>
 
@@ -1166,7 +1166,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           <span aria-hidden>／</span>
                           <span>{product.orderReady ? "発注" : "参考"} <strong className="text-lg text-indigo-600 dark:text-indigo-400">{product.order_quantity}m</strong></span>
                         </div>
-                        {product.readingReviews.length && !product.readingReviewConfirmed ? <p className="mt-2 text-xs font-semibold text-amber-800 dark:text-amber-300">訂正・取消の確認が必要です。詳細を開いて原画像と照合してください。</p> : null}
+                        {product.readingReviews.length && !product.readingReviewConfirmed ? <p className="mt-2 text-xs font-semibold text-amber-800 dark:text-amber-300">訂正・取消 要確認</p> : null}
                       </div>
                       {onAddToOrderDraft ? (
                         <Button
@@ -1250,14 +1250,14 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           <Globe className="w-3.5 h-3.5" />
                           <span className="text-xs">ネット引用</span>
                         </Badge>
-                      ) : product.needs_review ? (
+                      ) : product.readingReviews.length && !product.readingReviewConfirmed || product.review_reasons?.some((reason: string) => concreteReadingReason(reason) && !reason.startsWith("画像：")) ? (
                         <Badge variant="outline" className="text-amber-600 border-amber-600/30 bg-amber-500/10 gap-1 px-2 py-0.5 ml-1">
                           <AlertTriangle className="w-3.5 h-3.5" />
                           <span className="text-xs">要確認</span>
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className={`gap-1 px-2 py-0.5 ml-1 ${!basicView && product.orderReady ? "text-emerald-600 border-emerald-600/30 bg-emerald-500/10" : "text-amber-600 border-amber-600/30 bg-amber-500/10"}`}>
-                          {!basicView && product.orderReady ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                        <Badge variant="outline" className={`gap-1 px-2 py-0.5 ml-1 ${!basicView && product.orderReady ? "text-emerald-600 border-emerald-600/30 bg-emerald-500/10" : "text-muted-foreground border-border"}`}>
+                          {!basicView && product.orderReady ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Layers className="w-3.5 h-3.5" />}
                           <span className="text-xs">{basicView ? "数量を確認" : product.orderReady ? "発注内容確認済" : "数量を確認"}</span>
                         </Badge>
                       )}
@@ -1368,8 +1368,10 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         </span>
                       </div>
                     </div>
-                  {product.readingReviews.length ? <section aria-label={`${product.product_code} の訂正・取消の確認`} className="mb-3 w-full space-y-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-950 dark:text-amber-100">
-                    <p className="flex items-center gap-2 font-bold"><AlertTriangle className="h-4 w-4 shrink-0" />訂正・取消を確認</p>
+                  {product.readingReviews.length ? <div className="mb-3 w-full text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2"><span>{product.readingReviewConfirmed ? "訂正・取消 照合済み" : "訂正・取消 要確認"}</span><Button type="button" variant="outline" className="min-h-11 text-xs" data-workspace-navigation aria-label={`${product.product_code} の確認画面を開く`} onClick={openCopyReview}>確認してコピー</Button></div>
+                    <details aria-label={`${product.product_code} の個別照合詳細`}><summary data-workspace-navigation className="min-h-8 cursor-pointer">この品番の照合詳細</summary><section aria-label={`${product.product_code} の訂正・取消の確認`} className="mt-2 w-full space-y-2 text-xs">
+
                     <details aria-label={`${product.product_code} の読み取り詳細`}>
                       <summary data-workspace-navigation className="min-h-8 cursor-pointer text-xs font-medium">読み取りの詳細を表示</summary>
                       <div className="mt-2 space-y-2 break-words text-xs">{compactReadingReviews(product.readingReviews).map((review, index) => <div key={index}>
@@ -1378,13 +1380,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                       </div>)}</div>
                       <p className="mt-2 text-xs">候補は自動加算していません。有効な値は明細に反映してください。</p>
                     </details>
-                    {privatePhotoJobId && readingReviewImageIndexes(product).length ? <div className="flex flex-wrap gap-2">{readingReviewImageIndexes(product).map(index => <Button key={index} type="button" variant="outline" className="min-h-11 bg-background" aria-label={`${product.product_code} の訂正候補の写真 ${index + 1}を確認`} data-workspace-navigation onClick={() => openPhoto(index)}>原画像 {index + 1}を確認</Button>)}</div> : <p className="text-xs">お手元の元写真と照合してください。</p>}
+                    {privatePhotoJobId && readingReviewImageIndexes(product).length ? <div className="flex flex-wrap gap-2">{readingReviewImageIndexes(product).map(index => <Button key={index} type="button" variant="outline" className="min-h-11 bg-background" aria-label={`${product.product_code} の訂正候補の写真 ${index + 1}を確認`} data-workspace-navigation onClick={() => openPhoto(index)}>原画像 {index + 1}を確認</Button>)}</div> : <p className="text-xs">お手元のメモ画像と照合してください。</p>}
                     <label className="flex min-h-11 items-center gap-2 text-xs">
                       <input type="checkbox" aria-label={`${product.product_code} の訂正・取消を確認済みにする`} checked={product.readingReviewConfirmed} disabled={!product.canConfirmReadingReview} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], readingReviewConfirmation: event.target.checked ? product.readingReviewFingerprint : "", quantityConfirmation: "" } }))} />
                       原画像と訂正・取消を照合した（変更時は再確認）
                     </label>
                     <p role="status" className="text-xs">{product.readingReviewConfirmed ? "照合確認済み" : "確認するまでコピー・追加できません。"}</p>
-                  </section> : null}
+                  </section></details></div> : null}
 
                   <fieldset className="mb-3 w-full space-y-2 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-800 dark:bg-indigo-950/30">
                     <legend className="px-1 text-sm font-bold">数量・リピート</legend>
@@ -1408,6 +1410,19 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         />
                       </div>
                     </div>
+                      <div className="flex-1">
+                        <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">共通高さ (m・任意・個別指定を除く)</label>
+                        <Input
+                          type="number" min="0"
+                          step="0.1"
+                          placeholder="例: 2.4"
+                          className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
+                          aria-label={`${product.product_code} の壁の高さ (m)`}
+                          value={overrides[product.product_code]?.heightM ?? product.repeat_height_input ?? product.repeat_height_m ?? ""}
+                          onChange={(e) => handleOverrideChange(product.product_code, "heightM", e.target.value)}
+                        />
+                      </div>
+                    <p className="text-xs text-muted-foreground">未入力なら各行の寸法を使用します。個別に編集した行は、その寸法を優先します。</p>
                     <p className="text-xs font-medium" aria-label={`${product.product_code} の高さの適用状態`}>{heightStatus}</p>
                     {product.order_mode === "pattern" ? <button type="button" data-workspace-navigation className="min-h-11 text-left text-xs underline" aria-controls={repeatDetailsId} aria-label={`${product.product_code} のリピート条件を確認`} onClick={() => {
                       const details = document.getElementById(repeatDetailsId);
@@ -1478,19 +1493,6 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                   {product.order_mode === "pattern" ? <details id={repeatDetailsId} aria-label={`${product.product_code} のリピート詳細設定`} className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/30 p-3 dark:border-indigo-900/30 dark:bg-indigo-900/10">
                     <summary data-workspace-navigation className="min-h-11 cursor-pointer text-sm font-semibold" aria-label={`${product.product_code} の詳細設定・確認`}>詳細設定・確認</summary>
                     <div className="mt-3 space-y-3">
-                      <div className="flex-1">
-                        <label className="text-[10px] font-bold opacity-60 mb-1.5 block ml-1 text-indigo-900 dark:text-indigo-100">共通高さ (m・任意・個別指定を除く)</label>
-                        <Input
-                          type="number" min="0"
-                          step="0.1"
-                          placeholder="例: 2.4"
-                          className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
-                          aria-label={`${product.product_code} の壁の高さ (m)`}
-                          value={overrides[product.product_code]?.heightM ?? product.repeat_height_input ?? product.repeat_height_m ?? ""}
-                          onChange={(e) => handleOverrideChange(product.product_code, "heightM", e.target.value)}
-                        />
-                      </div>
-                    <p className="text-xs text-muted-foreground">未入力なら各行の寸法を使用します。個別に編集した行は、その寸法を優先します。</p>
                     <div className="mb-3 grid gap-3 sm:grid-cols-2">
                       <label className="text-xs">寸法の前提
                         <select aria-label={`${product.product_code} の寸法区分`} className="mt-1 block w-full rounded border bg-background p-2" value={product.measurement_basis} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: "", readingReviewConfirmation: "", measurementBasis: event.target.value as MemoProductItem["measurement_basis"] } }))}>
@@ -1555,7 +1557,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                          const rawLen = overrides[product.product_code]?.entryLengths?.[eidx];
                          const qValue = rawQty !== undefined ? rawQty : e.quantity_input ?? e.quantity;
                          const lValue = rawLen !== undefined ? rawLen : e.length_input ?? e.length_m;
-                         
+
                          return (
                            <div
                              key={eidx}
@@ -1578,7 +1580,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                     </span>
                                   </button>}
 
-                                  <div 
+                                  <div
                                     className="flex w-full min-w-0"
                                     onBlur={(ev) => {
                                       if (!ev.currentTarget.contains(ev.relatedTarget) && !navigationBlur(ev.relatedTarget) && !blurIntentRef.current.row && !(ev.relatedTarget instanceof Element && ev.relatedTarget.closest("[data-preserve-editor-input]"))) {
@@ -1592,10 +1594,10 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                   >
                                     {e.isEditing ? (
                                       <div className="flex flex-wrap items-center gap-1 sm:gap-1.5">
-                                        <Input 
+                                        <Input
                                           autoFocus
                                           type="number" min="0"
-                                          step="0.1" 
+                                          step="0.1"
                                           className="h-8 w-[4.25rem] border-indigo-300 px-1 text-center text-xs font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[5.5rem] sm:text-sm"
                                           aria-label={`${product.product_code} ${eidx + 1}行目の長さ (m)`}
                                           value={lValue}
@@ -1603,7 +1605,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                         />
                                         <span className="shrink-0 text-[11px] sm:text-sm">m</span>
                                         <span className="mx-0.5 shrink-0 text-[11px] text-muted-foreground sm:text-sm">×</span>
-                                        <Input 
+                                        <Input
                                           type="number" min="0"
                                           className="h-8 w-[3.25rem] border-indigo-300 px-1 text-center text-xs font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[4rem] sm:text-sm"
                                           aria-label={`${product.product_code} ${eidx + 1}行目の幅数`}
@@ -1620,7 +1622,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                         </button>
                                       </div>
                                     ) : (
-                                      <button 
+                                      <button
                                         type="button"
                                         onClick={() => handleToggleEntryEdit(product.product_code, eidx)}
                                         className="group/formula flex min-w-0 flex-1 items-center gap-0.5 rounded-md px-0.5 py-0.5 text-left transition-colors hover:bg-black/5 dark:hover:bg-white/5 sm:max-w-[12rem] sm:gap-1.5 sm:px-1 sm:py-1"
@@ -1638,7 +1640,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                     )}
                                   </div>
                                 </div>
-                                
+
                                 <div className="flex shrink-0 items-center justify-end pl-1 sm:pl-2">
                                   <span className="w-[3.25rem] shrink-0 text-right text-xs font-bold tabular-nums leading-none text-indigo-600 dark:text-indigo-400 sm:w-16 sm:text-base">
                                     {e.length_input !== undefined || e.quantity_input !== undefined ? "入力確認" : `${e.derived_subtotal}m`}
@@ -1725,14 +1727,14 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
           setCollapsedCodes(current => { const next = new Set(current); next.delete(row.code); return next; }); selectView("edit", row.code);
         }); }}
         onPhoto={index => { setPhotoError(false); setPhotoIndex(index); if (copyPhotoRef.current) { copyPhotoRef.current.open = true; copyPhotoRef.current.scrollIntoView({ block: "start" }); } }}
-        photo={copyReviewOpen ? <details ref={copyPhotoRef} open className="space-y-2 rounded-xl border p-3"><summary className="min-h-11 cursor-pointer font-semibold">元写真（この結果）</summary>{sourcePhoto(true)}</details> : null} />
+        photo={copyReviewOpen ? <details ref={copyPhotoRef} open className="space-y-2 rounded-xl border p-3"><summary className="min-h-11 cursor-pointer font-semibold">メモ画像（この結果）</summary>{sourcePhoto(true)}</details> : null} />
       <div role="tablist" data-workspace-navigation aria-label="解析結果の表示" hidden={keyboardOpen} className="fixed inset-x-0 bottom-0 z-30 mx-auto grid max-w-5xl grid-cols-3 gap-1 border-t bg-background px-2 pt-2 shadow-lg print:hidden" style={{ display: keyboardOpen ? "none" : undefined, paddingBottom: "calc(.5rem + env(safe-area-inset-bottom))" }} onKeyDown={event => {
         const index = views.findIndex(view => view.value === resultView);
         const next = event.key === "ArrowRight" ? (index + 1) % views.length : event.key === "ArrowLeft" ? (index + views.length - 1) % views.length : event.key === "Home" ? 0 : event.key === "End" ? views.length - 1 : -1;
         if (next < 0) return; event.preventDefault(); selectView(views[next].value); window.requestAnimationFrame(() => document.getElementById(`${navId}-${views[next].value}-tab`)?.focus());
       }}>
         {views.map(({ value, label }) => <button key={value} id={`${navId}-${value}-tab`} role="tab" type="button" aria-selected={resultView === value} aria-controls={`${navId}-${value}`} tabIndex={resultView === value ? 0 : -1} className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-lg px-1 text-xs font-bold focus-visible:ring-2 focus-visible:ring-indigo-500 ${resultView === value ? "bg-indigo-950 text-white" : "text-muted-foreground"}`} onClick={() => selectView(value)}>
-          {value === "quantity" ? <Layers className="h-5 w-5" /> : value === "edit" ? <Edit3 className="h-5 w-5" /> : <ImageIcon className="h-5 w-5" />}{label}
+          {value === "quantity" ? <Layers aria-hidden="true" focusable="false" className="h-5 w-5" /> : value === "edit" ? <Edit3 aria-hidden="true" focusable="false" className="h-5 w-5" /> : <ImageIcon aria-hidden="true" focusable="false" className="h-5 w-5" />}{label}
         </button>)}
       </div>
     </div>
