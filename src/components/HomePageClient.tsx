@@ -24,7 +24,7 @@ import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, 
 import { activateResultSession, allowResultJob, commitResultTransition, hasUnfinishedResultInput, isObservationOnlyChange, resetResultDraft, resultRestoreConflict, restoreResultDraft, resultAgePolicy, resultMayApply, resumeResultDraft, stampResultSession } from "@/lib/result-session";
 import { workspaceFingerprint, readReplacementConsent, writeReplacementConsent, forgetReplacementConsent, type ReplacementConsent } from "@/lib/replacement-consent";
 import { withWorkspaceLock, saveLatestWorkspaceSnapshot, restoreLatestWorkspaceSnapshot, rebuildLatestWorkspaceSnapshot } from "@/lib/latest-workspace";
-import { notificationRetryable, analysisBlocksIntake, mergeNotificationWatch, forgetJobPointerIfMatches, needsAnalysisRestoration, type NotificationWatch } from "@/lib/notification-watch";
+import { notificationWatchesForDisplay, notificationRetryable, analysisBlocksIntake, mergeNotificationWatch, forgetJobPointerIfMatches, needsAnalysisRestoration, type NotificationWatch } from "@/lib/notification-watch";
 import { compressImageForUpload, convertAndResizeForPreview } from "@/lib/resizeImage";
 
 type ProcessedImage = {
@@ -936,6 +936,9 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     })();
   }, [draftReady, recoverySettled, resultEntry, isAnalyzing, jobAccepted, saveState, pendingOrderDraftDuplicate, pendingOrderDraftQueue.length]);
 
+  const visibleNotificationWatches = notificationWatchesForDisplay(notificationWatches,
+    [parsed ? resultJobId : null, jobAccepted?.jobId, resultSession?.inactive ? resultSession.allowedJobId : null]);
+
   const resultTools = <div className="space-y-3 rounded-xl border bg-background p-3 text-sm" aria-label="前回の結果とリセット">
     {parsed ? <p className="text-xs">この結果の現場名：{resultSiteName || "未入力"}</p> : null}
     {resultSession?.undo ? <>
@@ -1104,12 +1107,12 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       </details>
       </section>
 
-      {notificationWatches.length ? (
+      {visibleNotificationWatches.length ? (
         <Card>
           <CardHeader className="space-y-3">
             <CardTitle className="text-base">{qaSynthetic ? "合成通知（LINE送信なし）" : "LINE通知"}</CardTitle>
-            {notificationWatches.some((watch) => notificationRetryable(watch.status)) ? <CardDescription>LINE通知を再確認しています。解析結果は利用でき、新しい解析も開始できます。</CardDescription> : null}
-            {notificationWatches.map((watch) => (
+            {visibleNotificationWatches.some((watch) => notificationRetryable(watch.status)) ? <CardDescription>LINE通知を再確認しています。解析結果は利用でき、新しい解析も開始できます。</CardDescription> : null}
+            {visibleNotificationWatches.map((watch) => (
               <div key={watch.jobId} className="rounded border p-3 text-sm" aria-label={`${watch.siteName || "現場名なし"}の通知状態`}>
                 <p className="font-medium">{watch.siteName || "現場名なし"}: {notificationRetryable(watch.status) ? "通知を再確認中" : watch.status === "accepted" ? "LINE受付済み" : "通知状況は要確認"}</p>
                 {watch.error ? <p className="mt-1 text-muted-foreground">{watch.error}</p> : null}

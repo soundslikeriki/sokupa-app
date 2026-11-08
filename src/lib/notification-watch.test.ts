@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { notificationRetryable, analysisBlocksIntake, mergeNotificationWatch, forgetJobPointerIfMatches, needsAnalysisRestoration, type NotificationWatch } from "./notification-watch";
+import { notificationWatchesForDisplay, notificationRetryable, analysisBlocksIntake, mergeNotificationWatch, forgetJobPointerIfMatches, needsAnalysisRestoration, type NotificationWatch } from "./notification-watch";
 
 test("old notification updates cannot erase another job or downgrade a terminal outcome", () => {
   const a = { jobId: "a", siteName: "A", status: "failed", error: "outage" }, b = { jobId: "b", siteName: "B", status: "pending" };
@@ -39,4 +39,20 @@ test("only unfinished analysis blocks intake, regardless of notification waiting
   assert.equal(analysisBlocksIntake(null), false);
   for (const status of ["queued", "running", undefined, "unknown"]) assert.equal(analysisBlocksIntake({ status }), true);
   for (const status of ["done", "failed"]) assert.equal(analysisBlocksIntake({ status }), false);
+});
+
+
+test("notification display uses associated job IDs without changing hidden terminal/retry records", () => {
+  const watches:NotificationWatch[] = [
+    {jobId:"old-a",siteName:"Old A",status:"uncertain"},
+    {jobId:"old-b",siteName:"Old B",status:"failed",error:"offline"},
+    {jobId:"new",siteName:"New C",status:"pending"},
+  ];
+  const before=JSON.stringify(watches);
+  assert.deepEqual(notificationWatchesForDisplay(watches,[]),[]);
+  assert.deepEqual(notificationWatchesForDisplay(watches,[null,undefined,"new"]).map(w=>w.jobId),["new"]);
+  assert.deepEqual(notificationWatchesForDisplay(watches,["old-a"]).map(w=>w.jobId),["old-a"]);
+  assert.deepEqual(notificationWatchesForDisplay(watches,["old-a","new","new"]).map(w=>w.jobId),["old-a","new"]);
+  assert.equal(JSON.stringify(watches),before);
+  assert.equal(notificationRetryable(watches[1].status),true);
 });

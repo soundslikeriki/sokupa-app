@@ -1,5 +1,11 @@
 export type NotificationWatch = { jobId: string; siteName: string | null; status: string; error?: string | null };
 
+/** Display only associated jobs; never discard the separate polling/retry state. */
+export function notificationWatchesForDisplay(watches: NotificationWatch[],
+  currentJobIds: readonly (string | null | undefined)[]): NotificationWatch[] {
+  return watches.filter(watch => currentJobIds.includes(watch.jobId));
+}
+
 export function notificationRetryable(status: string): boolean {
   return status === "pending" || status === "failed";
 }
