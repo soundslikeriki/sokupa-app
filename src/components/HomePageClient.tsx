@@ -911,12 +911,12 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   return (
     <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 px-2 py-4 sm:gap-4 sm:px-4 sm:py-6 md:px-6 lg:px-8" onPointerDownCapture={() => { resultWorkedRef.current = true; }} onKeyDownCapture={() => { resultWorkedRef.current = true; }}>
       {basicView ? <p role="status" className="rounded-xl border border-amber-500/40 p-3 text-sm">基本表示中です。解析・編集・保存・発注の基本機能を使えます。数量は元メモと照合してください。</p> : null}
-      <header className="flex items-center justify-between gap-3">
+      <header className="flex items-center justify-between gap-3 pb-1">
         <div className="min-w-0">{/* eslint-disable-next-line @next/next/no-img-element */}
-        <h1 className="w-[148px] max-w-[46vw] rounded-md bg-white px-1 py-2"><img src="/sokupa-header-logo.webp" alt="ソクパ SOKUPA" width={578} height={80} className="block h-auto w-full" /></h1>
+        <h1 className="w-[136px] max-w-[46vw] rounded-md bg-white px-1 py-2"><img src="/sokupa-header-logo-compact.webp" alt="ソクパ SOKUPA" width={465} height={80} className="block h-auto w-full" /></h1>
           {parsed && resultSiteName ? <p className="truncate text-xs text-muted-foreground">{resultSiteName}</p> : null}
         </div>
-        <div className="flex shrink-0 items-center gap-2">{!qaSynthetic ? <LineNotificationEntry /> : null}
+        <div className="flex shrink-0 items-center gap-4">{!qaSynthetic ? <LineNotificationEntry /> : null}
         <WorkspaceModeMenu help={<p>メモ画像の寸法を読み取り、必要量に予備分{DEFAULT_LOSS_RATE_PERCENT}%を加えて発注数量を計算します。予備分は変更できます。</p>} value={calculationMode} count={orderDraftItems.length} onChange={mode => {
           if (mode === "area") setAreaCalculatorMounted(true);
           setCalculationMode(mode);

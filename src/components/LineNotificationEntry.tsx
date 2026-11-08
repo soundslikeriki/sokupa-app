@@ -16,7 +16,7 @@ export function LineNotificationEntry() {
     if (event.key === "Escape") { event.preventDefault(); setOpen(false); trigger.current?.focus(); }
   }}>
     <button ref={trigger} type="button" aria-label="LINE通知・友だち追加" aria-expanded={open} aria-controls={id}
-      className="flex h-16 w-16 items-center justify-center rounded-lg bg-white focus-visible:ring-2 focus-visible:ring-indigo-500" onClick={() => setOpen(value => !value)}>
+      className="flex h-14 w-14 items-center justify-center rounded-lg bg-white focus-visible:ring-2 focus-visible:ring-indigo-500" onClick={() => setOpen(value => !value)}>
       {/* Official unmodified brand PNG; 40px minimum size and surrounding clear space. */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src="/line-brand-icon.png" alt="" aria-hidden="true" width={40} height={40} className="h-10 w-10" />
