@@ -16,6 +16,7 @@ const until=async fn=>{for(let n=0;n<200;n++){if(await fn())return;await new Pro
  const fixture=async(base,width,parsed)=>{
   const owner=`synthetic-compact-${width}`,key=`sokupa:workspace:v1:${owner}`;
   const context=await browser.newContext({viewport:{width,height:844}});
+ await workspace.freshResultFixtures(context);
   await context.addInitScript(({key,parsed})=>{if(!localStorage.getItem(key))localStorage.setItem(key,JSON.stringify({version:1,siteName:'Synthetic',parsed,originalParsed:parsed,orderDraftItems:[]}));window.copied=[];Object.defineProperty(navigator,'clipboard',{value:{writeText:async t=>window.copied.push(t)}});},{key,parsed});
   await context.route('**/*',async route=>{
    const u=new URL(route.request().url());

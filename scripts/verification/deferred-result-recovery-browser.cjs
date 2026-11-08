@@ -14,6 +14,7 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
   async function fixture(options = {}) {
     const state = { remoteSeen: false, accepted: false, detailReady: true, initialPointer: true, createStatus: 503, created: false, doneC: false, seenA: 0, seenC: 0, readsA: 0, creates: 0, historyReads: 0, historyFailed: false, ...options };
     const context = await browser.newContext({ viewport: { width: 375, height: 900 }, acceptDownloads: true }), page = await context.newPage();
+ await workspace.freshResultFixtures(context);
     page.on('pageerror', e => { throw e; });
     await context.addInitScript(({ key, pointer, a, saved, initialPointer }) => {
       if (!sessionStorage.getItem('seeded')) { localStorage.setItem(key, JSON.stringify(saved)); if (initialPointer) localStorage.setItem(pointer, a); sessionStorage.setItem('seeded', 'yes'); }

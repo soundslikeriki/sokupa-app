@@ -7,6 +7,7 @@ import { WorkspaceModeMenu, type CalculationMode } from "@/components/WorkspaceM
 import { AreaCalculator } from "@/components/AreaCalculator";
 import { OrderDraftList, type PendingOrderDraftDuplicate } from "@/components/OrderDraftList";
 import { OrderList } from "@/components/OrderList";
+import { EmptyResultWorkspace } from "@/components/EmptyResultWorkspace";
 import { Button } from "@/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -18,7 +19,8 @@ import {
   removeOrderDraftItem,
   updateOrderDraftItem,
 } from "@/lib/order-draft";
-import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, listWorkspaceArchives, switchWorkspaceDraft, replaceWorkspaceDraft, retainDeferredJobResult, type WorkspaceArchive, type WorkspaceDraft } from "@/lib/workspace-draft";
+import { readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, listWorkspaceArchives, switchWorkspaceDraft, replaceWorkspaceDraft, retainDeferredJobResult, type ResultSession, type WorkspaceArchive, type WorkspaceDraft } from "@/lib/workspace-draft";
+import { activateResultSession, allowResultJob, commitResultTransition, hasUnfinishedResultInput, isObservationOnlyChange, resetResultDraft, restoreResultDraft, resultAgePolicy, resultMayApply, resumeResultDraft, stampResultSession } from "@/lib/result-session";
 import { workspaceFingerprint, readReplacementConsent, writeReplacementConsent, forgetReplacementConsent, type ReplacementConsent } from "@/lib/replacement-consent";
 import { withWorkspaceLock, saveLatestWorkspaceSnapshot, restoreLatestWorkspaceSnapshot, rebuildLatestWorkspaceSnapshot } from "@/lib/latest-workspace";
 import { notificationRetryable, analysisBlocksIntake, mergeNotificationWatch, forgetJobPointerIfMatches, needsAnalysisRestoration, type NotificationWatch } from "@/lib/notification-watch";
@@ -151,6 +153,24 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const uploadInputId = useId();
   const siteNameId = useId();
   const [siteName, setSiteName] = useState("");
+  const [resultSiteName, setResultSiteName] = useState("");
+  const [resultSession, setResultSession] = useState<ResultSession>();
+  const [resultBootPending, setResultBootPending] = useState(true);
+  const [resultActionBusy, setResultActionBusy] = useState(false);
+  const resultActionRef = useRef(false);
+  const editorBlockedRef = useRef(false);
+  const externalWorkspaceRef = useRef(false);
+  const meaningfulEditRef = useRef(0), meaningfulSavedRef = useRef(0);
+  const noteResultEdit = useCallback(() => { meaningfulEditRef.current++; }, []);
+  const reportEditorBlocked = useCallback((blocked: boolean) => { editorBlockedRef.current = blocked; }, []);
+  const [recoverySettled, setRecoverySettled] = useState(false);
+  const recoveryActiveRef = useRef(false), recoveryFailedRef = useRef(false);
+  const [recoveryFlags, setRecoveryFlags] = useState({ active: false, failed: false });
+  const resultWorkedRef = useRef(false);
+  const [resultEntry, setResultEntry] = useState(0);
+  const evaluatedEntryRef = useRef(-1);
+  const mountedResultRef = useRef(true);
+  useEffect(() => { mountedResultRef.current = true; return () => { mountedResultRef.current = false; }; }, []);
   const [qaSynthetic, setQaSynthetic] = useState(false);
   const [lineUserId, setLineUserId] = useState<string | null>(null);
   const [images, setImages] = useState<ProcessedImage[]>([]);
@@ -336,11 +356,15 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           restoredDraftRef.current = draft;
           appliedJobRef.current = draft.parsed ? draft.resultJobId ?? null : null;
           setResultJobId(appliedJobRef.current);
+          setResultSiteName(draft.resultSiteName ?? draft.siteName);
+          setResultSession(draft.resultSession);
           setSiteName(typeof draft.siteName === "string" ? draft.siteName : "");
           setMemoInputOpen(false); setParsed(draft.parsed);
           setOriginalParsed(draft.originalParsed ?? draft.parsed);
           setOrderDraftItems(draft.orderDraftItems);
+          if (!draft.parsed || ["show", "inactive"].includes(resultAgePolicy(draft.resultSession, Date.now()))) setResultBootPending(false);
         }
+        if (!saved && !latest) setResultBootPending(false);
         setDraftReady(true);
       } catch (error) { if (!cancelled) setError(getErrorDetail(error)); }
     })();
@@ -348,29 +372,34 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   }, []);
 
   useEffect(() => {
-    if (draftReady) currentWorkspaceRef.current = { version: 1, siteName, parsed, originalParsed, orderDraftItems, resultJobId };
-  }, [draftReady, siteName, parsed, originalParsed, orderDraftItems, resultJobId]);
+    if (draftReady) currentWorkspaceRef.current = { version: 1, siteName, parsed, originalParsed, orderDraftItems, resultJobId, resultSiteName, resultSession };
+  }, [draftReady, siteName, parsed, originalParsed, orderDraftItems, resultJobId, resultSiteName, resultSession]);
 
   useEffect(() => {
-    if (!draftReady || !lineUserId) return;
+    if (!draftReady || !lineUserId || resultBootPending) return;
     const key = `sokupa:workspace:v1:${lineUserId}`;
-    const draft: WorkspaceDraft = { version: 1, siteName, parsed, originalParsed, orderDraftItems, resultJobId };
+    const draft: WorkspaceDraft = { version: 1, siteName, parsed, originalParsed, orderDraftItems, resultJobId, resultSiteName, resultSession };
     const serialized = JSON.stringify(draft);
+    const editVersion = meaningfulEditRef.current;
+    queueMicrotask(() => { if (JSON.stringify(currentWorkspaceRef.current) === serialized) setSaveState("saving"); });
     void withWorkspaceLock(key, async () => {
       // A queued old render must not save after a newer edit or an explicit result selection.
       if (JSON.stringify(currentWorkspaceRef.current) !== serialized) return;
-      setSaveState("saving");
       if (localStorage.getItem(key) !== persistedWorkspaceRef.current) throw new Error("Workspace changed in another tab");
-      readWorkspaceDraft(serialized);
-      localStorage.setItem(key, serialized);
-      if (localStorage.getItem(key) !== serialized) throw new Error("Draft persistence failed");
-      persistedWorkspaceRef.current = serialized;
-      await saveLatestWorkspaceSnapshot(localStorage, lineUserId, draft);
+      const next = await stampResultSession(draft, Date.now(), editVersion > meaningfulSavedRef.current);
+      if (JSON.stringify(currentWorkspaceRef.current) !== serialized) return;
+      const nextRaw = JSON.stringify(next); readWorkspaceDraft(nextRaw);
+      localStorage.setItem(key, nextRaw);
+      if (localStorage.getItem(key) !== nextRaw) throw new Error("Draft persistence failed");
+      persistedWorkspaceRef.current = nextRaw; currentWorkspaceRef.current = next;
+      if (JSON.stringify(next.resultSession) !== JSON.stringify(resultSession)) setResultSession(next.resultSession);
+      await saveLatestWorkspaceSnapshot(localStorage, lineUserId, next);
+      meaningfulSavedRef.current = editVersion;
       if (parsed && resultJobId) forgetReplacementConsent(localStorage, lineUserId, resultJobId);
-      if (JSON.stringify(currentWorkspaceRef.current) === serialized) setSaveState("saved");
+      if (JSON.stringify(currentWorkspaceRef.current) === nextRaw) setSaveState("saved");
       if (parsed && resultJobId) void fetch(`/api/analysis-jobs/${encodeURIComponent(resultJobId)}/seen`, { method: "POST" }).catch(() => undefined);
     }).catch(() => { setSaveState("error"); setError("端末への下書き保存に失敗しました。必要な内容を書き出して保存してください。別のタブで更新した場合は再読み込みしてください。"); });
-  }, [draftReady, lineUserId, siteName, parsed, originalParsed, orderDraftItems, resultJobId]);
+  }, [draftReady, lineUserId, siteName, parsed, originalParsed, orderDraftItems, resultJobId, resultSiteName, resultSession, resultBootPending]);
 
   const downloadWorkspace = (raw: string) => {
     const url = URL.createObjectURL(new Blob([raw], { type: "application/json" }));
@@ -381,6 +410,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const safelySwitchWorkspace = async (next: WorkspaceDraft, archive = true) => {
     if (!lineUserId || !currentWorkspaceRef.current) throw new Error("下書きの準備ができていません。");
     const key = `sokupa:workspace:v1:${lineUserId}`, current = currentWorkspaceRef.current;
+    next = { ...next, resultSiteName: next.resultSiteName ?? next.siteName, resultSession: activateResultSession(current.resultSession) };
     const snapshot = JSON.stringify(current), expected = persistedWorkspaceRef.current, nextRaw = JSON.stringify(next);
     let attempt = switchAttemptRef.current;
     if (!attempt || attempt.snapshot !== snapshot || attempt.expected !== expected || attempt.next !== nextRaw) {
@@ -396,12 +426,70 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     analysisSelectionVersionRef.current++;
     persistedWorkspaceRef.current = switched.raw; currentWorkspaceRef.current = next;
     appliedJobRef.current = next.parsed ? next.resultJobId ?? null : null; restoredDraftRef.current = next;
+    setResultSiteName(next.resultSiteName ?? next.siteName); setResultSession(next.resultSession);
+    noteResultEdit();
     setSiteName(next.siteName); setParsed(next.parsed); setOriginalParsed(next.originalParsed ?? next.parsed);
     setOrderDraftItems(next.orderDraftItems); setResultJobId(next.resultJobId ?? null); setCalculationMode("dimensions"); setMemoInputOpen(false);
     setJobAccepted(null); setJobUi(null); setError(null);
     try { setWorkspaceArchives(listWorkspaceArchives(localStorage, key)); }
     catch { setWorkspaceArchives((previous) => [...switched.archives, ...previous.filter((entry) => !switched.archives.some((saved) => saved.key === entry.key))]); }
   };
+
+  useEffect(() => {
+    if (!lineUserId) return;
+    const listener = (event: StorageEvent) => {
+      if (event.key !== `sokupa:workspace:v1:${lineUserId}`) return;
+      const nextRaw = localStorage.getItem(event.key);
+      if (nextRaw === persistedWorkspaceRef.current) return;
+      if (isObservationOnlyChange(persistedWorkspaceRef.current, nextRaw)) {
+        const observedAt = readWorkspaceDraft(nextRaw!).resultSession!.observedAt;
+        persistedWorkspaceRef.current = nextRaw;
+        const current = currentWorkspaceRef.current;
+        if (current?.resultSession) currentWorkspaceRef.current = { ...current, resultSession: { ...current.resultSession, observedAt } };
+        setResultSession(previous => previous ? { ...previous, observedAt } : previous);
+        return;
+      }
+      externalWorkspaceRef.current = true;
+      setSaveState("error"); setError("別の画面で保存内容が変わりました。今の入力は保持しています。書き出すか、再読み込みしてください。");
+    };
+    window.addEventListener("storage", listener);
+    return () => window.removeEventListener("storage", listener);
+  }, [lineUserId]);
+
+  const resultActionBlocked = isAnalyzing || analysisBlocksIntake(jobAccepted) || recoveryFlags.active || resultActionBusy || saveState !== "saved" || !recoverySettled || recoveryFlags.failed || hasUnfinishedResultInput({ parsed });
+  const changeResultDisplay = async (kind: "manual" | "restore" | "age" | "declined" | "resume", expectedItems?: string) => {
+    if (resultActionRef.current || !lineUserId || !currentWorkspaceRef.current) return;
+    const current = currentWorkspaceRef.current, raw = JSON.stringify(current), expected = persistedWorkspaceRef.current;
+    if (externalWorkspaceRef.current || isAnalyzing || intakeInFlightRef.current || analysisBlocksIntake(jobAccepted) || recoveryActiveRef.current || recoveryFailedRef.current || editorBlockedRef.current || hasUnfinishedResultInput(current) || saveState === "error") throw new Error("入力・解析・保存の完了を確認してから操作してください。現在の内容は保持しています。");
+    if (expectedItems && JSON.stringify(current.parsed?.items) !== expectedItems) throw new Error("編集の保存を待ってから、もう一度操作してください。");
+    resultActionRef.current = true; setResultActionBusy(true);
+    try {
+      if (kind === "manual" && !window.confirm(`現在の結果表示をリセットしますか？\n対象：${(current.resultSiteName ?? current.siteName) || "現場名なし"}・${current.parsed?.items.length ?? 0}品番\n編集済みの結果を端末に1件残します${current.resultSession?.undo ? "（前の戻す用保存は今回の結果に置き換わります）" : ""}。\n選択中の写真・次の現場名・発注リスト・クラウドの履歴や写真は残ります。`)) return;
+      const response = await fetch("/api/auth/session", { cache: "no-store" }); const auth = await response.json();
+      if (!mountedResultRef.current || !response.ok || !auth.authenticated || auth.line_user_id !== lineUserId) throw new Error("ログイン情報が変わりました。現在の内容を保持して操作を止めました。");
+      const jobsResponse = await fetch("/api/analysis-jobs", { cache: "no-store" }); const jobs = await jobsResponse.json();
+      if (!jobsResponse.ok || !Array.isArray(jobs.data) || jobs.data.some((job: {status:string}) => ["queued", "running"].includes(job.status))) throw new Error("解析中、または解析状態を確認できないため、現在の結果は保持しています。");
+      const next = kind === "restore" ? await restoreResultDraft(current, Date.now()) : kind === "resume" ? await resumeResultDraft(current, Date.now()) : resetResultDraft(current, Date.now(), kind);
+      const nextRaw = await withWorkspaceLock(`sokupa:workspace:v1:${lineUserId}`, async () => {
+        if (!mountedResultRef.current || JSON.stringify(currentWorkspaceRef.current) !== raw || externalWorkspaceRef.current || editorBlockedRef.current || intakeInFlightRef.current) throw new Error("確認中に内容が変わりました。画面は変更していません。");
+        return commitResultTransition(localStorage, lineUserId, expected, next);
+      });
+      analysisSelectionVersionRef.current++;
+      persistedWorkspaceRef.current = nextRaw; currentWorkspaceRef.current = next; restoredDraftRef.current = next;
+      appliedJobRef.current = next.resultJobId ?? null; acceptedReplacementRef.current = null;
+      setParsed(next.parsed); setOriginalParsed(next.originalParsed ?? next.parsed); setResultJobId(next.resultJobId ?? null);
+      setResultSiteName(next.resultSiteName ?? ""); setResultSession(next.resultSession); setCalculationMode("dimensions");
+      setJobAccepted(null); setJobUi(null); setError(null); setSaveState("saved"); setResultBootPending(false);
+      setAnalysisRecoveryEpoch(value => value + 1);
+    } catch (error) { setSaveState("error"); throw error; }
+    finally { resultActionRef.current = false; setResultActionBusy(false); }
+  };
+
+  useEffect(() => {
+    const visible = () => { if (document.visibilityState === "visible") setResultEntry(value => value + 1); };
+    document.addEventListener("visibilitychange", visible);
+    return () => document.removeEventListener("visibilitychange", visible);
+  }, []);
 
   const retainPendingResult = async (pending: NonNullable<typeof pendingJobResult>) => {
     if (!lineUserId) throw new Error("ログイン情報を確認できません。");
@@ -434,7 +522,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     const pending = pendingJobResultRef.current, current = currentWorkspaceRef.current;
     if (!pending || !current) return;
     try {
-      await safelySwitchWorkspace({ ...current, siteName: pending.siteName ?? "", parsed: pending.result, originalParsed: pending.result, resultJobId: pending.jobId }, !overwrite);
+      await safelySwitchWorkspace({ ...current, siteName: pending.siteName ?? "", resultSiteName: pending.siteName ?? "", parsed: pending.result, originalParsed: pending.result, resultJobId: pending.jobId }, !overwrite);
       appliedJobRef.current = pending.jobId; restoredDraftRef.current = null;
       if (lineUserId) void withWorkspaceLock(`sokupa:workspace:v1:${lineUserId}`, () => forgetReplacementConsent(localStorage, lineUserId, pending.jobId)).catch(() => undefined);
       pendingJobResultRef.current = null; setPendingJobResult(null); setResultChoiceDeferred(false);
@@ -525,6 +613,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   }, []);
 
   const handleAnalyze = async () => {
+    if (resultActionRef.current) return;
     if (!draftReady || analysisBlocksIntake(jobAccepted)) return;
     if (intakeInFlightRef.current || isAnalyzing) return;
     if (readyImages.length === 0) return;
@@ -619,6 +708,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         catch { setResultRetentionError("切替情報を端末に保存できませんでした。再起動後は保存済みの解析結果から選べます。"); }
       }
       setJobAccepted({ jobId: String(createJson.job_id), backgroundReady: createJson.background_ready === true && ["scheduled", "scheduled-wake"].includes(createJson.execution_mode), status: "queued" });
+      setResultSession(previous => allowResultJob(previous, String(createJson.job_id)));
       try {
         localStorage.setItem(`sokupa:lastJobId:${lineUserId}`, String(createJson.job_id));
       } catch {
@@ -644,16 +734,19 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     const selectionVersion = analysisSelectionVersionRef.current;
     let cancelled = false;
     void (async () => {
+      setRecoverySettled(false); recoveryFailedRef.current = false; recoveryActiveRef.current = false;
       let last: string | null = null;
-      try { last = localStorage.getItem(`sokupa:lastJobId:${lineUserId}`) || localStorage.getItem("sokupa:lastJobId"); } catch { /* Recover from the server. */ }
+      const resetControl = currentWorkspaceRef.current?.resultSession;
+      try { last = resetControl?.inactive ? resetControl.allowedJobId : localStorage.getItem(`sokupa:lastJobId:${lineUserId}`) || localStorage.getItem("sokupa:lastJobId"); } catch { /* Recover from the server. */ }
       try {
         let pointedJob = false;
         if (last) {
           const { data } = await fetchAnalysisJob(last);
           if (data && !cancelled) {
+            if (["queued", "running"].includes(data.status) && !data.requires_manual_restart) recoveryActiveRef.current = true;
             if (data.requires_manual_restart || (data.execution_mode === "legacy" && ["queued", "running"].includes(data.status))) {
               if (selectionVersion === analysisSelectionVersionRef.current) setError("以前の未完了解析は保存されています。必要な画像を選んで新しく解析してください。");
-            } else pointedJob = needsAnalysisRestoration(data, true);
+            } else pointedJob = needsAnalysisRestoration(data, true) && resultMayApply(currentWorkspaceRef.current?.resultSession, last);
             if (pointedJob && selectionVersion === analysisSelectionVersionRef.current) setJobAccepted((current) => current ?? { jobId: last!, backgroundReady: data.background_ready === true, status: data.status });
             if (data.status === "done" && notificationRetryable(data.notification_status)) trackNotification({ jobId: last, siteName: data.site_name ?? null, status: data.notification_status });
           }
@@ -663,10 +756,12 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         if (!response.ok) throw new Error("前回の解析を確認できませんでした。通信の回復後に再読込してください。");
         const jobs = Array.isArray(payload.data) ? payload.data : [];
         if (cancelled) return;
+        if (jobs.some((job: {status:string}) => ["queued", "running"].includes(job.status))) recoveryActiveRef.current = true;
         for (const job of jobs) if (job.status === "done" && notificationRetryable(job.notification_status)) trackNotification({ jobId: job.id, siteName: job.site_name ?? null, status: job.notification_status });
-        const found = jobs.find((job: { status: string; client_result_seen_at?: string | null }) => needsAnalysisRestoration(job));
+        const found = jobs.find((job: { id:string; status: string; client_result_seen_at?: string | null }) => needsAnalysisRestoration(job) && resultMayApply(currentWorkspaceRef.current?.resultSession, job.id));
         if (!pointedJob && found?.id && selectionVersion === analysisSelectionVersionRef.current) setJobAccepted((current) => current ?? { jobId: found.id, backgroundReady: false, status: found.status });
-      } catch { if (!cancelled && selectionVersion === analysisSelectionVersionRef.current) setError("前回の解析を確認できませんでした。通信の回復後に再読込してください。"); }
+      } catch { if (!cancelled && selectionVersion === analysisSelectionVersionRef.current) { recoveryFailedRef.current = true; setError("前回の解析を確認できませんでした。通信の回復後に再読込してください。"); } }
+      finally { if (!cancelled) { setRecoverySettled(true); setRecoveryFlags({ active: recoveryActiveRef.current, failed: recoveryFailedRef.current }); } }
     })();
     return () => { cancelled = true; };
   }, [draftReady, lineUserId, trackNotification, analysisRecoveryEpoch]);
@@ -723,9 +818,11 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       if (cancelled || qErr || !data || selectionVersion !== analysisSelectionVersionRef.current) return;
       setJobAccepted((current) => current?.jobId === jobId ? { ...current, backgroundReady: data.background_ready === true, status: data.status } : current);
       const status = (data.status as "queued" | "running" | "done" | "failed") || "queued";
+      if (["done", "failed"].includes(status)) { recoveryActiveRef.current = false; setRecoveryFlags(previous => previous.active ? { ...previous, active: false } : previous); }
       const done = Number(data.done_images) || 0, total = Math.max(1, Number(data.total_images) || 1);
       setJobUi({ status, done, total, percent: Math.min(100, Math.max(0, Math.round(done / total * 100))), notificationStatus: data.notification_status });
-      if (status === "done" && data.result && appliedJobRef.current !== jobId) {
+      if (resultBootPending && status === "done") return;
+      if (status === "done" && data.result && appliedJobRef.current !== jobId && !externalWorkspaceRef.current && resultMayApply(currentWorkspaceRef.current?.resultSession, jobId)) {
         const current = currentWorkspaceRef.current;
         let replacement = acceptedReplacementRef.current;
         try { replacement = lineUserId ? readReplacementConsent(localStorage, lineUserId) : null; } catch { /* An in-memory intent can still finish this tab's accepted request. */ }
@@ -742,6 +839,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           if (!retainEdits) {
             if (acceptedReplacementRef.current?.jobId === jobId) acceptedReplacementRef.current = null;
             setSiteName(data.site_name ?? "");
+            setResultSiteName(data.site_name ?? ""); setResultSession(previous => activateResultSession(previous)); noteResultEdit();
             setMemoInputOpen(false); setParsed(data.result as ParsedMemoPayload); setOriginalParsed(data.result as ParsedMemoPayload);
           }
         }
@@ -773,14 +871,47 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     };
     poll(); const timer = window.setInterval(poll, 3000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [jobAccepted?.jobId, lineUserId, rememberNotification, trackNotification, analysisRecoveryEpoch, explicitSelectionEpoch]);
+  }, [jobAccepted?.jobId, lineUserId, rememberNotification, trackNotification, analysisRecoveryEpoch, explicitSelectionEpoch, resultBootPending, noteResultEdit]);
+
+  const resultActionCallback = useRef(changeResultDisplay);
+  useEffect(() => { resultActionCallback.current = changeResultDisplay; });
+  useEffect(() => {
+    if (!draftReady || !recoverySettled || evaluatedEntryRef.current === resultEntry) return;
+    evaluatedEntryRef.current = resultEntry;
+    void (async () => {
+      const current = currentWorkspaceRef.current;
+      if (!current?.parsed || current.resultSession?.inactive) { setResultBootPending(false); return; }
+      if (resultEntry > 0 && resultWorkedRef.current) { setResultBootPending(false); return; }
+      if (recoveryActiveRef.current || recoveryFailedRef.current || isAnalyzing || analysisBlocksIntake(jobAccepted) || resultActionRef.current || editorBlockedRef.current || hasUnfinishedResultInput(current) || saveState === "error" || externalWorkspaceRef.current || document.querySelector("dialog[open]") || document.activeElement?.matches("input,textarea,select")) {
+        setResultBootPending(false); return;
+      }
+      const policy = resultAgePolicy(current.resultSession, Date.now());
+      try {
+        if (policy === "confirm") {
+          const accepted = window.confirm(`前回の編集済み結果に戻りますか？\n現場：${(current.resultSiteName ?? current.siteName) || "現場名なし"}\n24時間以上経過、または保存時刻を確認できません。戻さない場合も1件を残し、元写真タブから復元できます。`);
+          await resultActionCallback.current(accepted ? "resume" : "declined");
+        } else if (policy === "hide") await resultActionCallback.current("age");
+        else { setResultSession(previous => previous ? { ...previous, observedAt: Date.now() } : previous); setResultBootPending(false); }
+      } catch (error) { setError(getErrorDetail(error)); setSaveState("error"); setResultBootPending(false); }
+    })();
+  }, [draftReady, recoverySettled, resultEntry, isAnalyzing, jobAccepted, saveState]);
+
+  const resultTools = <div className="space-y-3 rounded-xl border bg-background p-3 text-sm" aria-label="前回の結果とリセット">
+    {parsed ? <label className="block text-xs font-semibold">この結果の現場名（コピーに使用）<Input className="mt-1 min-h-11" aria-label="表示中の結果の現場名" value={resultSiteName} onChange={event => { noteResultEdit(); setResultSiteName(event.target.value); }} /></label> : null}
+    {resultSession?.undo ? <>
+      <p>戻せる前回：{resultSession.undo.resultSiteName || "現場名なし"}・{resultSession.undo.parsed.items.length}品番</p>
+      <Button type="button" variant="outline" className="min-h-11" data-workspace-navigation disabled={Boolean(parsed) || resultActionBlocked} onClick={() => void changeResultDisplay("restore").catch(error => setError(getErrorDetail(error)))}>前回の結果だけ戻す</Button>
+      <p className="text-xs text-muted-foreground">1件まで。戻すと枠は空になります。次の写真・現場名と発注リストはそのままです。{parsed ? "現在の結果がある間は戻せません。" : ""}</p>
+    </> : <p className="text-xs text-muted-foreground">戻す用の保存はありません。リセット時に直前の1件を残します。</p>}
+    {resultSession?.inactive ? <p className="text-xs">{resultSession.reason === "age" ? "48時間以上経過したため、結果表示を片付けました。" : "結果表示はリセットされています。"}履歴やクラウドの写真は削除していません。</p> : null}
+  </div>;
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 px-2 py-4 sm:gap-4 sm:px-4 sm:py-6 md:px-6 lg:px-8">
+    <main className="mx-auto flex min-h-screen max-w-5xl flex-col gap-3 px-2 py-4 sm:gap-4 sm:px-4 sm:py-6 md:px-6 lg:px-8" onPointerDownCapture={() => { resultWorkedRef.current = true; }} onKeyDownCapture={() => { resultWorkedRef.current = true; }}>
       {basicView ? <p role="status" className="rounded-xl border border-amber-500/40 p-3 text-sm">基本表示中です。解析・編集・保存・発注の基本機能を使えます。数量は元メモと照合してください。</p> : null}
       <header className="flex items-center justify-between gap-3">
         <div className="min-w-0"><h1 className="text-xl font-bold">ソクパ <span className="text-xs font-normal text-muted-foreground">Sokupa</span></h1>
-          {parsed && siteName ? <p className="truncate text-xs text-muted-foreground">{siteName}</p> : null}
+          {parsed && resultSiteName ? <p className="truncate text-xs text-muted-foreground">{resultSiteName}</p> : null}
         </div>
         <WorkspaceModeMenu value={calculationMode} count={orderDraftItems.length} onChange={mode => {
           if (mode === "area") setAreaCalculatorMounted(true);
@@ -817,16 +948,18 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       <div className="mt-3 space-y-5">
         <div>
           <label htmlFor={siteNameId} className="mb-1 block text-sm font-medium">
-            現場名（任意）
+            {parsed ? "次の解析の現場名（任意）" : "現場名（任意）"}
           </label>
           <Input
             id={siteNameId}
+            aria-label="現場名（任意）"
             type="text"
             value={siteName}
             onChange={(e) => setSiteName(e.target.value)}
             placeholder="例: 渋谷区〇〇マンション リビング"
             className="rounded-lg px-4 py-2 focus-visible:ring-black"
           />
+          {parsed ? <p className="mt-1 text-xs text-muted-foreground">表示中の結果：{resultSiteName || "現場名なし"}。結果の現場名は元写真タブで変更できます。</p> : null}
         </div>
 
         <div>
@@ -984,6 +1117,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
               <p>{job.site_name || "現場名なし"}（{new Date(job.created_at).toLocaleString("ja-JP")}）</p>
               <Button type="button" variant="outline" disabled={isAnalyzing || analysisBlocksIntake(jobAccepted)} aria-label={`保存済み「${job.site_name || "現場名なし"}」の結果を確認`} onClick={() => {
                 analysisSelectionVersionRef.current++; setJobUi(null); setError(null); setCalculationMode("dimensions");
+                setResultSession(previous => allowResultJob(previous, job.id));
                 setJobAccepted({ jobId: job.id, backgroundReady: false, status: "done" });
                 setExplicitSelectionEpoch((current) => current + 1);
               }}>結果を確認</Button>
@@ -1037,6 +1171,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
                 persistedWorkspaceRef.current = draftRecovery.raw; currentWorkspaceRef.current = next; restoredDraftRef.current = next;
                 appliedJobRef.current = next.resultJobId ?? null;
                 setSiteName(next.siteName); setParsed(next.parsed); setOriginalParsed(next.originalParsed ?? next.parsed); setOrderDraftItems(next.orderDraftItems); setResultJobId(next.resultJobId ?? null); setCalculationMode("dimensions"); setMemoInputOpen(false);
+                setResultSiteName(next.resultSiteName ?? next.siteName); setResultSession(next.resultSession);
                 setDraftRecovery(null); setDraftReady(true); setError(null);
               } catch { setError("元データを保全できなかったため復元を止めました。書き出して保管してください。"); }
             }}>最新の保存結果から復元（元データは退避）</Button> : null}
@@ -1050,6 +1185,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
                 archiveWorkspaceDraft(localStorage, draftRecovery.key, draftRecovery.raw, crypto.randomUUID());
                 setSiteName(""); setParsed(null); setOriginalParsed(null); setOrderDraftItems([]);
                 setResultJobId(null); appliedJobRef.current = null; restoredDraftRef.current = null;
+                setResultSiteName(""); setResultSession(undefined);
                 persistedWorkspaceRef.current = draftRecovery.raw;
                 setWorkspaceArchives(listWorkspaceArchives(localStorage, draftRecovery.key));
                 setDraftRecovery(null); setError(null); setDraftReady(true);
@@ -1103,6 +1239,8 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       </div> : null}
       {parsed && analysisBlocksIntake(jobAccepted) ? <p className="mb-3 text-sm">前回の結果を表示しています。新しい解析はサーバー側で処理中です。</p> : null}
       <section aria-label="メモの解析結果" hidden={calculationMode !== "dimensions"}>
+      {resultBootPending ? <p role="status">前回の結果と保存時刻を確認しています…</p> : <>
+      {!parsed ? <EmptyResultWorkspace tools={resultTools} /> : null}
       <OrderList
         key={resultJobId ?? "legacy-workspace"}
         items={parsed?.items ?? []}
@@ -1111,7 +1249,12 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         readingReviewSourceJobId={resultJobId}
         basicView={basicView}
         notes={parsed?.notes}
-        siteName={siteName}
+        siteName={resultSiteName}
+        resultTools={resultTools}
+        onMeaningfulEdit={noteResultEdit}
+        onEditorBlocked={reportEditorBlocked}
+        resetDisabledReason={resultActionBlocked ? "解析・入力・保存の完了後にリセットできます。" : undefined}
+        onResetResult={expected => changeResultDisplay("manual", expected).catch(error => setError(getErrorDetail(error)))}
         needs_review_any={parsed?.needs_review_any}
         onItemsChange={(nextItems) =>
           setParsed((prev) => ({
@@ -1124,6 +1267,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         onAddToOrderDraft={requestAddToOrderDraft}
         onAddAllToOrderDraft={requestAddAllToOrderDraft}
       />
+      </>}
       </section>
 
       {areaCalculatorMounted ? (

@@ -7,6 +7,7 @@ let checks=0;const check=(v,m)=>{assert.ok(v,m);console.log(`PASS ${++checks}: $
  for(const base of bases){assert.equal(new URL(base).hostname,'127.0.0.1');
  for(const failure of [401,403,404]){
   const context=await browser.newContext({viewport:{width:320,height:844}}),owner='synthetic-photo',key=`sokupa:workspace:v1:${owner}`;let status=failure,requests=[];
+ await ui.freshResultFixtures(context);
   await context.addInitScript(({key,job})=>{localStorage.setItem(key,JSON.stringify({version:1,siteName:'Synthetic',parsed:{items:[{product_code:'PHOTO',manufacturer:'Synthetic',entries:[{original_formula:'2×1',length_m:2,quantity:1,subtotal_m:2,source_image_index:0}],total_m:2,order_quantity:3,reading_reviews:[{reason:'Synthetic source index mismatch',candidate_formulas:['2×1'],source_image_index:1}]}]},orderDraftItems:[],resultJobId:job}));},{key,job});
   await context.route('**/*',async route=>{const u=new URL(route.request().url());if(u.origin!==base)return route.abort();
    if(u.pathname==='/api/auth/session')return route.fulfill({json:{authenticated:true,line_user_id:owner}});

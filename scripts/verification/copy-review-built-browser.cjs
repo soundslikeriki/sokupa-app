@@ -10,6 +10,7 @@ const wait=async fn=>{for(let i=0;i<250;i++){if(await fn())return;await new Prom
 (async()=>{const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});try{
  for(const [mode,base]of bases.entries())for(const width of[320,390]){
   const context=await browser.newContext({viewport:{width,height:844}}),page=await context.newPage(),errors=[],calls=[],unexpected=[];
+ await ui.freshResultFixtures(context);
   const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=','base64');
   await context.addInitScript(({key,payload,job})=>{if(!localStorage.getItem(key))localStorage.setItem(key,JSON.stringify({version:1,siteName:'Synthetic',parsed:payload,originalParsed:payload,orderDraftItems:[],resultJobId:job}));window.copied=[];Object.defineProperty(navigator,'clipboard',{value:{writeText:text=>{window.copied.push({text,active:navigator.userActivation.isActive});return Promise.resolve();}}});},{key,payload,job});
   await context.route('**/*',async route=>{const u=new URL(route.request().url());if(u.origin!==base)return route.abort();if(!u.pathname.startsWith('/api/'))return route.continue();calls.push({path:u.pathname,method:route.request().method()});

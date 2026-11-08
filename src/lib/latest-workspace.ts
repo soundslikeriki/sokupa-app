@@ -14,17 +14,19 @@ export async function withWorkspaceLock<T>(key: string, operation: () => Promise
 /** Fixed, bounded snapshot. No image bytes and no history keys are accumulated. */
 export async function saveLatestWorkspaceSnapshot(storage: StorageAccess, ownerId: string, draft: WorkspaceDraft): Promise<void> {
   readWorkspaceDraft(JSON.stringify(draft));
-  if (!draft.parsed) return; // Keep the last result while the next upload is pending.
+  if (!draft.parsed && !draft.resultSession?.undo) return;
   const clean = JSON.parse(JSON.stringify(draft)) as WorkspaceDraft;
-  const snapshot: Snapshot = { parsed: clean.parsed!, editorState: { originalParsed: clean.originalParsed ?? clean.parsed, orderDraftItems: clean.orderDraftItems }, context: { siteName: clean.siteName, resultJobId: clean.resultJobId ?? null } };
+  const snapshot: Snapshot = { parsed: clean.parsed ?? clean.resultSession!.undo!.parsed, editorState: { originalParsed: clean.originalParsed ?? clean.resultSession?.undo?.originalParsed ?? clean.parsed, orderDraftItems: clean.orderDraftItems }, context: { siteName: clean.siteName, resultJobId: clean.resultJobId ?? null,
+    ...(!clean.parsed ? { inactiveDisplay: true } : {}),
+    ...(clean.resultSiteName !== undefined ? { resultSiteName: clean.resultSiteName } : {}), ...(clean.resultSession ? { resultSession: clean.resultSession } : {}) } };
   const store = service(storage, ownerId), restored = await store.restore();
   if (restored.status !== "restored") throw new Error("最新結果の保存先を確認できません。既存の保存内容は保持しています。");
-  const operationId = draft.resultJobId ?? "legacy-current-workspace";
+  const operationId = !draft.parsed ? `reset:${draft.resultSession!.generation}` : draft.resultJobId ?? "legacy-current-workspace";
   let saved;
   if (restored.latest?.token.operationId === operationId) saved = await store.edit(restored.latest.token, restored.latest.revision, snapshot);
   else {
     // Do not replace a valid result with an empty new upload/editor.
-    if (clean.parsed!.items.length === 0) return;
+    if (snapshot.parsed.items.length === 0) return;
     const begun = await store.begin(operationId);
     if (begun.status !== "started" || !begun.token) throw new Error("最新結果の保存を開始できませんでした。");
     saved = await store.complete(begun.token, snapshot);
@@ -38,7 +40,7 @@ export async function restoreLatestWorkspaceSnapshot(storage: StorageAccess, own
   if (restored.status !== "restored") throw new Error("最新結果の復元保存を読み取れませんでした。");
   if (!restored.latest) return null;
   const { parsed, editorState, context } = restored.latest.snapshot;
-  return readWorkspaceDraft(JSON.stringify({ version: 1, parsed, originalParsed: editorState.originalParsed, orderDraftItems: editorState.orderDraftItems, siteName: context.siteName, resultJobId: context.resultJobId }));
+  return readWorkspaceDraft(JSON.stringify({ version: 1, parsed: context.inactiveDisplay ? null : parsed, originalParsed: context.inactiveDisplay ? null : editorState.originalParsed, orderDraftItems: editorState.orderDraftItems, siteName: context.siteName, resultJobId: context.resultJobId, resultSiteName: context.resultSiteName, resultSession: context.resultSession }));
 }
 
 /** Explicit repair only. Preserve the exact old bytes in one bounded quarantine slot. */

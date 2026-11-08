@@ -3,7 +3,9 @@ import type { WorkspaceDraft } from "./workspace-draft";
 export type ReplacementConsent = { jobId: string; fingerprint: string };
 const key = (owner: string) => `sokupa:replacement:v1:${encodeURIComponent(owner)}`;
 export async function workspaceFingerprint(draft: WorkspaceDraft | null): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(draft)));
+  // Reopening records clock observation; it must not revoke consent for unchanged work.
+  const content = draft?.resultSession ? { ...draft, resultSession: { ...draft.resultSession, observedAt: null } } : draft;
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(content)));
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2,"0")).join("");
 }
 export function readReplacementConsent(storage: Pick<Storage,"getItem">, owner: string): ReplacementConsent | null {

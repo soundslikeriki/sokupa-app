@@ -13,6 +13,7 @@ let checks=0; const check=(ok,message)=>{assert.ok(ok,message);checks++;};
 const wait=async(fn)=>{const end=Date.now()+20000;while(Date.now()<end){if(await fn())return;await new Promise(resolve=>setTimeout(resolve,80));}throw Error('Integrated UI condition timed out');};
 (async()=>{const browser=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true});try{
  const context=await browser.newContext({viewport:{width:390,height:844}}),page=await context.newPage();let created=0,doneB=false,doneC=false,photos=0;
+ await workspace.freshResultFixtures(context);
  page.on('pageerror',error=>{throw error;});
  await context.addInitScript(({key,initial,a})=>{if(!sessionStorage.getItem('seeded')&&!localStorage.getItem(key)){localStorage.setItem(key,JSON.stringify({version:1,siteName:'Original site',parsed:initial,originalParsed:initial,orderDraftItems:[],resultJobId:a}));sessionStorage.setItem('seeded','yes');}},{key,initial,a});
  await context.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==base)return route.abort();

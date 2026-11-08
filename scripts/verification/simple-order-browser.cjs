@@ -20,6 +20,7 @@ const until = async predicate => { for (let n = 0; n < 200; n++) { if (await pre
   if (process.env.SOKUPA_TEST_PROGRESS) console.log("Headless browser launched");
   const fixture = async (items, width = 390) => {
     const context = await browser.newContext({ viewport: { width, height: 844 } });
+ await workspace.freshResultFixtures(context);
     await context.addInitScript(({ key, items }) => {
       if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify({ version: 1, siteName: 'Synthetic', parsed: { items }, originalParsed: { items }, orderDraftItems: [] }));
       window.copied = [];

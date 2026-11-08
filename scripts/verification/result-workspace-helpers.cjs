@@ -5,4 +5,19 @@ const mode = async (page, name) => { await page.getByRole('button', { name: '計
 const disclosure = async (page, text) => { const summary = page.locator('summary').filter({ hasText: text }).first(); if (await summary.locator('..').getAttribute('open') === null) await summary.click(); };
 const repeatSettings = async (page, code) => { const details = page.getByLabel(`${code} のリピート詳細設定`, { exact: true }); if (await details.getAttribute('open') === null) await details.locator('summary').click(); };
 const copy = async page => { await view(page, '数量'); await page.getByRole('button', { name: '確認してコピー', exact: true }).click(); const dialog=page.getByRole('dialog',{name:'発注内容を確認してコピー',exact:true}); await dialog.getByRole('button', { name: '発注用テキストをコピー', exact: true }).click(); await dialog.getByRole('button',{name:'戻る',exact:true}).click(); await dialog.waitFor({state:'hidden'}); await edit(page); };
-module.exports = { view, edit, mode, disclosure, repeatSettings, copy };
+// Existing calculation/navigation suites seed current, freshly saved results. Time-policy
+// suites do not use this helper and exercise the legacy/unknown-time path explicitly.
+const freshResultFixtures = async context => context.addInitScript(() => {
+ if(location.hostname!=='127.0.0.1')throw Error('Synthetic result fixture requires localhost');
+ const original=Storage.prototype.setItem;
+ Storage.prototype.setItem=function(key,value){
+  if(key.startsWith('sokupa:workspace:v1:')&&!key.includes(':recovery:'))try{
+   const draft=JSON.parse(value),items=draft.parsed?.items;
+   if(draft.version===1&&!draft.resultSession&&Array.isArray(items)&&items.length&&items.every(i=>i.total_m>=0&&i.order_quantity>=0&&i.entries.every(e=>e.length_m>=0&&e.quantity>=0&&e.subtotal_m>=0))){
+    const now=Date.now();draft.resultSiteName=draft.siteName;draft.resultSession={version:1,generation:0,inactive:false,fingerprint:'',meaningfulAt:now,observedAt:now,allowedJobId:null,undo:null};value=JSON.stringify(draft);
+   }
+  }catch{}
+  return original.call(this,key,value);
+ };
+});
+module.exports = { view, edit, mode, disclosure, repeatSettings, copy, freshResultFixtures };

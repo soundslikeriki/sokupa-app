@@ -18,6 +18,7 @@ const until = async fn => { for(let i=0;i<250;i++){if(await fn())return;await ne
  try {for(const [mode,base] of bases.entries())for(const width of [390,320]) {
   const fixture=async item=>{
    const context=await browser.newContext({viewport:{width,height:844}}),errors=[];
+ await ui.freshResultFixtures(context);
    await context.addInitScript(({key,item})=>{
     if(!localStorage.getItem(key))localStorage.setItem(key,JSON.stringify({version:1,siteName:'Synthetic',parsed:{items:[item]},originalParsed:{items:[item]},orderDraftItems:[]}));
     window.copied=[];Object.defineProperty(navigator,'clipboard',{value:{writeText:async value=>window.copied.push(value)}});

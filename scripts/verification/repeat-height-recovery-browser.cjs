@@ -16,6 +16,7 @@ const until = async fn => { for (let i=0;i<200;i++) { if(await fn()) return; awa
  const browser=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true});
  try {for (const base of bases) {
   const context=await browser.newContext({viewport:{width:390,height:844}}), errors=[];
+ await ui.freshResultFixtures(context);
   await context.addInitScript(({key,seed})=>{if(!localStorage.getItem(key))localStorage.setItem(key,JSON.stringify({version:1,siteName:'Synthetic',parsed:{items:[seed]},originalParsed:{items:[seed]},orderDraftItems:[]}));},{key,seed});
   await context.route('**/*',async route=>{
    const url=new URL(route.request().url());if(url.origin!==base)return route.abort();

@@ -1,5 +1,10 @@
 import type { ParsedMemoPayload, OrderDraftItem } from "../types";
 
+export type ResultSession = { version: 1; generation: number; inactive: boolean; fingerprint: string;
+  meaningfulAt: unknown; observedAt: unknown; allowedJobId: string | null; reason?: "manual" | "age" | "declined";
+  undo: { parsed: ParsedMemoPayload; originalParsed?: ParsedMemoPayload | null; resultJobId: string | null;
+    resultSiteName: string; meaningfulAt: unknown } | null };
+
 export type WorkspaceDraft = {
   version: 1;
   siteName: string;
@@ -7,6 +12,8 @@ export type WorkspaceDraft = {
   originalParsed?: ParsedMemoPayload | null;
   orderDraftItems: OrderDraftItem[];
   resultJobId?: string | null;
+  resultSiteName?: string;
+  resultSession?: ResultSession;
 };
 const object = (value: unknown): value is Record<string, any> => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 const number = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -36,11 +43,23 @@ export function readWorkspaceDraft(text: string): WorkspaceDraft {
   const value: unknown = JSON.parse(text);
   if (!object(value) || value.version !== 1 || typeof value.siteName !== "string" || !memo(value.parsed) ||
       (value.resultJobId != null && (typeof value.resultJobId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.resultJobId))) ||
+      (value.resultSiteName !== undefined && typeof value.resultSiteName !== "string") || !validResultSession(value.resultSession) ||
       (value.originalParsed !== undefined && !memo(value.originalParsed)) || !Array.isArray(value.orderDraftItems) || value.orderDraftItems.length > 1000 ||
       value.orderDraftItems.some((item: unknown) => !object(item) || typeof item.id !== "string" || typeof item.productCode !== "string" || !number(item.quantity) || typeof item.unit !== "string" || typeof item.sourceLabel !== "string" || !["manual", "area", "dimension"].includes(item.sourceType))) {
     throw new Error("保存した下書きを復元できません。端末内のデータは保持しています。");
   }
   return value as WorkspaceDraft;
+}
+
+function validResultSession(value: unknown): boolean {
+  const uuid = (id: unknown) => typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  if (value === undefined) return true;
+  if (!object(value) || value.version !== 1 || !Number.isSafeInteger(value.generation) || value.generation < 0 || typeof value.inactive !== "boolean" ||
+    typeof value.fingerprint !== "string" || value.fingerprint.length > 128 || !(value.allowedJobId === null || uuid(value.allowedJobId))) return false;
+  const undo = value.undo;
+  return undo === null || object(undo) && undo.parsed !== null && memo(undo.parsed) && undo.parsed.items.length > 0 &&
+    (undo.originalParsed === undefined || memo(undo.originalParsed)) && typeof undo.resultSiteName === "string" &&
+    (undo.resultJobId === null || uuid(undo.resultJobId));
 }
 
 /** Only an explicit saved job ID proves association; identical OCR content does not. */

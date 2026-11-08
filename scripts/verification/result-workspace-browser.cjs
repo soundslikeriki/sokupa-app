@@ -17,6 +17,7 @@ const wait=async fn=>{for(let i=0;i<250;i++){if(await fn())return;await new Prom
   const owner=`synthetic-tabs-${width}`,key=`sokupa:workspace:v1:${owner}`,requests=[],photos=[];
   let metadataFails=false,photoFails=false,holdLast=false,lastPhotoRelease=null,photoBytes=png;
   const context=await browser.newContext({viewport:{width,height:844}});
+ await ui.freshResultFixtures(context);
   await context.addInitScript(({key,payload,job})=>{if(!localStorage.getItem(key))localStorage.setItem(key,JSON.stringify({version:1,siteName:'Synthetic',parsed:payload,originalParsed:payload,orderDraftItems:[],resultJobId:job}));window.copied=[];Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>window.copied.push(text)}});},{key,payload,job});
   await context.route('**/*',async route=>{
    const u=new URL(route.request().url());if(u.origin!==base)throw Error('Non-local request blocked: '+u.origin);

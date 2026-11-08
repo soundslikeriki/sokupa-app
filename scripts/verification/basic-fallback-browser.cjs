@@ -10,6 +10,7 @@ const fresh={items:[{product_code:'FRESH',manufacturer:'Synthetic',entries:[{ori
 let checks=0;const check=(v,m)=>{assert.ok(v,m);checks++;};const wait=async f=>{for(let i=0;i<300;i++){if(await f())return;await new Promise(r=>setTimeout(r,70));}throw Error('Fallback condition timed out');};
 (async()=>{const browser=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true});try{
  const context=await browser.newContext({viewport:{width:390,height:844}});let backend=full,done=false,created=false;
+ await workspace.freshResultFixtures(context);
  await context.addInitScript(({key,edited,original,a})=>{if(!localStorage.getItem(key))localStorage.setItem(key,JSON.stringify({version:1,siteName:'Edited full view',parsed:edited,originalParsed:original,orderDraftItems:[],resultJobId:a}));},{key,edited,original,a});
  await context.route('**/*',async route=>{const u=new URL(route.request().url());if(u.origin!==full)return route.abort();
   if(u.pathname==='/api/auth/session')return route.fulfill({json:{authenticated:true,line_user_id:owner,admin:true}});

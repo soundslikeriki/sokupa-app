@@ -5,6 +5,7 @@ const base=process.env.SOKUPA_TEST_URL||'http://127.0.0.1:3317',user='synthetic-
 const item={product_code:'VS2067',manufacturer:'Synthetic',entries:[{original_formula:'20×1',length_m:20,quantity:1,subtotal_m:20}],total_m:20,order_quantity:23};
 (async()=>{const browser=await chromium.launch({executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',headless:true});let checks=0;
  const contextFor=async(handler)=>{const context=await browser.newContext(),page=await context.newPage();page.on('pageerror',e=>{throw e;});
+ await workspace.freshResultFixtures(context);
   await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==base)return route.abort();if(url.pathname==='/api/auth/session')return route.fulfill({json:{authenticated:true,line_user_id:user,keep_open_for_progress:false}});if(url.pathname.startsWith('/api/'))return handler(route,url);return route.continue();});return{context,page};};
  try{
   let accepted=false,reads=0,discoveries=0,ready=true;

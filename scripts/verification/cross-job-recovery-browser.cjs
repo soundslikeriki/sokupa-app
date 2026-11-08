@@ -1,3 +1,4 @@
+const workspace = require('./result-workspace-helpers.cjs');
 // Two devices' result identities; synthetic API only and all external traffic blocked.
 const{chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),assert=require('node:assert/strict'),fs=require('node:fs');
 const base=process.env.SOKUPA_TEST_URL||'http://127.0.0.1:3317',user='synthetic-user',a='00000000-0000-4000-8000-00000000000a',b='00000000-0000-4000-8000-00000000000b',key=`sokupa:workspace:v1:${user}`;
@@ -7,6 +8,7 @@ const item=(m,q,order)=>({product_code:'VS2067',manufacturer:'Synthetic',entries
   const legacy=scenario==='legacy-identical-ocr',old={version:1,siteName:'Edited site A',parsed:{items:[item(20,2,46)]},originalParsed:{items:[item(20,1,23)]},orderDraftItems:[{id:'manual-A',productCode:'A-order',quantity:9,unit:'m',sourceType:'manual',sourceLabel:'A list'}],...(legacy?{}:{resultJobId:a})};
   const result={items:[item(legacy?20:10,1,legacy?23:12)]};let seenB=false,seenBCalls=0,submitted=scenario!=='new-image-archive-failure';
   const context=await browser.newContext({acceptDownloads:true,viewport:{width:375,height:812}}),page=await context.newPage();page.on('pageerror',e=>{throw e;});
+ await workspace.freshResultFixtures(context);
   await context.addInitScript(({key,old})=>{if(!sessionStorage.getItem('seeded')){localStorage.clear();localStorage.setItem(key,JSON.stringify(old));sessionStorage.setItem('seeded','yes');}},{key,old});
   await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.origin!==base)return route.abort();
    if(url.pathname==='/api/auth/session')return route.fulfill({json:{authenticated:true,line_user_id:user}});
@@ -20,7 +22,7 @@ const item=(m,q,order)=>({product_code:'VS2067',manufacturer:'Synthetic',entries
   });
   const current=()=>page.evaluate(key=>JSON.parse(localStorage.getItem(key)),key);
   const archived=()=>page.evaluate(key=>Object.keys(localStorage).filter(k=>k.startsWith(key+':recovery:')).map(k=>({key:k,raw:localStorage.getItem(k),draft:JSON.parse(localStorage.getItem(k))})),key);
-  await page.goto(base);
+  await page.goto(base);await workspace.edit(page,'VS2067');
   if(scenario==='new-image-archive-failure'){
     await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).waitFor();
     await page.evaluate(key=>{window.firstArchiveSet=Storage.prototype.setItem;Storage.prototype.setItem=function(name,value){if(name.startsWith(key+':recovery:'))throw new DOMException('Synthetic initial archive quota','QuotaExceededError');return window.firstArchiveSet.call(this,name,value);};},key);
@@ -50,7 +52,7 @@ const item=(m,q,order)=>({product_code:'VS2067',manufacturer:'Synthetic',entries
   const exported=page.waitForEvent('download');await page.getByRole('button',{name:/「Edited site A」を書き出す/}).first().click();const file=await exported;const downloaded=JSON.parse(fs.readFileSync(await file.path(),'utf8'));assert.equal(downloaded.parsed.items[0].order_quantity,69);assert.equal(downloaded.orderDraftItems[0].quantity,9);checks++;
   await page.getByRole('button',{name:/「Edited site A」を復元/}).first().click();await page.waitForFunction(key=>JSON.parse(localStorage.getItem(key)).siteName==='Edited site A',key);
   saved=await current();assert.equal(saved.parsed.items[0].order_quantity,69);assert.equal(saved.resultJobId,legacy?null:a);assert.ok((await archived()).some(x=>x.draft.resultJobId===b&&x.draft.siteName==='Server site B'));checks++;
-  await page.reload();await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).waitFor();saved=await current();assert.equal(saved.siteName,'Edited site A');assert.equal(saved.parsed.items[0].order_quantity,69);assert.ok((await archived()).some(x=>x.draft.resultJobId===b));checks++;
+  await page.reload();await workspace.edit(page,'VS2067');await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).waitFor();saved=await current();assert.equal(saved.siteName,'Edited site A');assert.equal(saved.parsed.items[0].order_quantity,69);assert.ok((await archived()).some(x=>x.draft.resultJobId===b));checks++;
   await context.close();
  }
  console.log(`PASS: ${checks} cross-job choice/archive/restore browser checks; known/unknown identity, quota/retry, export and reload; no external requests.`);

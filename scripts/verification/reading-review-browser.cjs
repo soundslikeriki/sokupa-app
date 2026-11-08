@@ -40,6 +40,7 @@ const fixture = (mode, legacy, included) => {
         parsed.notes = 'SAFEの3×4行は取消として除外しました。原画像で確認してください。';
       }
       const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+ await workspace.freshResultFixtures(context);
       await context.addInitScript(({ key, parsed, job }) => {
         if (!localStorage.getItem(key)) localStorage.setItem(key, JSON.stringify({ version: 1, siteName: 'Synthetic', parsed, originalParsed: parsed, orderDraftItems: [], resultJobId: job }));
         window.copied = [];

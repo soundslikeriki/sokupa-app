@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { CopyReviewDialog } from "@/components/CopyReviewDialog";
 import { inspectCopyReview, prepareCopyReviewConfirmation, type CopyReviewInput } from "@/lib/copy-review";
@@ -66,6 +66,11 @@ type OrderListProps = {
   onItemsChange?: (items: MemoProductItem[]) => void;
   onAddToOrderDraft?: (item: OrderDraftItemInput) => void;
   onAddAllToOrderDraft?: (items: OrderDraftItemInput[]) => void;
+  resultTools?: ReactNode;
+  onMeaningfulEdit?: () => void;
+  onEditorBlocked?: (blocked: boolean) => void;
+  onResetResult?: (expectedItems: string) => Promise<void>;
+  resetDisabledReason?: string;
 };
 
 type ItemOverride = {
@@ -134,7 +139,7 @@ function cloneMemoProductItem(item: MemoProductItem): MemoProductItem {
   };
 }
 
-export function OrderList({ basicView = false, items, sourceItems, sourceJobId, readingReviewSourceJobId, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft }: OrderListProps) {
+export function OrderList({ basicView = false, items, sourceItems, sourceJobId, readingReviewSourceJobId, notes, siteName = "", needs_review_any, onItemsChange, onAddToOrderDraft, onAddAllToOrderDraft, resultTools, onMeaningfulEdit, onEditorBlocked, onResetResult, resetDisabledReason }: OrderListProps) {
   const privatePhotoJobId = sourceJobId ?? readingReviewSourceJobId;
   const [copyReviewOpen, setCopyReviewOpen] = useState(false);
   const [copyReviewSession, setCopyReviewSession] = useState(0);
@@ -321,6 +326,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const clearManualOrderQuantity = (productCode: string) => {
+    onMeaningfulEdit?.();
     invalidateConfirmation(productCode);
     setManualOrderQuantities((prev) => {
       return { ...prev, [productCode]: NaN };
@@ -368,6 +374,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     setEditingCode((prev) => ({ ...prev, [fromCode]: { open: false, value: toCode || fromCode } }));
     if (!toCode || toCode === fromCode) return;
     if (!onItemsChange) return;
+    onMeaningfulEdit?.();
 
     const before = items.find((i) => i.product_code === fromCode);
     const updatedItems = items.map((i) =>
@@ -462,6 +469,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const handleAddEntry = (productCode: string) => {
+    onMeaningfulEdit?.();
     if (!onItemsChange) return;
 
     const draft = newEntryInputsRef.current[productCode] ?? newEntryInputs[productCode] ?? { length: "", quantity: "" };
@@ -499,6 +507,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const handleDeleteEntry = (productCode: string, entryIndex: number) => {
+    onMeaningfulEdit?.();
     if (!onItemsChange) return;
     clearManualOrderQuantity(productCode);
 
@@ -898,6 +907,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       return acknowledgement ? { code: row.code, acknowledgement } : null;
     });
     if (changes.some(row => row === null)) return false;
+    onMeaningfulEdit?.();
     setOverrides(previous => {
       const next = { ...previous };
       for (const change of changes) if (change) next[change.code] = { ...previous[change.code],
@@ -942,10 +952,19 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     </>}
   </>;
 
+  const resetEditorBlocked = Object.entries(editingCode).some(([code, draft]) => draft.open && draft.value !== code)
+    || Object.values(newEntryInputs).some(draft => Object.values(draft).some(value => value !== "" && value !== undefined))
+    || derivedItems.some(item => item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined);
+  useEffect(() => { onEditorBlocked?.(resetEditorBlocked); return () => onEditorBlocked?.(false); }, [onEditorBlocked, resetEditorBlocked]);
+
   if (items.length === 0) return null;
 
   return (
-    <div ref={resultRoot} className="space-y-3 pb-[calc(5rem+env(safe-area-inset-bottom))] print:pb-0" onKeyDown={event => {
+    <div ref={resultRoot} className="space-y-3 pb-[calc(5rem+env(safe-area-inset-bottom))] print:pb-0" onChangeCapture={event => {
+      const target = event.target as HTMLElement, label = target.getAttribute("aria-label") ?? "";
+      if (target.closest("dialog") || label === "品番を編集" || label.includes("に追加する") || target.closest("select[data-workspace-navigation]")) return;
+      onMeaningfulEdit?.();
+    }} onKeyDown={event => {
       if (event.key === "Escape" && resultView !== "quantity" && !(event.target as HTMLElement).closest("input,select,textarea")) { event.preventDefault(); selectView("quantity"); }
     }}>
       <section id={`${navId}-quantity`} data-result-panel="quantity" role="tabpanel" aria-labelledby={`${navId}-quantity-tab`} tabIndex={-1} hidden={resultView !== "quantity"} className="scroll-mt-4 space-y-3 outline-none print:block">
@@ -1071,6 +1090,12 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       <section id={`${navId}-photo`} data-result-panel="photo" role="tabpanel" aria-labelledby={`${navId}-photo-tab`} tabIndex={-1} hidden={resultView !== "photo"} className="scroll-mt-4 space-y-3 outline-none print:hidden">
         <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">元写真</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("edit", activeProductCode)}>編集に戻る</Button></div>
         {!copyReviewOpen ? sourcePhoto() : null}
+        {resultTools}
+        {onResetResult ? <div className="space-y-2 rounded-xl border p-3 text-sm">
+          <Button type="button" variant="outline" className="min-h-11" data-workspace-navigation disabled={Boolean(resetDisabledReason) || resetEditorBlocked}
+            onClick={() => void onResetResult(JSON.stringify(derivedItems.map(canonicalizeDerivedItem)))}>この結果の表示をリセット</Button>
+          <p className="text-xs text-muted-foreground">{resetEditorBlocked ? "入力中の品番・未追加の行・未完了の数値を確定または取消してから操作してください。" : resetDisabledReason || "確認後、編集済みの結果を端末に1件だけ残します。"}</p>
+        </div> : null}
       </section>
       <section id={`${navId}-edit`} data-result-panel="edit" role="tabpanel" aria-labelledby={`${navId}-edit-tab`} tabIndex={-1} hidden={resultView !== "edit"} className="scroll-mt-4 space-y-3 outline-none print:block">
         <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">編集・リピート</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("quantity")}>数量に戻る</Button></div>

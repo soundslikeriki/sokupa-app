@@ -1,3 +1,4 @@
+const workspace = require('./result-workspace-helpers.cjs');
 // Delayed automatic lookup must never replace an explicitly selected history result.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
@@ -15,6 +16,7 @@ const wait = async fn => { const until = Date.now() + 15000; while (Date.now() <
       let release, automaticReads = 0, cReads = 0, aReads = 0, nonBSeen = 0;
       const gate = new Promise(resolve => { release = resolve; });
       const context = await browser.newContext({ viewport: { width: 375, height: 900 } }), page = await context.newPage();
+ await workspace.freshResultFixtures(context);
       page.on('pageerror', error => { throw error; });
       await context.addInitScript(({ key, pointer, saved, c, hasPointer }) => { localStorage.setItem(key, JSON.stringify(saved)); if (hasPointer) localStorage.setItem(pointer, c); }, { key, pointer, saved, c, hasPointer: scenario !== 'same-history-selected-twice' });
       await page.route('**/*', async route => {
@@ -38,11 +40,11 @@ const wait = async fn => { const until = Date.now() + 15000; while (Date.now() <
         return route.continue();
       });
       try {
-        await page.goto(base); await page.getByLabel('B-CODE の発注数量を入力', { exact: true }).waitFor();
+        await page.goto(base); await workspace.edit(page, 'B-CODE'); await page.getByLabel('B-CODE の発注数量を入力', { exact: true }).waitFor();
         if (scenario === 'delayed-list') { await page.getByText('別の解析: C-CODE: 23m', { exact: true }).waitFor(); await wait(() => automaticReads >= 1); }
         if (scenario === 'delayed-pointer') await wait(() => cReads >= 1);
         checks++;
-        await page.getByRole('button', { name: '保存済みの解析結果を探す', exact: true }).click();
+        await workspace.disclosure(page, '保存済みの結果を開く'); await page.getByRole('button', { name: '保存済みの解析結果を探す', exact: true }).click();
         const historyButton = page.getByRole('button', { name: '保存済み「Historical A」の結果を確認', exact: true });
         const beforeC = cReads, beforeAutomatic = automaticReads;
         await historyButton.click();
@@ -57,7 +59,7 @@ const wait = async fn => { const until = Date.now() + 15000; while (Date.now() <
         assert.equal(cReads, beforeC); assert.equal(automaticReads, beforeAutomatic + (scenario === 'delayed-pointer' ? 1 : 0)); assert.equal(nonBSeen, 0); checks++;
         if (scenario === 'same-history-selected-twice') { assert.equal(aReads, 2); assert.equal(await page.getByText('結果を取得できません。', { exact: false }).count(), 0); checks++; }
         await page.getByRole('button', { name: '今の下書きを退避して別の結果を開く', exact: true }).click();
-        await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor();
+        await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor();
         const applied = JSON.parse(await page.evaluate(k => localStorage.getItem(k), key)); assert.equal(applied.resultJobId, a); assert.equal(applied.parsed.items[0].order_quantity, 12); checks++;
         assert.ok(await page.evaluate(({ key, b }) => Object.keys(localStorage).filter(k => k.startsWith(key + ':recovery:')).some(k => { const draft = JSON.parse(localStorage.getItem(k)); return draft.resultJobId === b && draft.parsed.items[0].order_quantity === 46; }), { key, b })); checks++;
       } finally { release(); await context.close(); }

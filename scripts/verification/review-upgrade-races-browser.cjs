@@ -12,6 +12,7 @@ const browserOptions={executablePath:'/Applications/Google Chrome.app/Contents/M
 async function setup(browser,name,initial,handler){
  const owner=`synthetic-review-${name}`,key=`sokupa:workspace:v1:${owner}`,latestKey=`sokupa:latest-result:v1:${owner}`;
  const context=await browser.newContext({viewport:{width:390,height:844}}),page=await context.newPage();
+ await ui.freshResultFixtures(context);
  page.on('dialog',dialog=>dialog.dismiss());page.on('pageerror',error=>{throw error;});
  const draft={version:1,siteName:'Original A',parsed:initial,originalParsed:initial,orderDraftItems:[],resultJobId:a};
  await context.addInitScript(({key,draft})=>{if(!sessionStorage.getItem('seeded')){localStorage.setItem(key,JSON.stringify(draft));sessionStorage.setItem('seeded','yes');}},{key,draft});

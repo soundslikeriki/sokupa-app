@@ -12,6 +12,7 @@ const draft = {version:1,siteName:'Synthetic',parsed:{items:[original]},original
  let checks=0,uploads=0,jobs=0;
  const contextFor=async(raw)=>{
   const context=await browser.newContext({acceptDownloads:true});
+ await ui.freshResultFixtures(context);
   await context.addInitScript(({key,raw})=>{if(!localStorage.getItem(key))localStorage.setItem(key,raw);},{key,raw});
   const page=await context.newPage();
   page.on('pageerror',error=>{throw error});
