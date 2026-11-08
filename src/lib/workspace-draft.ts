@@ -45,7 +45,7 @@ export function readWorkspaceDraft(text: string): WorkspaceDraft {
       (value.resultJobId != null && (typeof value.resultJobId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.resultJobId))) ||
       (value.resultSiteName !== undefined && typeof value.resultSiteName !== "string") || !validResultSession(value.resultSession) ||
       (value.originalParsed !== undefined && !memo(value.originalParsed)) || !Array.isArray(value.orderDraftItems) || value.orderDraftItems.length > 1000 ||
-      value.orderDraftItems.some((item: unknown) => !object(item) || typeof item.id !== "string" || typeof item.productCode !== "string" || !number(item.quantity) || typeof item.unit !== "string" || typeof item.sourceLabel !== "string" || !["manual", "area", "dimension"].includes(item.sourceType))) {
+      value.orderDraftItems.some((item: unknown) => !object(item) || typeof item.id !== "string" || typeof item.productCode !== "string" || !number(item.quantity) || (item.quantityInput !== undefined && (typeof item.quantityInput !== "string" || item.quantityInput.length > 100)) || typeof item.unit !== "string" || typeof item.sourceLabel !== "string" || !["manual", "area", "dimension"].includes(item.sourceType))) {
     throw new Error("保存した下書きを復元できません。端末内のデータは保持しています。");
   }
   return value as WorkspaceDraft;

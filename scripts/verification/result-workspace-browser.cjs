@@ -41,18 +41,18 @@ const wait=async fn=>{for(let i=0;i<250;i++){if(await fn())return;await new Prom
   check(await tab('概要').getAttribute('aria-selected')==='true','overview is initial view');
   check(await page.getByRole('tablist').count()===1,'one navigation hierarchy and one result footer');
   check(await page.getByLabel('ANON1 の一覧発注数量',{exact:true}).innerText()==='11m','existing 15% formula is used');
-  check(await copy().isDisabled(),'uncertain result cannot copy mockup quantities');
-  check((await page.getByLabel('ANON2 の発注量チェック').innerText()).includes('判定不可') && (await page.getByLabel('ANON2 の一覧確認詳細',{exact:true}).locator(':scope > summary').innerText()).includes('訂正候補'),'short correction entry remains visible independently of numerical status');
+  check(await copy().isEnabled(),'source warnings do not prevent exporting chosen positive quantities');
+  check((await page.getByLabel('ANON2 の発注量チェック').innerText()).includes('✅') && (await page.getByLabel('ANON2 の一覧確認詳細',{exact:true}).locator(':scope > summary').innerText()).includes('訂正候補'),'short correction entry remains visible independently of numerical status');
   check(await page.locator('summary').filter({hasText:'画像・現場名'}).locator('..').getAttribute('open')===null,'optional input collapsed while result is shown');
   check(await page.getByRole('heading',{name:'保存済みの解析結果',exact:true}).isHidden(),'optional history is collapsed');
   check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'initial result fits narrow width');
   if(process.env.SOKUPA_SCREENSHOT_DIR){fs.mkdirSync(process.env.SOKUPA_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:`${process.env.SOKUPA_SCREENSHOT_DIR}/tabs-quantity-${base===bases[0]?'normal':'basic'}-${width}.png`,fullPage:false});}
   await page.getByLabel('ANON2 を確認・編集',{exact:true}).click();
   check(await page.getByLabel('編集する品番',{exact:true}).inputValue()==='ANON2','direct edit selects the clicked product');
-  check(await page.locator('#material-ANON1').isHidden()&&await page.locator('#material-ANON2').isVisible(),'only selected product editor is visible');
+  check(await page.locator('[data-material-index="0"]').isVisible()&&await page.locator('[data-material-index="1"]').isVisible(),'material selection scrolls without hiding other materials');
   await ui.edit(page,'ANON1');
   await page.getByLabel('ANON1 に追加する長さ (m)',{exact:true}).fill('1.25');await page.getByLabel('ANON1 に追加する幅数',{exact:true}).fill('3');
-  await page.getByTitle('タップして品番を編集').filter({visible:true}).click();await page.getByLabel('品番を編集',{exact:true}).fill('UNCOMMITTED');
+  await page.getByTitle('タップして品番を編集').filter({visible:true}).first().click();await page.getByLabel('品番を編集',{exact:true}).fill('UNCOMMITTED');
   await ui.view(page,'概要');await ui.view(page,'メモ画像');await page.getByAltText('解析元の写真 1',{exact:true}).waitFor();
   await ui.mode(page,'実寸計測');check(await page.getByRole('heading',{name:'㎡から必要m数を計算'}).isVisible(),'actual-dimension menu preserves existing area calculator');
   await page.locator('#area-sqm').fill('27.5');await page.locator('#area-product-code').fill('AREA-DRAFT');await page.getByLabel('ロス率',{exact:true}).fill('17');await page.locator('#wallpaper-width-mode').selectOption('custom');await page.getByLabel('任意の有効巾',{exact:true}).fill('95.5');
@@ -73,8 +73,8 @@ const wait=async fn=>{for(let i=0;i<250;i++){if(await fn())return;await new Prom
   await ui.mode(page,'メモ計測');await ui.edit(page,'ANON1');
   await page.getByTitle('タップして式を編集').filter({visible:true}).first().click();await page.getByLabel('ANON1 1行目の長さ (m)',{exact:true}).fill('');await saved();
   for(const name of ['数量','メモ画像','数量'])await ui.view(page,name);
-  check(await page.getByLabel('ANON1 1行目の長さ (m)',{exact:true}).inputValue()===''&&await copy().isDisabled(),'blank measurement survives views and blocks copy');
-  await ui.view(page,'概要');check(await page.getByLabel('ANON1 の一覧発注数量',{exact:true}).innerText()==='未確定','blank measurement is never presented as a final old number');
+  check(await page.getByLabel('ANON1 1行目の長さ (m)',{exact:true}).inputValue()===''&&await copy().isEnabled(),'blank measurement survives views without blocking the positive chosen order');
+  await ui.view(page,'概要');check(await page.getByLabel('ANON1 の一覧発注数量',{exact:true}).innerText()!=='未確定'&&(await page.getByLabel('ANON1 の発注量チェック',{exact:true}).innerText()).includes('判定不可'),'measurement unknown is separate from the positive final order amount');
   await ui.edit(page,'ANON1');await page.getByLabel('ANON1 1行目の長さ (m)',{exact:true}).fill('2.7');await wait(()=>read().then(d=>d.parsed.items[0].entries[0].length_input===undefined&&d.parsed.items[0].entries[0].length_m===2.7));await saved();
   const total=()=>read().then(d=>d.parsed.items[0].total_m);
   check(await page.getByLabel('ANON1 1行目の長さ (m)',{exact:true}).evaluate(el=>el===document.activeElement),'length input stays focused immediately before one row-toggle click');
@@ -82,7 +82,7 @@ const wait=async fn=>{for(let i=0;i<250;i++){if(await fn())return;await new Prom
   await page.getByRole('switch',{name:'ANON1 の一括リピート計算',exact:true}).click();await wait(async()=>await total()===10.2);check((await read()).parsed.items[0].order_quantity===12,'master ON retains two heights and 10.2m');
   if(process.env.SOKUPA_SCREENSHOT_DIR)await page.screenshot({path:`${process.env.SOKUPA_SCREENSHOT_DIR}/tabs-editor-${base===bases[0]?'normal':'basic'}-${width}.png`,fullPage:false});
   await page.getByRole('switch',{name:'ANON1 の一括リピート計算',exact:true}).click();await wait(async()=>await total()===9.2);await saved();check((await read()).parsed.items[0].order_quantity===11,'master OFF restores 9.2m once');
-  await page.getByRole('button',{name:'幅数を追加',exact:true}).click();await wait(()=>read().then(d=>d.parsed.items[0].entries.length===3));await saved();
+  await page.locator('[data-material-index="0"]').getByRole('button',{name:'幅数を追加',exact:true}).click();await wait(()=>read().then(d=>d.parsed.items[0].entries.length===3));await saved();
   await page.reload();await ui.edit(page,'ANON1');await saved();check((await read()).parsed.items[0].entries.length===3&&(await read()).originalParsed.items[0].entries.length===2,'explicitly added row restores once and original rows remain');
   // Current photo failures and late old images cannot discard the editor or replace another selected image.
   metadataFails=true;await ui.view(page,'メモ画像');await page.getByRole('button',{name:'写真一覧を再取得',exact:true}).waitFor();check(await page.getByRole('alert').filter({hasText:'メモ画像の一覧'}).isVisible(),'metadata failure gives a reachable retry');

@@ -60,12 +60,12 @@ const until = async fn => { for (let i=0;i<200;i++) { if(await fn()) return; awa
   await master().click();await observe(5.2,6,'all OFF uses source dimensions');
   await master().click();await observe(6.6,8,'all ON keeps explicit row priority');
   await reload();await observe(6.6,8,'all-ON recovery keeps distinct source dimensions');
-  await editRow(2,'');await until(async()=>(await item()).entries[1].length_input==='');await saved();check((await item()).entries[1].length_input===''&&await copy().isDisabled(),'blank row is saved and blocks output');
-  await reload();check((await item()).entries[1].length_input===''&&await copy().isDisabled(),'blank recovery remains blocked');
-  await editRow(2,'-1');await until(async()=>(await item()).entries[1].length_input==='-1');await saved();check((await item()).entries[1].length_input==='-1'&&await copy().isDisabled(),'invalid row is retained and blocks output');
+  await editRow(2,'');await until(async()=>(await item()).entries[1].length_input==='');await saved();check((await item()).entries[1].length_input===''&&await copy().isEnabled(),'blank row is saved and retains positive order output');
+  await reload();check((await item()).entries[1].length_input===''&&await copy().isEnabled(),'blank recovery retains warning and positive order output');
+  await editRow(2,'-1');await until(async()=>(await item()).entries[1].length_input==='-1');await saved();check((await item()).entries[1].length_input==='-1'&&await copy().isEnabled(),'invalid row is retained and retains positive order output');
   await reload();check((await item()).entries[1].length_input==='-1','invalid row survives reload');
   await editRow(2,'0.7');await observe(6.6,8,'valid completion restores saved row priority');
-  await height().fill('-1');await until(async()=>(await item()).repeat_height_input==='-1');await saved();check(await copy().isDisabled(),'invalid common height blocks output without losing row priority');
+  await height().fill('-1');await until(async()=>(await item()).repeat_height_input==='-1');await saved();check(await copy().isEnabled(),'invalid common height warns without forbidding positive output without losing row priority');
   await reload();check(await height().inputValue()==='-1'&&(await item()).entries[1].repeat_use_row_length===true,'invalid common height and explicit row survive reload');
   await height().fill('3.8');await observe(6.6,8,'valid common height restores supported calculation');
   await ui.view(page,'概要');await ui.edit(page);await ui.mode(page,'実寸計測');await ui.mode(page,'メモ計測');await ui.edit(page);
@@ -76,9 +76,9 @@ const until = async fn => { for (let i=0;i<200;i++) { if(await fn()) return; awa
   await reload();await observe(6.6,8,'row reset priority survives reload');
   if(!(await page.getByText('基本表示中です。解析・編集・保存・発注の基本機能を使えます。数量は元メモと照合してください。',{exact:true}).count())) {
    const ack=page.getByLabel(`${code} の必要量の前提を確認済みにする`,{exact:true});
-   await ack.check();await saved();check(await copy().isEnabled(),'valid explicit quantities can be confirmed');
+   check(await ack.count()===0&&await copy().isEnabled(),'valid explicit quantities need no manual quantity confirmation');await saved();
    await reload();check(await copy().isEnabled(),'same row calculation retains valid confirmation on reload');
-   await height().fill('5.1');await observe(7.8,9,'changed common quantity recomputes');check(await copy().isDisabled(),'changed assumptions invalidate confirmation');
+   await height().fill('5.1');await observe(7.8,9,'changed common quantity recomputes');check(await copy().isEnabled()&&!(await item()).quantity_confirmation,'valid changed assumptions recompute without generating or requiring a quantity confirmation');
    await height().fill('3.8');await observe(6.6,8,'restored common keeps row priority after confirmation invalidation');
   }
   await page.getByRole('button',{name:'↺ 解析結果に戻す',exact:true}).click();await observe(12.6,15,'product reset restores original shared-height choices');

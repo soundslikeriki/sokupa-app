@@ -37,13 +37,13 @@ const item=(m,q,order)=>({product_code:'VS2067',manufacturer:'Synthetic',entries
   assert.equal(await page.getByText('別の解析結果があります',{exact:true}).locator('..').getByRole('button').evaluateAll(nodes=>nodes.every(node=>{const r=node.getBoundingClientRect();return r.x>=0&&r.right<=innerWidth;})),true);checks++;
   if(scenario==='different-job'&&process.env.SOKUPA_SCREENSHOT)await page.screenshot({path:process.env.SOKUPA_SCREENSHOT,fullPage:true});
   let saved=await current();assert.equal(saved.parsed.items[0].order_quantity,46);assert.equal(saved.siteName,'Edited site A');assert.equal(saved.resultJobId,legacy?null:a);assert.equal(seenBCalls,0);checks++;
-  await page.getByRole('button',{name:'今の下書きを続ける',exact:true}).click();await page.getByTitle('タップして式を編集').click();await page.getByLabel('VS2067 1行目の幅数',{exact:true}).fill('3');
+  await page.getByRole('button',{name:'今の編集を続ける',exact:true}).click();await page.getByTitle('タップして式を編集').click();await page.getByLabel('VS2067 1行目の幅数',{exact:true}).fill('3');
   await page.waitForFunction(key=>JSON.parse(localStorage.getItem(key)).parsed.items[0].order_quantity===69,key);assert.equal(seenBCalls,0);checks++;
   await page.reload();await page.getByText('別の解析結果があります',{exact:true}).waitFor();saved=await current();assert.equal(saved.parsed.items[0].order_quantity,69);assert.equal(saved.resultJobId,legacy?null:a);assert.equal(seenBCalls,0);checks++;
   await page.evaluate(({key,scenario,b})=>{window.realWorkspaceSet=Storage.prototype.setItem;Storage.prototype.setItem=function(name,value){if(scenario==='primary-write-failure'?name===key&&JSON.parse(value).resultJobId===b:name.startsWith(key+':recovery:'))throw new DOMException('Synthetic quota','QuotaExceededError');return window.realWorkspaceSet.call(this,name,value);};},{key,scenario,b});
-  await page.getByRole('button',{name:'今の下書きを退避して別の結果を開く',exact:true}).click();await page.getByText('今の下書きを保持しています。退避・切替できませんでした。',{exact:false}).waitFor();
+  await page.getByRole('button',{name:'今の編集を残して選んだ結果を開く',exact:true}).click();await page.getByText('今の下書きを保持しています。退避・切替できませんでした。',{exact:false}).waitFor();
   saved=await current();assert.equal(saved.parsed.items[0].order_quantity,69);assert.equal(saved.siteName,'Edited site A');assert.equal(seenBCalls,0);checks++;
-  await page.evaluate(()=>{Storage.prototype.setItem=window.realWorkspaceSet;});await page.getByRole('button',{name:'今の下書きを退避して別の結果を開く',exact:true}).click();
+  await page.evaluate(()=>{Storage.prototype.setItem=window.realWorkspaceSet;});await page.getByRole('button',{name:'今の編集を残して選んだ結果を開く',exact:true}).click();
   await page.waitForFunction(({key,b})=>JSON.parse(localStorage.getItem(key)).resultJobId===b,{key,b});await page.waitForTimeout(200);
   saved=await current();assert.equal(saved.siteName,'Server site B');assert.equal(saved.parsed.items[0].order_quantity,legacy?23:12);assert.equal(saved.orderDraftItems[0].quantity,9);assert.ok(seenBCalls>=1);checks++;
   const copies=await archived();assert.ok(copies.some(x=>x.draft.siteName==='Edited site A'&&x.draft.parsed.items[0].order_quantity===69&&x.draft.originalParsed.items[0].order_quantity===23));checks++;

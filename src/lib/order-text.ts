@@ -1,3 +1,5 @@
+import { orderOutputIssue } from "./order-output";
+
 export type OrderTextTemplateItem = {
   productCode: unknown;
   quantityText: string;
@@ -38,14 +40,9 @@ export function buildOrderTextTemplate(
 
 export function buildOrderRequestText(items: any[], siteName: string | null | undefined): string {
   const templateItems = items.map((item) => {
-    const orderQty = Number(item?.order_quantity);
-    const totalM = Number(item?.total_m);
-    const quantityText =
-      Number.isFinite(orderQty) && orderQty > 0
-        ? `${orderQty}m`
-        : Number.isFinite(totalM) && totalM > 0
-          ? `${totalM}m`
-          : "数量不明";
+    const issue = orderOutputIssue(item?.product_code, item?.order_quantity, item?.order_quantity_input);
+    if (issue) throw new Error(issue);
+    const quantityText = `${item.order_quantity}m`;
 
     return {
       productCode: item?.product_code,

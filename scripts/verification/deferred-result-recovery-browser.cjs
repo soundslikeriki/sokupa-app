@@ -62,7 +62,7 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
     {
       const f = await fixture(), { page, state } = f;
       await page.getByText('別の解析結果があります', { exact: true }).waitFor(); checks++;
-      await page.getByRole('button', { name: '今の下書きを続ける', exact: true }).click();
+      await page.getByRole('button', { name: '今の編集を続ける', exact: true }).click();
       await page.getByRole('button', { name: '別の結果を確認する', exact: true }).waitFor();
       assert.equal(JSON.parse(await page.evaluate(k => localStorage.getItem(k), cachedA)).resultJobId, a); assert.equal(state.seenA, 0); checks++;
       state.remoteSeen = state.accepted = true;
@@ -82,7 +82,7 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
       state.accepted = true; await page.getByText('Server A: LINE受付済み', { exact: true }).waitFor();
       assert.equal(await page.evaluate(k => localStorage.getItem(k), pointer), a); checks++;
       await page.reload(); await page.getByText('別の解析結果があります', { exact: true }).waitFor();
-      await workspace.mode(page, '発注リスト'); await page.getByRole('button', { name: '今の下書きを退避して別の結果を開く', exact: true }).click();
+      await workspace.mode(page, '発注リスト'); await page.getByRole('button', { name: '今の編集を残して選んだ結果を開く', exact: true }).click();
       await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor(); assert.equal((await f.read()).resultJobId, a); checks++;
       await f.context.close();
     }
@@ -102,7 +102,7 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
       const f = await fixture({ createStatus: 200 }), { page, state } = f;
       await page.getByText('別の解析結果があります', { exact: true }).waitFor();
       await page.evaluate(cachedA => { window.realCacheSet = Storage.prototype.setItem; Storage.prototype.setItem = function(k, v) { if (k === cachedA) throw new DOMException('Synthetic full result cache', 'QuotaExceededError'); return window.realCacheSet.call(this, k, v); }; }, cachedA);
-      await page.getByRole('button', { name: '今の下書きを続ける', exact: true }).click();
+      await page.getByRole('button', { name: '今の編集を続ける', exact: true }).click();
       await page.getByText('後回しにする結果を端末へ保管できませんでした。', { exact: false }).waitFor();
       assert.equal(await page.getByRole('button', { name: '別の結果を確認する', exact: true }).count(), 0); assert.equal(state.seenA, 0); checks++;
       await f.upload(); await page.getByRole('button', { name: '1枚の画像を解析する', exact: true }).click();
@@ -117,7 +117,7 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
       await page.getByRole('button', { name: 'さらに前の結果を探す', exact: true }).click();
       await page.getByRole('button', { name: '保存済み「Server A」の結果を確認', exact: true }).click();
       await page.getByText('別の解析結果があります', { exact: true }).waitFor(); assert.equal((await f.read()).resultJobId, c); assert.equal(state.seenA, 0); checks++;
-      await page.getByRole('button', { name: '今の下書きを退避して別の結果を開く', exact: true }).click();
+      await page.getByRole('button', { name: '今の編集を残して選んだ結果を開く', exact: true }).click();
       await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor(); assert.equal((await f.read()).resultJobId, a); assert.ok(state.historyReads >= 3); checks++;
       assert.ok(await page.evaluate(({ key, c }) => Object.keys(localStorage).filter(k => k.startsWith(key + ':recovery:')).some(k => JSON.parse(localStorage.getItem(k)).resultJobId === c), { key, c })); checks++;
       await f.context.close();

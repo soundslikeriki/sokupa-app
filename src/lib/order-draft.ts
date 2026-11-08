@@ -5,6 +5,7 @@ import type {
   OrderDraftSourceType,
 } from "@/types";
 import { buildOrderTextTemplate } from "@/lib/order-text";
+import { orderOutputIssue } from "@/lib/order-output";
 
 const SOURCE_LABELS: Record<OrderDraftSourceType, string> = {
   dimension: "寸法計算",
@@ -36,6 +37,7 @@ export function createOrderDraftItem(input: OrderDraftItemInput, id: string): Or
     id,
     productCode: normalizeOrderDraftProductCode(input.productCode),
     quantity: sanitizeQuantity(input.quantity),
+    quantityInput: input.quantityInput ?? (!Number.isFinite(input.quantity) || input.quantity < 0 ? String(input.quantity) : undefined),
     unit: String(input.unit || "m").trim() || "m",
     manufacturer: optionalText(input.manufacturer),
     note: optionalText(input.note),
@@ -45,6 +47,8 @@ export function createOrderDraftItem(input: OrderDraftItemInput, id: string): Or
 }
 
 export function dimensionItemToOrderDraftInput(item: MemoProductItem): OrderDraftItemInput {
+  const issue = orderOutputIssue(item.product_code, item.order_quantity, item.order_quantity_input);
+  if (issue) throw new Error(issue);
   return {
     productCode: item.product_code,
     quantity: sanitizeQuantity(item.order_quantity),
@@ -66,6 +70,7 @@ export function areaResultToOrderDraftInput(input: {
   return {
     productCode: input.productCode || "",
     quantity: sanitizeQuantity(input.recommendedMeters),
+    quantityInput: !Number.isFinite(input.recommendedMeters) || input.recommendedMeters < 0 ? String(input.recommendedMeters) : undefined,
     unit: "m",
     manufacturer: optionalText(input.manufacturer),
     note: optionalText(input.note),
@@ -85,6 +90,7 @@ export function manualOrderDraftInput(input: {
   return {
     productCode: input.productCode || "",
     quantity: sanitizeQuantity(input.quantity),
+    quantityInput: !Number.isFinite(input.quantity) || input.quantity < 0 ? String(input.quantity) : undefined,
     unit: input.unit || "m",
     manufacturer: optionalText(input.manufacturer),
     note: optionalText(input.note),
@@ -164,14 +170,15 @@ export function mergeOrderDraftItem(
 export function updateOrderDraftItem(
   items: readonly OrderDraftItem[],
   id: string,
-  patch: Partial<Pick<OrderDraftItem, "productCode" | "quantity" | "unit" | "manufacturer" | "note">>,
+  patch: Partial<Pick<OrderDraftItem, "productCode" | "quantity" | "quantityInput" | "unit" | "manufacturer" | "note">>,
 ): OrderDraftItem[] {
   return items.map((item) => {
     if (item.id !== id) return item;
     return {
       ...item,
       ...patch,
-      quantity: patch.quantity === undefined ? item.quantity : sanitizeQuantity(patch.quantity),
+      quantity: patch.quantity === undefined || !Number.isFinite(patch.quantity) || patch.quantity < 0 ? item.quantity : sanitizeQuantity(patch.quantity),
+      quantityInput: patch.quantity !== undefined && (!Number.isFinite(patch.quantity) || patch.quantity < 0) ? String(patch.quantity) : Object.prototype.hasOwnProperty.call(patch, "quantityInput") ? patch.quantityInput : patch.quantity === undefined ? item.quantityInput : undefined,
       unit: patch.unit === undefined ? item.unit : String(patch.unit).trim() || "m",
       manufacturer:
         patch.manufacturer === undefined ? item.manufacturer : optionalText(patch.manufacturer),
@@ -207,6 +214,10 @@ export function buildOrderDraftText(
   siteName?: string,
   now = new Date(),
 ): string {
+  for (const item of items) {
+    const issue = orderOutputIssue(item.productCode, item.quantity, item.quantityInput, item.unit, true);
+    if (issue) throw new Error(issue);
+  }
   return buildOrderTextTemplate(
     items.map((item) => ({
       productCode: item.productCode,

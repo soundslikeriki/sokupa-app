@@ -98,6 +98,7 @@ export type OrderDraftSourceType = "dimension" | "area" | "manual";
 
 /** 計算結果から切り離した、最終発注用の軽量な下書き */
 export type OrderDraftItem = {
+  quantityInput?: string;
   id: string;
   productCode: string;
   quantity: number;

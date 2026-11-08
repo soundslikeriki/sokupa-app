@@ -9,7 +9,7 @@ const state = window as any;
 state.calls = [];
 window.fetch = async (input, options) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-  state.calls.push({ url, method: options?.method ?? "GET" });
+  state.calls.push({ url, method: options?.method ?? "GET", body: options?.body });
   const id = /^\/api\/analysis-jobs\/([^/]+)$/.exec(url)?.[1];
   if (id) {
     if (state.holdMetadata && id.endsWith("a")) await new Promise(resolve => { state.releaseMetadata = resolve; });

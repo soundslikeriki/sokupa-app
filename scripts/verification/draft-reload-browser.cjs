@@ -25,7 +25,7 @@ const item={product_code:'VS2067',manufacturer:'Synthetic',entries:[{original_fo
   if(legacy){
     await page.getByText('別の解析結果があります',{exact:true}).waitFor();
     const d=await page.evaluate(key=>JSON.parse(localStorage.getItem(key)),key);assert.equal(d.resultJobId,null);assert.equal(d.parsed.items[0].order_quantity,46);
-    await page.getByRole('button',{name:'今の下書きを続ける',exact:true}).click();
+    await page.getByRole('button',{name:'今の編集を続ける',exact:true}).click();
   }else await page.waitForFunction(({key,id})=>{const d=JSON.parse(localStorage.getItem(key));return d.resultJobId===id&&d.parsed.items[0].order_quantity===46;},{key,id});checks++;
   await page.waitForTimeout(3300);assert.equal(await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).inputValue(),'46');checks++;
   const saved=await page.evaluate(key=>JSON.parse(localStorage.getItem(key)),key);assert.equal(saved.parsed.items[0].entries[0].quantity,2);assert.equal(saved.originalParsed.items[0].entries[0].quantity,1);assert.ok(seen>=1);checks++;

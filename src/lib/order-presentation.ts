@@ -28,6 +28,12 @@ export function readingEvidenceGroups(rows: { code: string; reviews: MemoReading
 }
 const normalizeDisplayReviews = (reviews: MemoReadingReview[]) => reviews.map(review => ({ ...review, candidate_formulas: [...review.candidate_formulas] }));
 
+/** Concrete unread notes stay visible without altering stored review flags or exportability. */
+export function readingNoticesForItem(item: { review_reasons?: string[]; entries?: { needs_review?: boolean; review_reason?: string }[] }): string[] {
+  return [...new Set([...(item.review_reasons ?? []), ...(item.entries ?? []).filter(entry => entry.needs_review).map(entry => entry.review_reason)]
+    .filter((reason): reason is string => typeof reason === "string" && concreteReadingReason(reason)))];
+}
+
 export function compactReviewReasons(items: { product_code: string; review_reasons?: string[] }[]) {
   const grouped = new Map<string, Set<string>>();
   for (const item of items) for (const reason of item.review_reasons ?? []) {
@@ -39,10 +45,12 @@ export function compactReviewReasons(items: { product_code: string; review_reaso
 
 export function shortOrderStatus(item: { orderReady: boolean; readingReviews: unknown[]; readingReviewConfirmed: boolean;
   incompleteMeasurements: boolean; incompleteSettings: boolean; order_quantity_input?: string;
+  order_quantity?: number;
   order_mode?: string; pattern_match?: string; canConfirm: boolean; quantityAssessment: { shortage?: string | null } }) {
   if (item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined) return "入力未完了";
+  if (item.order_quantity !== undefined && (!Number.isFinite(item.order_quantity) || item.order_quantity < 0)) return "発注数量を確認";
   if (item.readingReviews.length && !item.readingReviewConfirmed) return "訂正・取消を確認";
   if (item.order_mode === "pattern" && !item.canConfirm) return item.pattern_match === "other" ? "職人さんに確認" : "リピート条件を確認";
   if (item.quantityAssessment.shortage && item.quantityAssessment.shortage !== "0") return "必要量に不足";
-  return item.orderReady ? "確認済み" : "数量を確認";
+  return item.orderReady ? "追加・コピー可能" : "数量を確認";
 }

@@ -32,7 +32,7 @@ function Fixture() {
   return <>
     <WorkspaceModeMenu value={mode} count={0} onChange={setMode} />
     <div hidden={mode !== "dimensions"}>
-      <OrderList key={job} items={items} sourceJobId={state.basic ? null : job} readingReviewSourceJobId={job} basicView={Boolean(state.basic)} onItemsChange={update} />
+      <OrderList key={job} items={items} sourceJobId={state.basic ? null : job} readingReviewSourceJobId={job} basicView={Boolean(state.basic)} onItemsChange={update} onMeaningfulEdit={() => { state.meaningfulEdits = (state.meaningfulEdits ?? 0) + 1; }} />
     </div>
     <p hidden={mode === "dimensions"}>Existing-function mode placeholder in focus-only fixture</p>
   </>;

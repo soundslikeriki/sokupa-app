@@ -64,8 +64,8 @@ const until = async fn => { for(let i=0;i<250;i++){if(await fn())return;await ne
    check((await page.getByLabel('SYN の高さの適用状態',{exact:true}).innerText())==='各行の寸法で計算','row-based default is explicit');
    check((await page.getByTitle('タップして式を編集').first().innerText()).includes('2.7→3.2m'),'input length and repeat result are distinguished briefly');
    if(process.env.SOKUPA_SCREENSHOT_DIR&&!mode&&width===390){fs.mkdirSync(process.env.SOKUPA_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:`${process.env.SOKUPA_SCREENSHOT_DIR}/repeat-normal-390-initial.png`,fullPage:true});}
-   await page.getByLabel('SYN の発注数量を入力',{exact:true}).fill('20');await until(()=>h.read().then(d=>d.parsed.items[0].manual_order_quantity===20));await h.ack().check();await until(()=>h.read().then(d=>Boolean(d.parsed.items[0].quantity_confirmation)));await h.saved();
-   check(await h.copy().isEnabled(),'valid manual amount still requires and accepts explicit confirmation');
+   await page.getByLabel('SYN の発注数量を入力',{exact:true}).fill('20');await until(()=>h.read().then(d=>d.parsed.items[0].manual_order_quantity===20));check(await h.ack().count()===0,'quantity acknowledgement control is removed');await h.saved();
+   check(await h.copy().isEnabled(),'valid manual amount is usable without a quantity confirmation');
    await h.neutralDisclosure();check(await h.copy().isEnabled()&&(await h.read()).parsed.items[0].manual_order_quantity===20,'disclosure leaves confirmed manual quantity usable');
    if(process.env.SOKUPA_SCREENSHOT_DIR&&width===(mode?320:390)){fs.mkdirSync(process.env.SOKUPA_SCREENSHOT_DIR,{recursive:true});await page.screenshot({path:`${process.env.SOKUPA_SCREENSHOT_DIR}/repeat-${mode?'basic':'normal'}-${width}-closed.png`,fullPage:true});}
    await page.getByLabel('SYN のリピート条件を確認',{exact:true}).click();check(await h.details().getAttribute('open')!==null&&await h.details().locator('summary').evaluate(e=>e===document.activeElement),'shortcut opens and focuses actual available controls');
@@ -78,10 +78,10 @@ const until = async fn => { for(let i=0;i<250;i++){if(await fn())return;await ne
   }
   {
    const h=await fixture({...seed,measurement_basis:'unconfirmed',pattern_match:'unconfirmed'}),{page}=h;
-   check(await h.details().getAttribute('open')===null&&await h.copy().isDisabled()&&await h.ack().isDisabled(),'closed conditions never become implicitly confirmed');
+   check(await h.details().getAttribute('open')===null&&await h.copy().isEnabled()&&await h.ack().count()===0,'closed conditions remain unconfirmed without forbidding positive output');
    check((await page.getByLabel('SYN のリピート条件を確認',{exact:true}).innerText()).includes('リピート条件を確認'),'condition blocker has a visible short reason');
    await h.neutralDisclosure();await page.getByLabel('SYN のリピート条件を確認',{exact:true}).click();await page.getByLabel('SYN の寸法区分',{exact:true}).selectOption('trim-included');await page.getByLabel('SYN の柄合わせ方式',{exact:true}).selectOption('straight');
-   check(await h.ack().isEnabled()&&!(await h.ack().isChecked())&&await h.copy().isDisabled(),'explicit condition selection still requires quantity confirmation');await h.finish();
+   check(await h.ack().count()===0&&await h.copy().isEnabled(),'explicit valid condition selection is sufficient; no quantity confirmation is added');await h.finish();
   }
   for(const state of ['off','invalid-off','all-individual','mixed','invalid','reading','blank']) {
    const item=structuredClone(seed);item.repeat_height_m=2.7;
@@ -95,17 +95,17 @@ const until = async fn => { for(let i=0;i<250;i++){if(await fn())return;await ne
    if(state==='off')check(status.includes('リピートOFF')&&!status.includes('を使用'),'saved common height is not called active while OFF');
    else if(state==='invalid-off') {
     const ack=page.getByLabel('SYN のメモと発注数量を確認済みにする',{exact:true});
-    check(status.includes('入力を確認')&&status.includes('リピートOFF・未使用')&&await ack.isEnabled(),'unused invalid common setting is accurately labelled and does not block valid OFF quantities');
-    await ack.check();await h.saved();check(await h.copy().isEnabled(),'OFF source quantity still requires and accepts explicit confirmation');
+    check(status.includes('入力を確認')&&status.includes('リピートOFF・未使用')&&await ack.count()===0,'unused invalid common setting is accurately labelled and does not block valid OFF quantities');
+    await h.saved();check(await h.copy().isEnabled(),'valid OFF source quantity is usable without a quantity acknowledgement');
    }
    else {
     check(await h.details().getAttribute('open')===null,'saved settings do not automatically expand or convert drafts');
     await h.neutralDisclosure();
     if(state==='all-individual')check(status.includes('各行の個別寸法')&&status.includes('未使用'),'all individual rows do not claim shared height is applied');
     if(state==='mixed')check(status.includes('共通高さ 2.7m')&&status.includes('個別寸法1行を優先'),'mixed height policy is visible while closed');
-    if(state==='invalid'){check(status.includes('入力を確認')&&await h.copy().isDisabled(),'invalid hidden common input has visible blocker');await page.getByLabel('SYN のリピート条件を確認',{exact:true}).click();check(await page.getByLabel('SYN の壁の高さ (m)',{exact:true}).inputValue()==='-1','invalid input remains reachable and unchanged');}
-    if(state==='reading')check(await page.getByRole('button',{name:'SYN の確認画面を開く',exact:true}).isVisible()&&await page.getByLabel('SYN の訂正・取消を確認済みにする',{exact:true}).isHidden()&&!(await page.getByLabel('SYN の訂正・取消を確認済みにする',{exact:true}).isChecked())&&await h.copy().isDisabled()&&(await page.getByLabel('SYN のリピート条件を確認',{exact:true}).innerText()).includes('訂正・取消を確認'),'short OCR review entry stays visible while optional long controls are closed and output remains blocked');
-    if(state==='blank')check(await page.getByText('未入力',{exact:true}).isVisible()&&await h.copy().isDisabled()&&(await page.getByLabel('SYN のリピート条件を確認',{exact:true}).innerText()).includes('入力未完了'),'unfinished row remains visible and blocked');
+    if(state==='invalid'){check(status.includes('入力を確認')&&await h.copy().isEnabled(),'invalid hidden common input has visible advisory');await page.getByLabel('SYN のリピート条件を確認',{exact:true}).click();check(await page.getByLabel('SYN の壁の高さ (m)',{exact:true}).inputValue()==='-1','invalid input remains reachable and unchanged');}
+    if(state==='reading')check(await page.getByRole('button',{name:'SYN の確認画面を開く',exact:true}).isVisible()&&await page.getByLabel('SYN の訂正・取消を確認済みにする',{exact:true}).isHidden()&&!(await page.getByLabel('SYN の訂正・取消を確認済みにする',{exact:true}).isChecked())&&await h.copy().isEnabled()&&(await page.getByLabel('SYN のリピート条件を確認',{exact:true}).innerText()).includes('訂正・取消を確認'),'short OCR review entry stays visible while optional long controls are closed and positive output stays available without recording a confirmation');
+    if(state==='blank')check(await page.getByText('未入力',{exact:true}).isVisible()&&await h.copy().isEnabled()&&(await page.getByLabel('SYN のリピート条件を確認',{exact:true}).innerText()).includes('入力未完了'),'unfinished row stays visible while the positive chosen quantity stays exportable');
    }
    check((await h.read()).parsed.items[0].repeat_height_m===2.7,'existing common-height value is never silently cleared');await h.finish();
   }

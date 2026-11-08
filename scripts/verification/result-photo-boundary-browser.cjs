@@ -21,7 +21,7 @@ let checks=0;const check=(v,m)=>{assert.ok(v,m);console.log(`PASS ${++checks}: $
   await page.getByText('指定されたメモ画像が見つかりません。',{exact:false}).waitFor();check(requests.length===0,'invalid source index does not silently substitute another image');
   await page.getByRole('button',{name:'写真 1',exact:true}).click();await page.getByRole('button',{name:'写真を再取得',exact:true}).waitFor();check(requests.length===1,`${failure} yields an explicit current-photo error`);
   status=200;await page.getByRole('button',{name:'写真を再取得',exact:true}).click();await page.getByAltText('解析元の写真 1',{exact:true}).waitFor();check(await page.getByAltText('解析元の写真 1',{exact:true}).getAttribute('src')===`/api/analysis-jobs/${job}/images/0`,'safe retry keeps the displayed owner job');
-  await page.getByRole('button',{name:'数量に戻る',exact:true}).click();check(await page.getByLabel('編集する品番').inputValue()==='PHOTO','photo failure and retry preserve selected editor');await context.close();
+  await ui.view(page,'数量');check(await page.getByLabel('編集する品番').inputValue()==='PHOTO','photo failure and retry preserve selected editor');await context.close();
  }
  }
  console.log(JSON.stringify({checks,realAiCalls:0,realLineSends:0,synthetic:true}));

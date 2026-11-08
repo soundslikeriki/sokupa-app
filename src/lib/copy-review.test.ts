@@ -11,14 +11,16 @@ const context = { sourceJobId: "job-a", siteName: "Synthetic", itemKey: "0:SYN-A
 const apply = (value: CopyReviewInput, ack: NonNullable<ReturnType<typeof prepareCopyReviewConfirmation>>) => planMemoOrder({ ...value,
   readingReviewConfirmation: ack.readingReviewConfirmation, confirmation: ack.quantityConfirmation });
 
-test("one explicit product review replans reading first, then acknowledges the new quantity fingerprint", () => {
+test("optional reading review records only evidence without manufacturing a quantity acknowledgement", () => {
   const review = inspectCopyReview(input, context);
   const naive = planMemoOrder({ ...input, readingReviewConfirmation: review.plan.readingReviewFingerprint, confirmation: review.plan.fingerprint });
-  assert.equal(naive.ready, false);
+  assert.equal(naive.ready, true, "valid output does not depend on recording a source review");
   const ack = prepareCopyReviewConfirmation(input, context, review.token)!;
-  assert.ok(ack); assert.notEqual(ack.quantityConfirmation, review.plan.fingerprint);
+  assert.ok(ack); assert.equal(ack.quantityConfirmation, "");
   assert.equal(apply(input, ack).ready, true);
   assert.equal(apply(input, ack).totalM, 20, "candidates are not added automatically");
+  const legacy = { ...input, confirmation: "old-quantity-flag" };
+  assert.equal(prepareCopyReviewConfirmation(legacy, context, inspectCopyReview(legacy, context).token)!.quantityConfirmation, "old-quantity-flag", "legacy flags are carried unchanged, never converted into a new confirmation");
 });
 
 test("existing valid source and quantity confirmations remain valid and do not alter content identity", () => {
@@ -29,10 +31,10 @@ test("existing valid source and quantity confirmations remain valid and do not a
   assert.deepEqual(prepareCopyReviewConfirmation(confirmed, context, next.token), ack);
 });
 
-test("shortages, incomplete inputs and unsupported pattern conditions cannot be acknowledged into readiness", () => {
+test("invalid output and unfinished calculation conditions cannot create an optional source acknowledgement", () => {
   const pattern = { ...input, item: { ...input.item, order_mode: "pattern" as const }, rows: [{ ...input.rows[0], active: true }], repeatCm: 60 };
   const variants: CopyReviewInput[] = [
-    { ...input, manualQuantity: 1 }, { ...input, rawOrder: "" }, { ...input, rows: [{ ...input.rows[0], lengthInput: "" }] },
+    { ...input, manualQuantity: -1 }, { ...input, rawOrder: "" }, { ...input, rows: [{ ...input.rows[0], lengthInput: "" }] },
     { ...input, rows: [{ ...input.rows[0], quantityInput: "-1" }] },
     { ...input, item: { ...input.item, loss_rate_input: "-1" } }, pattern,
     { ...pattern, basis: "trim-included", match: "other" }, { ...pattern, basis: "repeat-adjusted", match: "straight" },

@@ -23,6 +23,7 @@ import {
   manualOrderDraftInput,
 } from "@/lib/order-draft";
 import type { OrderDraftItem, OrderDraftItemInput, OrderDraftSourceType } from "@/types";
+import { completeOrderQuantity, orderOutputIssue } from "@/lib/order-output";
 
 export type PendingOrderDraftDuplicate = {
   existingId: string;
@@ -35,7 +36,7 @@ type OrderDraftListProps = {
   pendingDuplicate: PendingOrderDraftDuplicate | null;
   onUpdate: (
     id: string,
-    patch: Partial<Pick<OrderDraftItem, "productCode" | "quantity" | "unit">>,
+    patch: Partial<Pick<OrderDraftItem, "productCode" | "quantity" | "quantityInput" | "unit">>,
   ) => void;
   onSiteNameChange: (siteName: string) => void;
   onDelete: (id: string) => void;
@@ -72,7 +73,11 @@ export function OrderDraftList({
   const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
 
   const totals = useMemo(() => calculateOrderDraftTotals(items), [items]);
-  const copyText = useMemo(() => buildOrderDraftText(items, siteName), [items, siteName]);
+  const outputIssues = useMemo(() => items.flatMap(item => {
+    const issue = orderOutputIssue(item.productCode, item.quantity, item.quantityInput, item.unit, true);
+    return issue ? [`${item.productCode || "品番未入力"}：${issue}`] : [];
+  }), [items]);
+  const copyText = useMemo(() => outputIssues.length ? outputIssues.join("\n") : buildOrderDraftText(items, siteName), [items, siteName, outputIssues]);
   const duplicateExisting = pendingDuplicate
     ? items.find((item) => item.id === pendingDuplicate.existingId)
     : undefined;
@@ -84,7 +89,7 @@ export function OrderDraftList({
 
   const submitManual = () => {
     const quantity = Number(manualQuantity);
-    if (!Number.isFinite(quantity) || quantity <= 0) return;
+    if (!completeOrderQuantity(manualQuantity)) return;
     onManualAdd(
       manualOrderDraftInput({
         productCode: manualProductCode,
@@ -99,7 +104,7 @@ export function OrderDraftList({
   };
 
   const copyDraft = async () => {
-    if (items.length === 0) return;
+    if (items.length === 0 || outputIssues.length) return;
     try {
       await navigator.clipboard.writeText(buildOrderDraftText(items, siteName));
       setCopyState("copied");
@@ -236,7 +241,7 @@ export function OrderDraftList({
                 </div>
               </div>
             </div>
-            <Button type="button" className="min-h-11 w-full gap-2 sm:w-auto" disabled={!Number.isFinite(Number(manualQuantity)) || Number(manualQuantity) <= 0} onClick={submitManual}>
+            <Button type="button" className="min-h-11 w-full gap-2 sm:w-auto" disabled={!completeOrderQuantity(manualQuantity)} onClick={submitManual}>
               <Plus className="h-4 w-4" />
               発注リストに追加
             </Button>
@@ -248,13 +253,14 @@ export function OrderDraftList({
         <CardHeader className="px-3 pb-2 pt-4 sm:px-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle className="text-sm font-bold">現場名・日時を含めてコピーされます</CardTitle>
-            <Button type="button" className="min-h-11 gap-2 bg-violet-600 font-bold hover:bg-violet-700" disabled={items.length === 0} onClick={() => void copyDraft()}>
+            <Button type="button" className="min-h-11 gap-2 bg-violet-600 font-bold hover:bg-violet-700" disabled={items.length === 0 || outputIssues.length > 0} onClick={() => void copyDraft()}>
               {copyState === "copied" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               {copyState === "copied" ? "コピーしました" : "発注リストをコピー"}
             </Button>
           </div>
         </CardHeader>
         <CardContent className="px-3 pb-4 sm:px-5">
+          {outputIssues.length ? <p role="alert" className="text-xs text-amber-800 dark:text-amber-300">出力前に品番・発注数量の入力を完成してください。</p> : null}
           <pre className="whitespace-pre-wrap rounded-lg border border-black/5 bg-white/80 p-3 text-xs leading-relaxed dark:border-white/5 dark:bg-black/30 sm:text-sm">{copyText}</pre>
           {copyState === "error" ? <p className="mt-2 text-xs font-semibold text-destructive">コピーできませんでした。ブラウザの権限をご確認ください。</p> : null}
         </CardContent>
@@ -282,7 +288,7 @@ export function OrderDraftList({
               <div className="grid grid-cols-[minmax(0,1fr)_5.5rem] gap-2">
                 <div>
                   <label className="mb-1 block text-[11px] font-bold text-muted-foreground">数量</label>
-                  <Input type="number" min="0" step="0.01" inputMode="decimal" value={item.quantity} onChange={(event) => onUpdate(item.id, { quantity: Number(event.target.value) })} className="h-11 bg-white text-lg font-bold tabular-nums dark:bg-black" aria-label={`${item.productCode || "品番未入力"}の数量`} />
+                  <Input type="number" min="0" step="0.01" inputMode="decimal" value={item.quantityInput ?? item.quantity} onChange={(event) => { const raw = event.target.value; onUpdate(item.id, completeOrderQuantity(raw, true) ? { quantity: Number(raw), quantityInput: undefined } : { quantityInput: raw }); }} className="h-11 bg-white text-lg font-bold tabular-nums dark:bg-black" aria-label={`${item.productCode || "品番未入力"}の数量`} />
                 </div>
                 <div>
                   <label className="mb-1 block text-[11px] font-bold text-muted-foreground">単位</label>

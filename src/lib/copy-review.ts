@@ -13,15 +13,16 @@ export function inspectCopyReview(input: CopyReviewInput, context: CopyReviewCon
     mode: plan.mode, allowance: input.item.memo_allowance, quantity: plan.orderQuantity,
     manual: plan.manual, rawOrder: input.rawOrder, lossRate: input.lossRate,
     rawSettings: [input.item.loss_rate_input, input.item.repeat_cm_input, input.item.repeat_height_input] });
-  // A combined explicit acknowledgement is planned in order: source review, then quantity.
+  // Only real reading evidence needs an explicit acknowledgement. Never manufacture
+  // a legacy quantity-confirmation flag merely because the numeric comparison passes.
   const readingConfirmation = plan.readingReviewConfirmed
     ? input.readingReviewConfirmation ?? input.item.reading_review_confirmation
     : plan.canConfirmReadingReview ? plan.readingReviewFingerprint : undefined;
   const reviewed = planMemoOrder({ ...input, readingReviewConfirmation: readingConfirmation });
-  const proposed = planMemoOrder({ ...input, readingReviewConfirmation: readingConfirmation, confirmation: reviewed.fingerprint });
-  const confirmable = reviewed.canConfirm && proposed.ready;
-  return { token, plan, confirmable, blockedMessage: confirmable ? "" : proposed.assessment.message,
-    acknowledgement: { readingReviewConfirmation: readingConfirmation, quantityConfirmation: reviewed.fingerprint } };
+  const confirmable = reviewed.canConfirm && reviewed.ready;
+  return { token, plan, confirmable, blockedMessage: confirmable ? "" : reviewed.assessment.message,
+    acknowledgement: { readingReviewConfirmation: readingConfirmation,
+      quantityConfirmation: input.confirmation ?? input.item.quantity_confirmation ?? "" } };
 }
 
 /** Never accept a checkbox for an earlier product/candidate/photo/quantity snapshot. */

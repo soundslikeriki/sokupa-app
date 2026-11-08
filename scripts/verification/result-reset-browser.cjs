@@ -3,6 +3,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),assert=req
 const ui=require('./result-workspace-helpers.cjs');
 const {resumeResultDraft,resetResultDraft,RESULT_DAY_MS:DAY}=require('../../src/lib/result-session.ts');
 const {inspectCopyReview,prepareCopyReviewConfirmation}=require('../../src/lib/copy-review.ts');
+const {planMemoOrder}=require('../../src/lib/order-planning.ts');
 const bases=[process.env.SOKUPA_TEST_URL,process.env.SOKUPA_BASIC_URL];for(const base of bases)assert.equal(new URL(base).hostname,'127.0.0.1');
 const A='00000000-0000-4000-8000-00000000000a',B='00000000-0000-4000-8000-00000000000b';
 const now=Date.now(),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=','base64');
@@ -12,7 +13,8 @@ const make=()=>{
  const item={product_code:'ANON1',manufacturer:'Synthetic',entries:[{source_row_id:'r1',source_image_index:0,source_entry_index:0,original_formula:'20x1',length_m:20,quantity:1,subtotal_m:20}],total_m:20,order_quantity:30,manual_order_quantity:30,reading_reviews:[{reason:'Synthetic correction candidate',candidate_formulas:['1x2'],source_image_index:0}]};
  const input={item,rows:[{id:'r1',length:20,quantity:1,active:false}],repeatCm:null,basis:'unconfirmed',match:'unconfirmed',lossRate:15,manualQuantity:30};
  const context={sourceJobId:A,siteName:'Result A',itemKey:'0:ANON1'},review=inspectCopyReview(input,context),ack=prepareCopyReviewConfirmation(input,context,review.token);
- item.quantity_confirmation=ack.quantityConfirmation;item.reading_review_confirmation=ack.readingReviewConfirmation;
+ // Seed a real old-format quantity flag to test preservation; new UI never creates it.
+ item.quantity_confirmation=planMemoOrder({...input,readingReviewConfirmation:ack.readingReviewConfirmation}).fingerprint;item.reading_review_confirmation=ack.readingReviewConfirmation;
  return {version:1,siteName:'Next B',resultSiteName:'Result A',resultJobId:A,parsed:{items:[item]},originalParsed:{items:[{...structuredClone(item),order_quantity:23,manual_order_quantity:undefined}]},orderDraftItems:[{id:'keep',productCode:'KEEP',quantity:7,unit:'m',sourceType:'manual',sourceLabel:'Synthetic'}]};
 };
 (async()=>{const browser=await chromium.launch({headless:true,executablePath:'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});try{
@@ -42,7 +44,7 @@ const make=()=>{
   page.on('dialog',async dialog=>{if(dialog.type()==='confirm'){dialogs.push(dialog.message());if(choice)await dialog.accept();else await dialog.dismiss();}else await dialog.dismiss();});page.on('pageerror',e=>errors.push(e.message));
   const read=()=>page.evaluate(k=>JSON.parse(localStorage.getItem(k)),key);
   const bytes=()=>page.evaluate(k=>localStorage.getItem(k),key);
-  const saved=async()=>{await wait(()=>page.getByLabel('結果の保存状態').innerText().then(s=>s.includes('保存済み')));await page.evaluate(()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r))));};
+  const saved=async()=>{let previous='',stable=0;await wait(async()=>{const raw=await bytes();stable=raw===previous?stable+1:0;previous=raw;return stable>=3&&(await page.getByLabel('結果の保存状態').innerText()).includes('保存済み');});};
   const photo=async()=>{await ui.view(page,'メモ画像');};
   const inputSite=()=>page.getByRole('region',{name:'メモ計測',exact:true}).getByLabel('現場名（任意）',{exact:true});
   const reset=()=>page.getByRole('button',{name:'この結果の表示をリセット',exact:true});
@@ -102,15 +104,16 @@ const make=()=>{
  // Regression: ...current must not carry A's result name into explicitly opened B.
  for(const siteB of['Result B',''])for(const path of['manual','age']){
   const h=await fixture(bases[0],{pendingB:true,siteB});
-  await h.page.getByRole('button',{name:'今の下書きを退避して別の結果を開く',exact:true}).click();await h.page.getByLabel('ANONB の一覧発注数量',{exact:true}).waitFor();await h.saved();
+  await h.page.getByRole('button',{name:'今の編集を残して選んだ結果を開く',exact:true}).click();await h.page.getByLabel('ANONB の一覧発注数量',{exact:true}).waitFor();await h.saved();
   check((await h.read()).resultJobId===B&&(await h.read()).resultSiteName===siteB,'pending B has its own exact source name, including no-name, never A');
   await ui.disclosure(h.page,'画像・現場名');await h.inputSite().fill('Next C');await h.saved();
   if(path==='manual'){await h.photo();await h.reset().click();await h.saved();}
   else {await h.page.evaluate(value=>window.setResetClock(value),now+2*DAY);await h.page.reload();await h.saved();}
   check((await h.read()).parsed===null&&(await h.read()).resultSession.undo.resultJobId===B&&(await h.read()).resultSession.undo.resultSiteName===siteB,`${path}: B alone is retained as previous1 with its own name`);
-  await h.photo();await h.restore().click();await h.saved();
+  await h.photo();await h.restore().click();await wait(()=>h.read().then(d=>d.resultJobId===B&&d.parsed!==null));await h.saved();
+  if((await h.read()).resultSiteName!==siteB||(await h.read()).siteName!=='Next C')console.log('SYNTHETIC_SITE_DIAGNOSTIC',JSON.stringify({path,siteB,stored:await h.read()}));
   check((await h.read()).resultJobId===B&&(await h.read()).resultSiteName===siteB&&(await h.read()).siteName==='Next C',`${path}: restore B preserves next-input C and does not revive A's name`);
-  await ui.view(h.page,'概要');await h.page.getByRole('button',{name:'確認してコピー',exact:true}).click();await h.page.getByRole('dialog').getByLabel('ANONB の数量を確認した',{exact:true}).check();await h.page.getByRole('button',{name:'確認を反映',exact:true}).click();await h.saved();await h.page.getByRole('button',{name:'発注用テキストをコピー',exact:true}).click();
+  await ui.view(h.page,'概要');await h.page.getByRole('button',{name:'確認してコピー',exact:true}).click();await h.page.getByRole('button',{name:'発注用テキストをコピー',exact:true}).click();
   const copied=await h.page.evaluate(()=>window.copied.at(-1));check(copied.includes('ANONB')&&!copied.includes('Result A')&&!copied.includes('Next C')&&(!siteB||copied.includes(siteB)),`${path}: B copy is bound to B or unnamed, never A/C`);
   check(h.errors.length===0&&h.unexpected.length===0,'pending-result regression has no runtime or unexpected API errors');await h.context.close();
  }
@@ -128,8 +131,8 @@ const make=()=>{
  }
  {
   const h=await fixture(bases[0]);await h.photo();await h.page.evaluate(key=>{window.holdingResetLock=false;void navigator.locks.request(`${key}:write`,()=>new Promise(resolve=>{window.holdingResetLock=true;window.releaseResetLock=resolve;}));},h.key);await wait(()=>h.page.evaluate(()=>window.holdingResetLock));
-  await h.reset().click();await h.page.getByLabel('表示中の結果の現場名',{exact:true}).fill('Edited while waiting');await h.page.evaluate(()=>window.releaseResetLock());await h.page.getByRole('heading',{name:'エラー',exact:true}).waitFor();
-  check((await h.read()).parsed!==null&&(await h.read()).resultSession.undo===null,'queued-lock content change prevents stale reset without erasing the current result');check(await h.page.getByLabel('表示中の結果の現場名',{exact:true}).inputValue()==='Edited while waiting','edit made during queued operation remains visible');await h.context.close();
+  await h.reset().click();await ui.view(h.page,'概要');await h.page.getByRole('button',{name:'ANON1 の発注数量を1m増やす',exact:true}).click();await h.page.evaluate(()=>window.releaseResetLock());await h.page.getByRole('heading',{name:'エラー',exact:true}).waitFor();
+  check((await h.read()).parsed!==null&&(await h.read()).resultSession.undo===null,'queued-lock content change prevents stale reset without erasing the current result');check((await h.read()).parsed.items[0].order_quantity===31,'quantity edit made during queued operation remains visible');await h.context.close();
  }
  {
   const h=await fixture(bases[0]);await h.photo();await h.reset().click();await h.saved();await ui.disclosure(h.page,'画像・現場名');await h.page.locator('input[type=file]').setInputFiles({name:'synthetic-B.png',mimeType:'image/png',buffer:png});await h.page.getByAltText('プレビュー 1',{exact:true}).waitFor();

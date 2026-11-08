@@ -183,7 +183,7 @@ test("copy text handles empty, single, multiple, edited, and deleted lists", () 
 
 test("copy text uses the legacy template while totals keep mixed units separate", () => {
   const items = [
-    draft({ productCode: "", quantity: 10 }),
+    draft({ productCode: "SYNTHETIC", quantity: 10 }),
     draft({ id: "draft-2", productCode: "ROLL1", quantity: 2, unit: "本" }),
   ];
   assert.deepEqual(calculateOrderDraftTotals(items), [
@@ -193,7 +193,28 @@ test("copy text uses the legacy template while totals keep mixed units separate"
   const text = buildOrderDraftText(items, "現場B", new Date("2026-08-20T02:34:00Z"));
   assert.match(text, /現場名：現場B/);
   assert.match(text, /日時：2026年8月20日 11:34/);
-  assert.match(text, /・品番：不明 \/ 数量：10m/);
+  assert.match(text, /・品番：SYNTHETIC \/ 数量：10m/);
   assert.match(text, /・品番：ROLL1 \/ 数量：2本/);
   assert.doesNotMatch(text, /合計：/);
+});
+
+
+test("incomplete and invalid final output is never replaced by zero or a measured total", () => {
+  for (const quantity of [NaN, Infinity, -1]) {
+    assert.throws(() => dimensionItemToOrderDraftInput({ ...dimensionSource, order_quantity: quantity }));
+    const created = createOrderDraftItem(manualOrderDraftInput({ productCode: "SYN", quantity }), "bad");
+    assert.ok(created.quantityInput !== undefined);
+    assert.throws(() => buildOrderDraftText([created]));
+    const edited = updateOrderDraftItem([draft()], "draft-1", { quantity })[0];
+    assert.equal(edited.quantity, 20); assert.ok(edited.quantityInput !== undefined);
+    assert.throws(() => buildOrderDraftText([edited]));
+  }
+  for (const quantityInput of ["", "-1", "NaN", "1."]) {
+    const edited = updateOrderDraftItem([draft()], "draft-1", { quantityInput })[0];
+    assert.equal(edited.quantity, 20); assert.throws(() => buildOrderDraftText([edited]));
+  }
+  assert.throws(() => buildOrderDraftText([draft({ productCode: "" })]));
+  assert.throws(() => buildOrderDraftText([draft({ productCode: "A\nB" })]));
+  assert.match(buildOrderDraftText([draft({ quantity: 0 })]), /数量：0m/);
+  assert.equal(updateOrderDraftItem([draft({ quantityInput: "" })], "draft-1", { quantity: 23 })[0].quantityInput, undefined);
 });

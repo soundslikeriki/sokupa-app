@@ -7,10 +7,10 @@ import { inspectCopyReview, prepareCopyReviewConfirmation, type CopyReviewInput 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ListPlus, ImageIcon } from "lucide-react";
+import { CopyIcon, CheckCircle2, AlertTriangle, Layers, Edit3, Undo2, Globe, Plus, Trash2, Minus, ChevronDown, ChevronUp, ChevronsDown, ChevronsUp, ListPlus, ImageIcon, Scale } from "lucide-react";
 import { roundMeters } from "@/lib/memo-calculation";
 import { orderModeForItem, planMemoOrder } from "@/lib/order-planning";
-import { compactReadingReviews, compactReviewReasons, concreteReadingReason, shortOrderStatus } from "@/lib/order-presentation";
+import { compactReadingReviews, compactReviewReasons, concreteReadingReason, readingNoticesForItem, shortOrderStatus } from "@/lib/order-presentation";
 import { numericalOrderStatus } from "@/lib/order-quantity-status";
 import { findOriginalMemoEntry } from "@/lib/original-memo-entry";
 import { calculateOrderQuantity, DEFAULT_LOSS_RATE_PERCENT } from "@/lib/calc-logic";
@@ -28,6 +28,14 @@ import type { MemoProductItem, MemoReadingReview, OrderDraftItemInput } from "@/
 
 const MFG_ORDER = ["サンゲツ", "リリカラ", "ルノン", "トキワ", "シンコール", "東リ", "エービーシー商会", "不明", "その他"] as const;
 const DEFAULT_WALLPAPER_WIDTH_M = 0.92;
+
+// Duplicate SKUs remain separate materials. This private key never enters
+// saved results, correction payloads or copied order text.
+function itemEditorKey(items: MemoProductItem[], index: number): string {
+  const code = items[index].product_code;
+  return items.some((item, other) => other !== index && item.product_code === code) ? `\u0000material:${index}:${code}` : code;
+}
+
 
 function groupLabel(manufacturer: string): (typeof MFG_ORDER)[number] {
   const m = manufacturer.trim();
@@ -117,12 +125,21 @@ function formatSummaryNumber(value: number, maximumFractionDigits = 2): string {
   });
 }
 
-function orderCheckMessage(item: { orderReady: boolean; quantityAssessment: { message: string } }, basicView: boolean): string {
-  return basicView && item.orderReady ? "確認済み：入力した発注数量を元メモ・写真と照合してください。" : item.quantityAssessment.message;
+function orderCheckMessage(item: { quantityAssessment: { message: string } }): string {
+  return item.quantityAssessment.message;
 }
 
 function orderCheckColor(ready: boolean, basicView: boolean): string {
   return ready ? basicView ? "text-muted-foreground" : "text-emerald-700 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300";
+}
+
+function numericalStatusForItem(item: { order_quantity: number; order_quantity_input?: string; incompleteMeasurements: boolean;
+  order_mode?: string; repeat_cm_input?: string; repeat_height_input?: string; pattern_match?: string;
+  comparison: { strict: { totals: { selectedM: string | null } }; premisesAvailable: boolean } }) {
+  return numericalOrderStatus({ ordered: item.order_quantity, required: item.comparison.strict.totals.selectedM,
+    inputsComplete: !item.incompleteMeasurements && item.order_quantity_input === undefined && Number.isFinite(item.order_quantity) && item.order_quantity >= 0,
+    conditionsKnown: item.order_mode === "memo" || item.comparison.premisesAvailable && item.pattern_match !== "other"
+      && item.repeat_cm_input === undefined && item.repeat_height_input === undefined });
 }
 
 function readingReviewImageIndexes(item: { readingReviews: MemoReadingReview[]; entries: MemoProductItem["entries"] }): number[] {
@@ -178,6 +195,10 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     window.requestAnimationFrame(() => {
       const panel = resultRoot.current?.querySelector<HTMLElement>(`[data-result-panel="${view}"]`);
       if (panel && panel.getClientRects().length && !document.activeElement?.matches("input,select,textarea")) { panel.focus({ preventScroll: true }); panel.scrollIntoView({ block: "start" }); }
+      if (view === "edit") {
+        const material = Array.from(panel?.querySelectorAll<HTMLElement>("[data-material-value]") ?? []).find(element => element.dataset.materialValue === code);
+        material?.scrollIntoView({ block: "start" });
+      }
     });
   };
   const openPhoto = (index: number) => { setPhotoError(false); setPhotoIndex(index); selectView("photo"); };
@@ -258,13 +279,14 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const [orderQuantityInputs, setOrderQuantityInputs] = useState<Record<string,string | undefined>>({});
   const [manualOrderQuantities, setManualOrderQuantities] = useState<Record<string, number>>({});
   const [collapsedCodes, setCollapsedCodes] = useState<Set<string>>(() => new Set());
+  const [collapsedRepeatControls, setCollapsedRepeatControls] = useState<Set<string>>(() => new Set());
   const newEntryInputsRef = useRef<Record<string, NewEntryInput>>({});
   const lastSyncedItemsRef = useRef("");
   const originalItemsRef = useRef<MemoProductItem[]>([]);
   const previousHadItemsRef = useRef(false);
 
-  const getLossRateForItem = (item: MemoProductItem): number => {
-    const local = lossRates[item.product_code];
+  const getLossRateForItem = (item: MemoProductItem, editorKey = item.product_code): number => {
+    const local = lossRates[editorKey];
     if (typeof local === "number" && Number.isFinite(local) && local >= 0) return local;
     if (typeof item.loss_rate_percent === "number" && Number.isFinite(item.loss_rate_percent) && item.loss_rate_percent >= 0) {
       return item.loss_rate_percent;
@@ -295,7 +317,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   };
 
   const canonicalizeDerivedItem = (item: any): MemoProductItem => {
-    const { copyReviewInput, derivedEntries, override_active, rActive, total_quantity, comparison, comparisonConfirmed, quantityAssessment, incompleteMeasurements, incompleteSettings, orderReady, confirmationFingerprint, canConfirm, automaticQuantity, manualQuantityActive, allowanceIncluded, readingReviews, readingReviewFingerprint, readingReviewConfirmed, canConfirmReadingReview, ...base } = item;
+    const { editorKey, copyReviewInput, derivedEntries, override_active, rActive, total_quantity, comparison, comparisonConfirmed, quantityAssessment, incompleteMeasurements, incompleteSettings, orderReady, outputIssue, confirmationFingerprint, canConfirm, automaticQuantity, manualQuantityActive, allowanceIncluded, readingReviews, readingReviewFingerprint, readingReviewConfirmed, canConfirmReadingReview, ...base } = item;
     return {
       ...base,
       entries: (derivedEntries ?? item.entries ?? []).map((entry: any) => {
@@ -314,11 +336,23 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     };
   };
 
+  const findItem = (key: string) => items.find((_, index) => itemEditorKey(items, index) === key);
+  const applyItemsChange = (nextItems: MemoProductItem[]) => {
+    const rekey = <T,>(values: Record<string, T>): Record<string, T> => Object.fromEntries(items.flatMap((_, index) => {
+      const oldKey = itemEditorKey(items, index);
+      return nextItems[index] && Object.prototype.hasOwnProperty.call(values, oldKey) ? [[itemEditorKey(nextItems, index), values[oldKey]]] : [];
+    }));
+    setOverrides(rekey); setEditingCode(rekey); setLossRates(rekey);
+    setManualOrderQuantities(rekey); setOrderQuantityInputs(rekey); setNewEntryInputs(rekey);
+    newEntryInputsRef.current = rekey(newEntryInputsRef.current);
+    onItemsChange?.(nextItems);
+  };
+
   const beginEditCode = (code: string) => {
     completedCodeEditsRef.current.delete(code);
     setEditingCode((prev) => ({
       ...prev,
-      [code]: { open: true, value: code },
+      [code]: { open: true, value: findItem(code)?.product_code ?? "" },
     }));
   };
 
@@ -357,7 +391,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   }, [items, sourceItems]);
 
   useEffect(() => {
-    const productCodes = items.map((item) => item.product_code);
+    const productCodes = items.map((_, index) => String(index));
     setCollapsedCodes((current) => {
       const next = pruneCollapsedCodes(current, productCodes);
       if (next.size === current.size && Array.from(next).every((code) => current.has(code))) {
@@ -367,29 +401,24 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     });
   }, [items]);
 
-  const saveCodeEdit = async (fromCode: string) => {
-    if (completedCodeEditsRef.current.has(fromCode)) return;
-    completedCodeEditsRef.current.add(fromCode);
-    const next = editingCode[fromCode];
+  const saveCodeEdit = async (fromKey: string) => {
+    const targetIndex = items.findIndex((_, index) => itemEditorKey(items, index) === fromKey);
+    if (targetIndex < 0) return;
+    const fromCode = items[targetIndex].product_code;
+    if (completedCodeEditsRef.current.has(fromKey)) return;
+    completedCodeEditsRef.current.add(fromKey);
+    const next = editingCode[fromKey];
     const toCode = (next?.value ?? "").trim().toUpperCase().replace(/[\s\-]+/g, "");
-    setEditingCode((prev) => ({ ...prev, [fromCode]: { open: false, value: toCode || fromCode } }));
+    setEditingCode((prev) => ({ ...prev, [fromKey]: { open: false, value: toCode || fromCode } }));
     if (!toCode || toCode === fromCode) return;
     if (!onItemsChange) return;
     onMeaningfulEdit?.();
 
-    const before = items.find((i) => i.product_code === fromCode);
-    const updatedItems = items.map((i) =>
-      i.product_code === fromCode ? { ...i, product_code: toCode, quantity_confirmation: "", reading_review_confirmation: "" } : i,
-    );
-    setSelectedProductCode(toCode);
-    setNewEntryInputs(previous => {
-      const next = { ...previous };
-      // A code may be edited before any add-row draft exists. Never create an
-      // undefined draft: reset safety inspects every actual draft's fields.
-      if (previous[fromCode]) next[toCode] = previous[fromCode];
-      delete next[fromCode]; newEntryInputsRef.current = next; return next;
-    });
-    onItemsChange(updatedItems);
+    const before = items[targetIndex];
+    const updatedItems = items.map((item, index) => index === targetIndex
+      ? { ...item, product_code: toCode, quantity_confirmation: "", reading_review_confirmation: "" } : item);
+    setSelectedProductCode(updatedItems.findIndex(item => item.product_code === toCode) === targetIndex ? toCode : `${toCode}::${targetIndex}`);
+    applyItemsChange(updatedItems);
 
     // DBへ補正ログを保存（失敗してもUIは優先）
     try {
@@ -486,8 +515,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     clearManualOrderQuantity(productCode);
 
     const sourceItems = derivedItems.length > 0 ? derivedItems.map(canonicalizeDerivedItem) : items;
-    const updatedItems = sourceItems.map((item) => {
-      if (item.product_code !== productCode) return item;
+    const updatedItems = sourceItems.map((item, index) => {
+      if (itemEditorKey(sourceItems, index) !== productCode) return item;
 
       const nextEntry = {
         original_formula: `${length} x ${quantity}`,
@@ -499,7 +528,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       return recalcItem({
         ...item,
         entries: [...(item.entries ?? []), nextEntry],
-      });
+      }, getLossRateForItem(item, productCode));
     });
 
     newEntryInputsRef.current = {
@@ -510,7 +539,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       ...prev,
       [productCode]: { length: "", quantity: "" },
     }));
-    onItemsChange(updatedItems);
+    applyItemsChange(updatedItems);
   };
 
   const handleDeleteEntry = (productCode: string, entryIndex: number) => {
@@ -519,12 +548,12 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     clearManualOrderQuantity(productCode);
 
     const sourceItems = derivedItems.length > 0 ? derivedItems.map(canonicalizeDerivedItem) : items;
-    const updatedItems = sourceItems.map((item) => {
-      if (item.product_code !== productCode) return item;
+    const updatedItems = sourceItems.map((item, index) => {
+      if (itemEditorKey(sourceItems, index) !== productCode) return item;
       return recalcItem({
         ...item,
         entries: (item.entries ?? []).filter((_, idx) => idx !== entryIndex),
-      });
+      }, getLossRateForItem(item, productCode));
     });
 
     setOverrides((prev) => {
@@ -554,14 +583,14 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       };
     });
 
-    onItemsChange(updatedItems);
+    applyItemsChange(updatedItems);
   };
 
   const handleToggleEntryRepeat = (productCode: string, entryIndex: number) => {
     clearManualOrderQuantity(productCode);
     setOverrides((prev) => {
       const prevOvr = prev[productCode] || {};
-      const item = items.find(item => item.product_code === productCode)!;
+      const item = findItem(productCode)!;
       const enabled = (prevOvr.orderMode ?? orderModeForItem(item)) === "pattern";
       const prevRepeats = Object.fromEntries(item.entries.map((entry, index) => [index, enabled && (prevOvr.entryRepeatActive?.[index] ?? entry.repeat_enabled ?? false)]));
       const nextRepeats = { ...prevRepeats, [entryIndex]: !prevRepeats[entryIndex] };
@@ -617,8 +646,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
   const handleResetEntry = (productCode: string, entryIndex: number) => {
     const original = findOriginalMemoEntry(
-      originalItemsRef.current.find((item) => item.product_code === productCode)?.entries ?? [],
-      items.find((item) => item.product_code === productCode)?.entries[entryIndex],
+      originalItemsRef.current[items.findIndex((_, index) => itemEditorKey(items, index) === productCode)]?.entries ?? [],
+      findItem(productCode)?.entries[entryIndex],
     );
     if (!original) {
       setRowResetError("元の行を特定できませんでした。写真や元メモを確認し、長さと幅数を入力してください。");
@@ -645,7 +674,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
   const handleResetProductToOriginal = (productCode: string) => {
     if (!onItemsChange) return;
-    const original = originalItemsRef.current.find((item) => item.product_code === productCode);
+    const targetIndex = items.findIndex((_, index) => itemEditorKey(items, index) === productCode);
+    const original = originalItemsRef.current[targetIndex];
     if (!original) return;
 
     clearManualOrderQuantity(productCode);
@@ -669,9 +699,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     delete newEntryInputsRef.current[productCode];
     setOrderQuantityInputs(previous => ({ ...previous, [productCode]: undefined }));
 
-    onItemsChange(
-      items.map((item) => (item.product_code === productCode ? { ...cloneMemoProductItem(original), quantity_confirmation: "", reading_review_confirmation: "" } : item)),
-    );
+    applyItemsChange(items.map((item, index) => index === targetIndex ? { ...cloneMemoProductItem(original), quantity_confirmation: "", reading_review_confirmation: "" } : item));
   };
 
   const handleSetOrderQuantity = (productCode: string, value: number) => {
@@ -696,19 +724,20 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
   const handleAdjustOrderQuantity = (productCode: string, delta: number) => {
     onMeaningfulEdit?.();
-    const currentItem = derivedItems.find((item) => item.product_code === productCode);
+    const currentItem = derivedItems.find((item) => item.editorKey === productCode);
     const currentQuantity = toFiniteNumber(currentItem?.order_quantity);
     handleSetOrderQuantity(productCode, currentQuantity + delta);
   };
 
   const derivedItems = useMemo(() => {
-    return items.map((item) => {
-      const ovr = overrides[item.product_code] || {};
+    return items.map((item, itemIndex) => {
+      const editorKey = itemEditorKey(items, itemIndex);
+      const ovr = overrides[editorKey] || {};
       const eqtys = ovr.entryQtys || {};
       const elengths = ovr.entryLengths || {};
       const eRepeats = ovr.entryRepeatActive || {};
       const lossRate = (() => {
-        const local = lossRates[item.product_code];
+        const local = lossRates[editorKey];
         if (typeof local === "number" && Number.isFinite(local) && local >= 0) return local;
         if (typeof item.loss_rate_percent === "number" && Number.isFinite(item.loss_rate_percent) && item.loss_rate_percent >= 0) {
           return item.loss_rate_percent;
@@ -721,7 +750,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       const mode = ovr.orderMode ?? orderModeForItem(item);
       const memoAllowance = ovr.memoAllowance ?? item.memo_allowance ?? "add";
       const rawSetting = (local: number | string | undefined, saved: string | undefined) => typeof local === "string" ? local || undefined : typeof local === "number" ? undefined : saved;
-      const lossInput = typeof lossRates[item.product_code] === "string" ? lossRates[item.product_code] as string : typeof lossRates[item.product_code] === "number" ? undefined : item.loss_rate_input;
+      const lossInput = typeof lossRates[editorKey] === "string" ? lossRates[editorKey] as string : typeof lossRates[editorKey] === "number" ? undefined : item.loss_rate_input;
       const planningItem = { ...item, order_mode: mode, memo_allowance: memoAllowance, loss_rate_input: lossInput,
         pattern_rows_configured: ovr.patternRowsConfigured ?? item.pattern_rows_configured ?? mode === "pattern",
         repeat_cm_input: rawSetting(ovr.repeatCm, item.repeat_cm_input), repeat_height_input: rawSetting(ovr.heightM, item.repeat_height_input) };
@@ -742,10 +771,10 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
           lengthInput: typeof elengths[idx] === "string" ? elengths[idx] as string : typeof elengths[idx] === "number" ? undefined : e.length_input,
           quantityInput: typeof eqtys[idx] === "string" ? eqtys[idx] as string : typeof eqtys[idx] === "number" ? undefined : e.quantity_input };
       });
-      const manualOrderQuantity = Object.prototype.hasOwnProperty.call(manualOrderQuantities, item.product_code) ? manualOrderQuantities[item.product_code] : item.manual_order_quantity;
+      const manualOrderQuantity = Object.prototype.hasOwnProperty.call(manualOrderQuantities, editorKey) ? (Number.isFinite(manualOrderQuantities[editorKey]) ? manualOrderQuantities[editorKey] : undefined) : item.manual_order_quantity;
       const confirmation = ovr.quantityConfirmation ?? item.quantity_confirmation;
       const readingReviewConfirmation = ovr.readingReviewConfirmation ?? item.reading_review_confirmation;
-      const rawOrder = Object.prototype.hasOwnProperty.call(orderQuantityInputs, item.product_code) ? orderQuantityInputs[item.product_code] : item.order_quantity_input;
+      const rawOrder = Object.prototype.hasOwnProperty.call(orderQuantityInputs, editorKey) ? orderQuantityInputs[editorKey] : item.order_quantity_input;
       const copyReviewInput: CopyReviewInput = { item: planningItem, rows, repeatCm: r, basis, match, lossRate, manualQuantity: manualOrderQuantity, rawOrder, confirmation, readingReviewConfirmation, globalNotes: notes };
       const plan = planMemoOrder(copyReviewInput);
       const { comparison } = plan;
@@ -772,13 +801,13 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
       return {
         ...planningItem,
-        copyReviewInput,
+        editorKey, copyReviewInput,
         measurement_basis: basis, pattern_match: match, quantity_confirmation: confirmation, order_quantity_input: rawOrder,
         reading_reviews: plan.readingReviews.length || item.reading_reviews ? plan.readingReviews : undefined, reading_review_confirmation: readingReviewConfirmation,
         readingReviews: plan.readingReviews, readingReviewFingerprint: plan.readingReviewFingerprint, readingReviewConfirmed: plan.readingReviewConfirmed, canConfirmReadingReview: plan.canConfirmReadingReview,
         comparison, comparisonConfirmed: plan.confirmed, quantityAssessment: plan.assessment,
         incompleteMeasurements: plan.incompleteMeasurements, incompleteSettings: plan.incompleteSettings,
-        orderReady: plan.ready, canConfirm: plan.canConfirm, confirmationFingerprint: plan.fingerprint,
+        orderReady: plan.ready, outputIssue: plan.outputIssue, canConfirm: plan.canConfirm, confirmationFingerprint: plan.fingerprint,
         automaticQuantity: plan.automaticQuantity, manualQuantityActive: plan.manual, allowanceIncluded: plan.allowanceIncluded,
         total_m: Number(calcTotalM.toFixed(2)),
         order_quantity: plan.orderQuantity,
@@ -796,8 +825,18 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
   const groups = useMemo(() => groupByManufacturer(derivedItems), [derivedItems]);
   const reviewReasonGroups = useMemo(() => compactReviewReasons(derivedItems), [derivedItems]);
-  const productCodes = useMemo(() => derivedItems.map((item) => item.product_code), [derivedItems]);
-  const activeProductCode = productCodes.includes(selectedProductCode) ? selectedProductCode : productCodes[0];
+  const productCodes = useMemo(() => derivedItems.map((_, index) => String(index)), [derivedItems]);
+  const materialValue = (item: typeof derivedItems[number], index: number) =>
+    derivedItems.findIndex(row => row.product_code === item.product_code) === index ? item.product_code : `${item.product_code}::${index}`;
+  const materialValues = derivedItems.map(materialValue);
+  const activeMaterialValue = materialValues.includes(selectedProductCode) ? selectedProductCode : materialValues[0];
+  const jumpToMaterial = (value: string) => {
+    setSelectedProductCode(value);
+    const index = materialValues.indexOf(value);
+    if (index < 0) return;
+    setCollapsedCodes(current => { const next = new Set(current); next.delete(String(index)); return next; });
+    window.requestAnimationFrame(() => document.getElementById(`${navId}-material-${index}`)?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  };
   const allCodesCollapsed = useMemo(
     () => areAllCodesCollapsed(collapsedCodes, productCodes),
     [collapsedCodes, productCodes],
@@ -847,7 +886,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     sources: item.entries.map(entry => ({ id: entry.source_row_id, image: entry.source_image_index, index: entry.source_entry_index, formula: entry.original_formula })) })) });
   const currentReviewScope = { collection: copyCollection,
     identity: JSON.stringify({ job: privatePhotoJobId, siteName, products: derivedItems.map(item => item.product_code) }),
-    sources: Object.fromEntries(derivedItems.map(item => [item.product_code, JSON.stringify(item.entries.map(entry => ({
+    sources: Object.fromEntries(derivedItems.map(item => [item.editorKey, JSON.stringify(item.entries.map(entry => ({
       id: entry.source_row_id, image: entry.source_image_index, index: entry.source_entry_index, formula: entry.original_formula }))) ])),
     filled: derivedItems.length > 0 };
   const [copyReviewScope, setCopyReviewScope] = useState(currentReviewScope);
@@ -858,18 +897,18 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   } else if (copyReviewScope.filled && copyReviewScope.collection !== copyCollection) {
     const all = copyReviewOpen || copyReviewScope.identity !== currentReviewScope.identity;
     setCopyReviewScope(currentReviewScope);
-    setOverrides(previous => ({ ...previous, ...Object.fromEntries(derivedItems.filter(item => all || copyReviewScope.sources[item.product_code] !== currentReviewScope.sources[item.product_code]).map(item => [item.product_code,
-      { ...previous[item.product_code], quantityConfirmation: "", readingReviewConfirmation: "" }])) }));
+    setOverrides(previous => ({ ...previous, ...Object.fromEntries(derivedItems.filter(item => all || copyReviewScope.sources[item.editorKey] !== currentReviewScope.sources[item.editorKey]).map(item => [item.editorKey,
+      { ...previous[item.editorKey], quantityConfirmation: "", readingReviewConfirmation: "" }])) }));
   }
   const copyReviewRows = useMemo(() => derivedItems.map((item, index) => {
     const id = `${index}:${item.product_code}`;
     const context = { sourceJobId: privatePhotoJobId ?? null, siteName, itemKey: id, collectionKey: copyCollection };
     const review = inspectCopyReview(item.copyReviewInput, context);
     const duplicate = derivedItems.filter(other => other.product_code === item.product_code).length > 1;
-    return { id, code: item.product_code, quantity: item.order_quantity,
-      quantityIncomplete: item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined,
-      token: review.token, ready: item.orderReady && !duplicate,
-      confirmable: review.confirmable && !duplicate, blockedMessage: duplicate ? "品番が重複しています。編集して確認してください。" : review.blockedMessage,
+    return { id, editorKey: item.editorKey, code: item.product_code, quantity: item.order_quantity,
+      quantityIncomplete: item.order_quantity_input !== undefined || !Number.isFinite(item.order_quantity) || item.order_quantity < 0,
+      token: review.token, ready: item.orderReady, readingReviewed: item.readingReviewConfirmed, notices: readingNoticesForItem(item), numericalStatus: numericalStatusForItem(item),
+      confirmable: review.confirmable && !duplicate, blockedMessage: item.outputIssue ?? "",
       reviews: review.plan.readingReviews, imageIndexes: [...new Set([...readingReviewImageIndexes(item),
         ...item.entries.map(entry => entry.source_image_index).filter((index): index is number => Number.isSafeInteger(index) && index !== undefined && index >= 0)])], input: item.copyReviewInput, context };
   }), [derivedItems, privatePhotoJobId, siteName, copyCollection]);
@@ -912,14 +951,14 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       const row = current.rows.find(row => row.id === selection.id);
       if (!row || !row.confirmable || row.token !== selection.token) return null;
       const acknowledgement = prepareCopyReviewConfirmation(row.input, row.context, selection.token);
-      return acknowledgement ? { code: row.code, acknowledgement } : null;
+      return acknowledgement ? { key: row.editorKey, acknowledgement } : null;
     });
     if (changes.some(row => row === null)) return false;
     onMeaningfulEdit?.();
     setOverrides(previous => {
       const next = { ...previous };
-      for (const change of changes) if (change) next[change.code] = { ...previous[change.code],
-        readingReviewConfirmation: change.acknowledgement.readingReviewConfirmation ?? previous[change.code]?.readingReviewConfirmation,
+      for (const change of changes) if (change) next[change.key] = { ...previous[change.key],
+        readingReviewConfirmation: change.acknowledgement.readingReviewConfirmation ?? previous[change.key]?.readingReviewConfirmation,
         quantityConfirmation: change.acknowledgement.quantityConfirmation };
       return next;
     });
@@ -928,10 +967,9 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
   const applyCopyReview = (selections: { id: string; token: string }[], batch: string) => applyReviewConfirmations(selections, batch);
   const copyOrderText = async (expectedBatch: string) => {
     const current = liveCopyReview.current;
-    if (!copyReviewOpenRef.current || expectedBatch !== current.batch || !current.items.length || current.items.some(item => !item.orderReady)
-      || new Set(current.items.map(item => item.product_code)).size !== current.items.length) return false;
-    const text = buildOrderRequestText(current.items, current.siteName);
+    if (!copyReviewOpenRef.current || expectedBatch !== current.batch || !current.items.length || current.items.some(item => !item.orderReady)) return false;
     try {
+      const text = buildOrderRequestText(current.items, current.siteName);
       // No await/state update before this call: preserve iOS's explicit user gesture.
       await navigator.clipboard.writeText(text);
       alert("発注用テキストをコピーしました！"); return true;
@@ -948,7 +986,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
     </>}
   </>;
 
-  const resetEditorBlocked = Object.entries(editingCode).some(([code, draft]) => draft.open && draft.value !== code)
+  const resetEditorBlocked = Object.entries(editingCode).some(([code, draft]) => draft.open && draft.value !== findItem(code)?.product_code)
     || Object.values(newEntryInputs).some(draft => Object.values(draft).some(value => value !== "" && value !== undefined))
     || derivedItems.some(item => item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined);
   useEffect(() => { onEditorBlocked?.(resetEditorBlocked); return () => onEditorBlocked?.(false); }, [onEditorBlocked, resetEditorBlocked]);
@@ -980,7 +1018,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
             <CopyIcon className="h-4 w-4" />確認してコピー
           </Button>
         </CardHeader>
-        <CardContent id={`${navId}-copy-status`} className="px-3 pb-3 pt-0 text-xs text-muted-foreground">{derivedItems.some(item => !item.orderReady) ? "候補・写真・数量をまとめて確認できます。" : "確認済みの数量をコピーできます。"}</CardContent>
+        <CardContent id={`${navId}-copy-status`} className="px-3 pb-3 pt-0 text-xs text-muted-foreground">{derivedItems.some(item => !item.orderReady) ? "候補・写真・数量をまとめて確認できます。" : "指定した発注数量をコピーできます。注意は別に確認できます。"}</CardContent>
       </Card>
 
       {reviewReasonGroups.length ? <details aria-label="読み取りの注意" className="rounded-lg border px-3 py-2 text-xs">
@@ -992,8 +1030,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       <Card className="border-none bg-white/70 shadow-lg ring-1 ring-inset ring-indigo-500/15 backdrop-blur-xl dark:bg-zinc-900/70">
         <CardHeader className="px-3 pb-2 pt-4 sm:px-6 sm:pt-5">
           <CardTitle className="flex items-center gap-2 text-sm font-bold text-indigo-900 dark:text-indigo-100 sm:text-base">
-            <CopyIcon className="h-4 w-4" />
-            発注量の自動チェック
+            <Scale className="h-4 w-4" aria-hidden="true" />
+            必要量との比較（自動）
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-1.5 px-3 pb-4 pt-0 sm:px-6 sm:pb-5">
@@ -1001,29 +1039,24 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
             const code = String(item.product_code ?? "").trim() || "不明";
             const quantity = toFiniteNumber(item.order_quantity);
             const review = copyReviewRows[index];
-            const numeric = numericalOrderStatus({ ordered: quantity, required: item.comparison.strict.totals.selectedM,
-              inputsComplete: !item.incompleteMeasurements && !item.incompleteSettings && item.order_quantity_input === undefined && quantity >= 0,
-              conditionsKnown: item.order_mode === "memo" || item.comparison.premisesAvailable && item.pattern_match !== "other",
-              // Legacy evidence does not record which numerical candidate was adopted.
-              // Do not use a manual confirmation/quantity fingerprint to fabricate certainty.
-              measurementCertain: !item.readingReviews.length && !item.entries.some(entry => entry.needs_review)
-                && !item.review_reasons?.some((reason: string) => reason.startsWith("画像：") && concreteReadingReason(reason)),
-              duplicate: derivedItems.filter(other => other.product_code === code).length > 1 });
+            const duplicate = derivedItems.filter(other => other.product_code === item.product_code).length > 1;
+            const readingAttention = item.readingReviews.length && !item.readingReviewConfirmed ? "訂正・取消の注意" : review.notices.length ? "読み取りの注意" : "";
+            const numeric = numericalStatusForItem(item);
             return (
               <div
                 key={review.id}
                 className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-black/5 bg-black/[0.03] px-2 py-1.5 dark:border-white/5 dark:bg-white/[0.04] sm:px-3"
               >
                 <p className="min-w-0 flex-1 break-words text-sm font-bold text-zinc-900 dark:text-zinc-100">{code}</p>
-                <p className="shrink-0 text-xl font-extrabold tabular-nums" aria-label={`${code} の一覧発注数量`}>{item.incompleteMeasurements || item.incompleteSettings || item.order_quantity_input !== undefined || quantity <= 0 ? "未確定" : `${quantity}m`}</p>
+                <p className="shrink-0 text-xl font-extrabold tabular-nums" aria-label={`${code} の一覧発注数量`}>{item.order_quantity_input !== undefined || !Number.isFinite(item.order_quantity) || quantity < 0 ? "未確定" : `${quantity}m`}</p>
                 <div className="flex shrink-0 items-center gap-1.5">
                   <Button
                     type="button"
                     variant="outline"
                     size="icon"
                     className="h-11 w-11 rounded-md bg-white p-0 dark:bg-black"
-                    onClick={() => handleAdjustOrderQuantity(item.product_code, -1)}
-                    disabled={quantity <= 0 || (item.order_quantity_input !== undefined || item.incompleteMeasurements)}
+                    onClick={() => handleAdjustOrderQuantity(item.editorKey, -1)}
+                    disabled={quantity <= 0 || item.order_quantity_input !== undefined}
                     aria-label={`${code} の発注数量を1m減らす`}
                   >
                     <Minus className="h-3.5 w-3.5" />
@@ -1033,8 +1066,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     variant="outline"
                     size="icon"
                     className="h-11 w-11 rounded-md bg-white p-0 dark:bg-black"
-                    disabled={(item.order_quantity_input !== undefined || item.incompleteMeasurements)}
-                    onClick={() => handleAdjustOrderQuantity(item.product_code, 1)}
+                    disabled={item.order_quantity_input !== undefined}
+                    onClick={() => handleAdjustOrderQuantity(item.editorKey, 1)}
                     aria-label={`${code} の発注数量を1m増やす`}
                   >
                     <Plus className="h-3.5 w-3.5" />
@@ -1044,11 +1077,16 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                   <p className={`text-xs ${numeric.state === "sufficient" ? "font-semibold text-emerald-700 dark:text-emerald-300" : numeric.state === "shortfall" ? "font-semibold text-rose-700 dark:text-rose-300" : "text-muted-foreground"}`} role="status" aria-label={`${code} の発注量チェック`}>
                     <span aria-hidden="true">{numeric.state === "sufficient" ? "✅ " : numeric.state === "shortfall" ? "⚠️ " : "－ "}</span>{numeric.text}
                   </p>
-                  <button type="button" className="min-h-11 text-xs underline" aria-label={`${code} を確認・編集`} data-workspace-navigation onClick={() => { setCollapsedCodes(current => { const next = new Set(current); next.delete(code); return next; }); selectView("edit", code); }}>確認・編集</button>
+                  <button type="button" className="min-h-11 text-xs underline" aria-label={`${code} を確認・編集`} data-workspace-navigation onClick={() => { setCollapsedCodes(current => { const next = new Set(current); next.delete(String(index)); return next; }); selectView("edit", materialValue(item, index)); }}>確認・編集</button>
                 </div>
+                {!review.ready || readingAttention || duplicate ? <p className="flex w-full items-center justify-between gap-2 text-xs text-amber-800 dark:text-amber-300" aria-label={`${code} の発注時の注意`}>
+                  <span>{review.blockedMessage || readingAttention || "同品番は別行で表示・追加時に統合を選択"}</span>
+                  <button type="button" data-workspace-navigation className="min-h-11 shrink-0 underline" aria-label={`${code} の発注時の注意を見る`} onClick={openCopyReview}>注意を見る</button>
+                </p> : null}
                 <details className="w-full text-xs" aria-label={`${code} の一覧確認詳細`}>
                   <summary data-workspace-navigation className="min-h-11 cursor-pointer content-center underline">{review.reviews.length ? `訂正候補 ${review.reviews.length}件・メモ画像` : "メモ画像"}</summary>
                   <div className="space-y-2 break-words rounded-lg bg-amber-500/10 p-2">
+                    {review.notices.map((notice, index) => <p key={`notice-${index}`}>{notice}</p>)}
                     {review.reviews.length ? <p className="font-semibold">対象：{code}（候補は自動加算しません）</p> : null}
                     {review.reviews.map((evidence, evidenceIndex) => <div key={evidenceIndex}>
                       {evidence.reason.length > 140 ? <details><summary data-workspace-navigation className="min-h-11 cursor-pointer">{evidence.reason.slice(0, 100)}…（全文）</summary><p>{evidence.reason}</p></details> : <p>{evidence.reason}</p>}
@@ -1089,7 +1127,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
       </section>
       <section id={`${navId}-photo`} data-result-panel="photo" role="tabpanel" aria-labelledby={`${navId}-photo-tab`} tabIndex={-1} hidden={resultView !== "photo"} className="scroll-mt-4 space-y-3 outline-none print:hidden">
-        <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">メモ画像</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("edit", activeProductCode)}>数量に戻る</Button></div>
+        <h2 className="text-xl font-bold">メモ画像</h2>
         {!copyReviewOpen ? sourcePhoto() : null}
         {resultTools}
         {onResetResult ? <div className="space-y-2 rounded-xl border p-3 text-sm">
@@ -1099,8 +1137,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         </div> : null}
       </section>
       <section id={`${navId}-edit`} data-result-panel="edit" role="tabpanel" aria-labelledby={`${navId}-edit-tab`} tabIndex={-1} hidden={resultView !== "edit"} className="scroll-mt-4 space-y-3 outline-none print:block">
-        <div className="flex items-center justify-between gap-2"><h2 className="text-xl font-bold">数量</h2><Button type="button" variant="outline" data-workspace-navigation onClick={() => selectView("quantity")}>概要に戻る</Button></div>
-        <label className="block text-sm font-semibold">編集する品番<select aria-label="編集する品番" data-workspace-navigation className="mt-1 min-h-11 w-full rounded-lg border bg-background px-3" value={activeProductCode} onChange={event => setSelectedProductCode(event.target.value)}>{groups.map(group => <optgroup key={group.label} label={group.label}>{group.rows.map(product => <option key={product.product_code} value={product.product_code}>{product.product_code}</option>)}</optgroup>)}</select></label>
+        <h2 className="text-xl font-bold">数量</h2>
+        <label className="block text-sm font-semibold">編集する品番<select aria-label="編集する品番" data-workspace-navigation className="mt-1 min-h-11 w-full rounded-lg border bg-background px-3" value={activeMaterialValue} onChange={event => jumpToMaterial(event.target.value)}>{groups.map(group => <optgroup key={group.label} label={group.label}>{group.rows.map(product => <option key={derivedItems.indexOf(product)} value={materialValue(product, derivedItems.indexOf(product))}>{product.product_code}{derivedItems.filter(item => item.product_code === product.product_code).length > 1 ? `（${derivedItems.indexOf(product) + 1}行目）` : ""}</option>)}</optgroup>)}</select></label>
       <details className="rounded-xl border bg-background p-3 text-sm" aria-label="読み取り・計算の説明">
         <summary data-workspace-navigation className="min-h-6 cursor-pointer font-medium">読み取りの説明{reviewReasonGroups.length ? "（確認あり）" : ""}</summary>
         <div className="mt-3 space-y-2 text-xs text-muted-foreground">
@@ -1121,7 +1159,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
           type="button"
           variant="outline"
           className="min-h-11 shrink-0 gap-2 rounded-lg bg-white px-3 text-xs font-bold dark:bg-black sm:text-sm"
-          onClick={() => setCollapsedCodes((current) => toggleAllCollapsedCodes(current, productCodes))}
+          data-workspace-navigation onClick={() => setCollapsedCodes((current) => toggleAllCollapsedCodes(current, productCodes))}
           aria-label={allCodesCollapsed ? "すべての材料詳細を展開" : "すべての材料詳細を省略"}
         >
           {allCodesCollapsed ? <ChevronsDown className="h-4 w-4" /> : <ChevronsUp className="h-4 w-4" />}
@@ -1132,7 +1170,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
       {rowResetError ? <p role="alert" className="text-sm text-amber-800 dark:text-amber-300">{rowResetError}</p> : null}
       <div className="space-y-4 sm:space-y-6">
         {groups.map((group) => (
-          <Card key={group.label} hidden={!group.rows.some(product => product.product_code === activeProductCode)} className="border-none shadow-md overflow-hidden bg-white/60 print:block dark:bg-zinc-900/60 backdrop-blur-md">
+          <Card key={group.label} className="border-none shadow-md overflow-hidden bg-white/60 print:block dark:bg-zinc-900/60 backdrop-blur-md">
             <CardHeader className="flex flex-row items-center justify-between border-b border-black/5 bg-black/5 px-3 py-3 dark:border-white/5 dark:bg-white/5 sm:px-6 sm:py-4">
               <CardTitle className="text-base font-bold tracking-tight sm:text-lg">{group.label}</CardTitle>
               <Badge variant="secondary" className="px-3 py-1 font-bold rounded-full bg-white dark:bg-black text-xs shadow-sm">
@@ -1141,8 +1179,10 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
             </CardHeader>
             <CardContent className="p-0">
               {group.rows.map((product, idx) => {
-                const isCollapsed = collapsedCodes.has(product.product_code);
-                const commonHeightInput = overrides[product.product_code]?.heightM ?? product.repeat_height_input;
+                const materialIndex = derivedItems.indexOf(product);
+                const materialKey = String(materialIndex);
+                const isCollapsed = collapsedCodes.has(materialKey);
+                const commonHeightInput = overrides[product.editorKey]?.heightM ?? product.repeat_height_input;
                 const commonHeightInvalid = typeof commonHeightInput === "string" && commonHeightInput !== "";
                 const individualHeightRows = product.derivedEntries.filter((entry: any) => entry.isRepeatActive && entry.configured_repeat_use_row_length).length;
                 const activeRepeatRows = product.derivedEntries.filter((entry: any) => entry.isRepeatActive).length;
@@ -1152,9 +1192,11 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                       : individualHeightRows === activeRepeatRows ? `各行の個別寸法で計算（共通高さ ${product.repeat_height_m}m は未使用）`
                         : `共通高さ ${product.repeat_height_m}m${individualHeightRows ? `・個別寸法${individualHeightRows}行を優先` : "を使用"}`
                     : "各行の寸法で計算";
-                const repeatDetailsId = `${navId}-repeat-${encodeURIComponent(product.product_code)}`;
+                const repeatDetailsId = `${navId}-repeat-${materialIndex}-${encodeURIComponent(product.product_code)}`;
+                const repeatControlsId = `${repeatDetailsId}-controls-${encodeURIComponent(group.label)}-${idx}`;
+                const repeatControlsOpen = !collapsedRepeatControls.has(repeatControlsId);
                 return (
-                <div hidden={product.product_code !== activeProductCode} id={`material-${encodeURIComponent(product.product_code)}`} key={product.product_code} className={`print:block px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
+                <div aria-label={`${product.product_code} の材料 ${materialIndex + 1}`} data-material-index={materialIndex} data-material-value={materialValue(product, materialIndex)} id={`${navId}-material-${materialIndex}`} key={materialIndex} className={`print:block px-3 py-4 sm:px-5 sm:py-5 md:px-6 md:py-6 ${idx !== 0 ? "border-t border-black/5 dark:border-white/5" : ""} transition-colors hover:bg-black/[0.02] dark:hover:bg-white/[0.02]`}>
                   {isCollapsed ? (
                     <div className="flex min-w-0 items-center gap-3">
                       <div className="min-w-0 flex-1">
@@ -1186,7 +1228,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         variant="outline"
                         size="icon"
                         className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
-                        onClick={() => setCollapsedCodes((current) => toggleCollapsedCode(current, product.product_code))}
+                        data-workspace-navigation onClick={() => setCollapsedCodes((current) => toggleCollapsedCode(current, materialKey))}
                         aria-expanded={false}
                         aria-label={`${product.product_code} の詳細を展開`}
                       >
@@ -1198,27 +1240,27 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                   <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-4">
                     <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:gap-2">
                       <div className="min-w-0">
-                        {editingCode[product.product_code]?.open ? (
+                        {editingCode[product.editorKey]?.open ? (
                           <Input
-                            value={editingCode[product.product_code]?.value ?? product.product_code}
+                            value={editingCode[product.editorKey]?.value ?? product.product_code}
                             onChange={(e) =>
                               setEditingCode((prev) => ({
                                 ...prev,
-                                [product.product_code]: { open: true, value: e.target.value },
+                                [product.editorKey]: { open: true, value: e.target.value },
                               }))
                             }
-                            onBlur={event => { if (!navigationBlur(event.relatedTarget)) void saveCodeEdit(product.product_code); }}
+                            onBlur={event => { if (!navigationBlur(event.relatedTarget)) void saveCodeEdit(product.editorKey); }}
                             onKeyDown={(e) => {
                               if (e.key === "Enter") {
                                 e.preventDefault();
-                                void saveCodeEdit(product.product_code);
+                                void saveCodeEdit(product.editorKey);
                               }
                               if (e.key === "Escape") {
                                 e.preventDefault();
                                 completedCodeEditsRef.current.add(product.product_code);
                                 setEditingCode((prev) => ({
                                   ...prev,
-                                  [product.product_code]: { open: false, value: product.product_code },
+                                  [product.editorKey]: { open: false, value: product.product_code },
                                 }));
                               }
                             }}
@@ -1228,7 +1270,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         ) : (
                           <button
                             type="button"
-                            onClick={() => beginEditCode(product.product_code)}
+                            onClick={() => beginEditCode(product.editorKey)}
                             className="min-w-0 break-all text-left text-lg font-extrabold tracking-tight underline-offset-4 hover:underline sm:text-xl"
                             title="タップして品番を編集"
                           >
@@ -1258,7 +1300,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                       ) : (
                         <Badge variant="outline" className={`gap-1 px-2 py-0.5 ml-1 ${!basicView && product.orderReady ? "text-emerald-600 border-emerald-600/30 bg-emerald-500/10" : "text-muted-foreground border-border"}`}>
                           {!basicView && product.orderReady ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Layers className="w-3.5 h-3.5" />}
-                          <span className="text-xs">{basicView ? "数量を確認" : product.orderReady ? "発注内容確認済" : "数量を確認"}</span>
+                          <span className="text-xs">{product.orderReady ? "追加・コピー可能" : "数量を確認"}</span>
                         </Badge>
                       )}
                     </div>
@@ -1280,7 +1322,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                         variant="outline"
                         size="icon"
                         className="h-11 w-11 shrink-0 rounded-lg bg-white p-0 dark:bg-black"
-                        onClick={() => setCollapsedCodes((current) => toggleCollapsedCode(current, product.product_code))}
+                        data-workspace-navigation onClick={() => setCollapsedCodes((current) => toggleCollapsedCode(current, materialKey))}
                         aria-expanded={true}
                         aria-label={`${product.product_code} の詳細を省略`}
                       >
@@ -1295,7 +1337,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           variant="outline"
                           size="icon"
                           className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
-                          onClick={() => handleAdjustLossRate(product.product_code, product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT, -1)}
+                          onClick={() => handleAdjustLossRate(product.editorKey, product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT, -1)}
                           disabled={product.allowanceIncluded || (product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT) <= 0}
                           aria-label={`${product.product_code} のロス率を1%減らす`}
                         >
@@ -1306,9 +1348,9 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           min="0"
                           step="1"
                           className="h-11 w-full bg-white px-2 text-center text-base font-bold tabular-nums dark:bg-black"
-                          value={lossRates[product.product_code] ?? product.loss_rate_input ?? product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}
+                          value={lossRates[product.editorKey] ?? product.loss_rate_input ?? product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT}
                           disabled={product.allowanceIncluded}
-                          onChange={(e) => handleLossRateChange(product.product_code, e.target.value)}
+                          onChange={(e) => handleLossRateChange(product.editorKey, e.target.value)}
                           aria-label={`${product.product_code} のロス率を入力`}
                         />
                         <span className="text-center text-sm font-semibold opacity-60">%</span>
@@ -1318,7 +1360,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           size="icon"
                           className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
                           disabled={product.allowanceIncluded}
-                          onClick={() => handleAdjustLossRate(product.product_code, product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT, 1)}
+                          onClick={() => handleAdjustLossRate(product.editorKey, product.loss_rate_percent ?? DEFAULT_LOSS_RATE_PERCENT, 1)}
                           aria-label={`${product.product_code} のロス率を1%増やす`}
                         >
                           <Plus className="h-4 w-4" />
@@ -1331,8 +1373,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           variant="outline"
                           size="icon"
                           className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
-                          onClick={() => handleAdjustOrderQuantity(product.product_code, -1)}
-                          disabled={product.order_quantity <= 0 || (product.order_quantity_input !== undefined || product.incompleteMeasurements)}
+                          onClick={() => handleAdjustOrderQuantity(product.editorKey, -1)}
+                          disabled={product.order_quantity <= 0 || product.order_quantity_input !== undefined}
                           aria-label={`${product.product_code} の発注数量を1m減らす`}
                         >
                           <Minus className="h-4 w-4" />
@@ -1343,7 +1385,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           step="1"
                           className="h-11 w-full bg-white px-2 text-center text-xl font-black tabular-nums leading-none text-indigo-600 dark:bg-black dark:text-indigo-400 sm:text-2xl"
                           value={product.order_quantity_input ?? product.order_quantity}
-                          onChange={(e) => handleOrderQuantityInput(product.product_code, e.target.value)}
+                          onChange={(e) => handleOrderQuantityInput(product.editorKey, e.target.value)}
                           aria-label={`${product.product_code} の発注数量を入力`}
                         />
                         <span className="text-center text-sm font-semibold opacity-60">m</span>
@@ -1352,8 +1394,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           variant="outline"
                           size="icon"
                           className="h-11 w-11 rounded-lg bg-white p-0 dark:bg-black"
-                          disabled={(product.order_quantity_input !== undefined || product.incompleteMeasurements)}
-                          onClick={() => handleAdjustOrderQuantity(product.product_code, 1)}
+                          disabled={product.order_quantity_input !== undefined}
+                          onClick={() => handleAdjustOrderQuantity(product.editorKey, 1)}
                           aria-label={`${product.product_code} の発注数量を1m増やす`}
                         >
                           <Plus className="h-4 w-4" />
@@ -1382,17 +1424,33 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     </details>
                     {privatePhotoJobId && readingReviewImageIndexes(product).length ? <div className="flex flex-wrap gap-2">{readingReviewImageIndexes(product).map(index => <Button key={index} type="button" variant="outline" className="min-h-11 bg-background" aria-label={`${product.product_code} の訂正候補の写真 ${index + 1}を確認`} data-workspace-navigation onClick={() => openPhoto(index)}>原画像 {index + 1}を確認</Button>)}</div> : <p className="text-xs">お手元のメモ画像と照合してください。</p>}
                     <label className="flex min-h-11 items-center gap-2 text-xs">
-                      <input type="checkbox" aria-label={`${product.product_code} の訂正・取消を確認済みにする`} checked={product.readingReviewConfirmed} disabled={!product.canConfirmReadingReview} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], readingReviewConfirmation: event.target.checked ? product.readingReviewFingerprint : "", quantityConfirmation: "" } }))} />
+                      <input type="checkbox" aria-label={`${product.product_code} の訂正・取消を確認済みにする`} checked={product.readingReviewConfirmed} disabled={!product.canConfirmReadingReview} onChange={event => setOverrides(previous => ({ ...previous, [product.editorKey]: { ...previous[product.editorKey], readingReviewConfirmation: event.target.checked ? product.readingReviewFingerprint : "", quantityConfirmation: "" } }))} />
                       原画像と訂正・取消を照合した（変更時は再確認）
                     </label>
-                    <p role="status" className="text-xs">{product.readingReviewConfirmed ? "照合確認済み" : "確認するまでコピー・追加できません。"}</p>
+                    <p role="status" className="text-xs">{product.readingReviewConfirmed ? "照合確認済み" : "照合の記録は任意です。発注数量はそのまま出力できます。"}</p>
                   </section></details></div> : null}
 
-                  <fieldset className="mb-3 w-full space-y-2 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-800 dark:bg-indigo-950/30">
-                    <legend className="px-1 text-sm font-bold">数量・リピート</legend>
+                  <fieldset aria-label={`${product.product_code} の数量・リピート`} className="mb-3 w-full space-y-2 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 dark:border-indigo-800 dark:bg-indigo-950/30">
+                    <legend className="w-full px-1 text-sm font-bold">
+                      <button type="button" data-workspace-navigation aria-label={`${product.product_code} の数量・リピート`} aria-expanded={repeatControlsOpen} aria-controls={repeatControlsId}
+                        className="flex min-h-11 w-full items-center justify-between gap-2 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                        onClick={event => {
+                          event.currentTarget.focus({ preventScroll: true });
+                          setCollapsedRepeatControls(previous => {
+                            const next = new Set(previous);
+                            if (next.has(repeatControlsId)) next.delete(repeatControlsId); else next.add(repeatControlsId);
+                            return next;
+                          });
+                        }}>
+                        <span>数量・リピート</span>
+                        <span className="flex shrink-0 items-center gap-1 text-xs font-normal text-muted-foreground">{repeatControlsOpen ? "閉じる" : "開く"}{repeatControlsOpen ? <ChevronUp aria-hidden className="h-4 w-4" /> : <ChevronDown aria-hidden className="h-4 w-4" />}</span>
+                      </button>
+                    </legend>
+                    {!repeatControlsOpen ? <p className="text-xs text-muted-foreground">{heightStatus}・{shortOrderStatus(product)}</p> : null}
+                    <div id={repeatControlsId} hidden={!repeatControlsOpen} className="space-y-2">
                     <div className="flex min-h-11 items-center justify-between gap-2 text-sm">
                       <span>リピート計算{product.order_mode === "pattern" && !product.rActive ? "（一部の行）" : ""}</span>
-                      <button type="button" role="switch" aria-checked={product.rActive} aria-label={`${product.product_code} の一括リピート計算`} onClick={() => handleToggleMasterRepeat(product.product_code, product.rActive, product.derivedEntries.length)} className={`flex min-h-11 items-center gap-2 rounded-lg px-2 text-xs ${product.rActive ? "text-indigo-700" : "text-muted-foreground"}`}>
+                      <button type="button" role="switch" aria-checked={product.rActive} aria-label={`${product.product_code} の一括リピート計算`} onClick={() => handleToggleMasterRepeat(product.editorKey, product.rActive, product.derivedEntries.length)} className={`flex min-h-11 items-center gap-2 rounded-lg px-2 text-xs ${product.rActive ? "text-indigo-700" : "text-muted-foreground"}`}>
                         全行に適用<span className={`flex h-6 w-11 items-center rounded-full p-1 ${product.rActive ? "bg-indigo-600" : "bg-zinc-300"}`}><span className={`h-4 w-4 rounded-full bg-white transition-transform ${product.rActive ? "translate-x-5" : ""}`} /></span>
                       </button>
                     </div>
@@ -1405,8 +1463,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           placeholder="例: 32"
                           className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
                           aria-label={`${product.product_code} のリピート (cm)`}
-                          value={overrides[product.product_code]?.repeatCm ?? product.repeat_cm_input ?? product.repeat_cm ?? ""}
-                          onChange={(e) => handleOverrideChange(product.product_code, "repeatCm", e.target.value)}
+                          value={overrides[product.editorKey]?.repeatCm ?? product.repeat_cm_input ?? product.repeat_cm ?? ""}
+                          onChange={(e) => handleOverrideChange(product.editorKey, "repeatCm", e.target.value)}
                         />
                       </div>
                     </div>
@@ -1418,8 +1476,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                           placeholder="例: 2.4"
                           className="h-10 text-sm bg-white dark:bg-black border-indigo-200 dark:border-indigo-800 focus-visible:ring-indigo-500 font-medium tabular-nums"
                           aria-label={`${product.product_code} の壁の高さ (m)`}
-                          value={overrides[product.product_code]?.heightM ?? product.repeat_height_input ?? product.repeat_height_m ?? ""}
-                          onChange={(e) => handleOverrideChange(product.product_code, "heightM", e.target.value)}
+                          value={overrides[product.editorKey]?.heightM ?? product.repeat_height_input ?? product.repeat_height_m ?? ""}
+                          onChange={(e) => handleOverrideChange(product.editorKey, "heightM", e.target.value)}
                         />
                       </div>
                     <p className="text-xs text-muted-foreground">未入力なら各行の寸法を使用します。個別に編集した行は、その寸法を優先します。</p>
@@ -1427,9 +1485,9 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     {product.order_mode === "pattern" ? <button type="button" data-workspace-navigation className="min-h-11 text-left text-xs underline" aria-controls={repeatDetailsId} aria-label={`${product.product_code} のリピート条件を確認`} onClick={() => {
                       const details = document.getElementById(repeatDetailsId);
                       if (details instanceof HTMLDetailsElement) { details.open = true; details.querySelector("summary")?.focus({ preventScroll: true }); details.scrollIntoView({ block: "nearest" }); }
-                    }}>{product.orderReady ? "詳細設定を開く" : `${shortOrderStatus(product)}・設定を開く`}</button> : null}
+                    }}>{shortOrderStatus(product) === "追加・コピー可能" ? "詳細設定を開く" : `${shortOrderStatus(product)}・設定を開く`}</button> : null}
                     {product.order_mode === "memo" ? <label className="block pt-2 text-sm">予備分の扱い
-                      <select aria-label={`${product.product_code} の予備分の扱い`} className="mt-1 min-h-11 w-full rounded border bg-background p-2" value={product.memo_allowance} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], memoAllowance: event.target.value as MemoProductItem["memo_allowance"], quantityConfirmation: "", readingReviewConfirmation: "" } }))}>
+                      <select aria-label={`${product.product_code} の予備分の扱い`} className="mt-1 min-h-11 w-full rounded border bg-background p-2" value={product.memo_allowance} onChange={event => setOverrides(previous => ({ ...previous, [product.editorKey]: { ...previous[product.editorKey], memoAllowance: event.target.value as MemoProductItem["memo_allowance"], quantityConfirmation: "", readingReviewConfirmation: "" } }))}>
                         <option value="add">メモの数量に予備分を加える</option>
                         <option value="included">メモは発注量まで調整済み（上乗せしない）</option>
                       </select>
@@ -1437,23 +1495,16 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
 
                     {product.manualQuantityActive ? <div className="space-y-2 text-sm">
                       <p>発注数量は手動指定 {product.order_quantity}m を保持しています。柄合わせ・予備分は再上乗せしません。</p>
-                      <Button type="button" variant="outline" className="min-h-11" onClick={() => { clearManualOrderQuantity(product.product_code); setOrderQuantityInputs(previous => ({ ...previous, [product.product_code]: undefined })); }}>自動計算の数量に戻す</Button>
+                      <Button type="button" variant="outline" className="min-h-11" onClick={() => { clearManualOrderQuantity(product.editorKey); setOrderQuantityInputs(previous => ({ ...previous, [product.editorKey]: undefined })); }}>自動計算の数量に戻す</Button>
                     </div> : null}
                     <details aria-label={`${product.product_code} の計算説明`}><summary data-workspace-navigation className="min-h-11 cursor-pointer text-xs text-muted-foreground">計算・予備分の説明</summary>
                     <p className="mt-2 text-xs font-semibold tabular-nums" aria-label={`${product.product_code} の数量の計算内訳`}>
-                      {product.order_mode === "memo" ? "メモ合計" : product.canConfirm ? "柄合わせ後の必要量" : "参考量（柄合わせ条件を確認）"} {product.total_m}m → {product.allowanceIncluded ? "予備分は調整済み・追加0%" : `予備分 ${product.loss_rate_percent}%`} → 自動計算 {product.automaticQuantity}m（1m単位に切り上げ）
+                      {product.order_mode === "memo" ? "メモ合計" : product.comparison.strict.status === "calculated" ? "柄合わせ後の必要量" : "参考量（柄合わせ条件を確認）"} {product.total_m}m → {product.allowanceIncluded ? "予備分は調整済み・追加0%" : `予備分 ${product.loss_rate_percent}%`} → 自動計算 {product.automaticQuantity}m（1m単位に切り上げ）
                     </p>
                       <p className="mt-2 text-xs">メモに柄合わせや予備分が含まれるか不明なときは職人さんに確認してください。</p>
                     </details>
-                    {product.order_mode === "pattern" && !basicView ? <label className="flex min-h-11 items-start gap-2 py-2 text-sm">
-                      <input type="checkbox" className="mt-1" aria-label={`${product.product_code} の必要量の前提を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.canConfirm} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.confirmationFingerprint : "" } }))} />
-                      元メモと発注数量を確認した（変更時は再確認）
-                    </label> : null}
-                    {product.order_mode === "memo" || basicView ? <label className="flex min-h-11 items-start gap-2 py-2 text-sm">
-                      <input type="checkbox" className="mt-1" aria-label={`${product.product_code} のメモと発注数量を確認済みにする`} checked={product.comparisonConfirmed} disabled={!product.canConfirm} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: event.target.checked ? product.confirmationFingerprint : "" } }))} />
-                      元メモと発注数量を確認した（変更時は再確認）
-                    </label> : null}
-                    <details className={`text-xs ${orderCheckColor(product.orderReady, basicView)}`}><summary data-workspace-navigation className="cursor-pointer">{shortOrderStatus(product)}</summary><p role="status" className="mt-2">{orderCheckMessage(product, basicView)}</p></details>
+                    <details className={`text-xs ${orderCheckColor(product.orderReady, basicView)}`}><summary data-workspace-navigation className="cursor-pointer">{shortOrderStatus(product)}</summary><p role="status" className="mt-2">{orderCheckMessage(product)}</p></details>
+                    </div>
                   </fieldset>
 
 
@@ -1484,7 +1535,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                       variant="outline"
                       size="sm"
                       className="min-h-11 rounded-lg border-black/10 bg-white/70 px-3 text-xs font-semibold text-muted-foreground hover:bg-white hover:text-indigo-700 dark:border-white/10 dark:bg-black/30 dark:hover:bg-black"
-                      onClick={() => handleResetProductToOriginal(product.product_code)}
+                      onClick={() => handleResetProductToOriginal(product.editorKey)}
                     >
                       ↺ 解析結果に戻す
                     </Button>
@@ -1495,12 +1546,12 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     <div className="mt-3 space-y-3">
                     <div className="mb-3 grid gap-3 sm:grid-cols-2">
                       <label className="text-xs">寸法の前提
-                        <select aria-label={`${product.product_code} の寸法区分`} className="mt-1 block w-full rounded border bg-background p-2" value={product.measurement_basis} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: "", readingReviewConfirmation: "", measurementBasis: event.target.value as MemoProductItem["measurement_basis"] } }))}>
+                        <select aria-label={`${product.product_code} の寸法区分`} className="mt-1 block w-full rounded border bg-background p-2" value={product.measurement_basis} onChange={event => setOverrides(previous => ({ ...previous, [product.editorKey]: { ...previous[product.editorKey], quantityConfirmation: "", readingReviewConfirmation: "", measurementBasis: event.target.value as MemoProductItem["measurement_basis"] } }))}>
                           <option value="unconfirmed">未確認</option><option value="trim-included">切り代込みの裁断長</option><option value="repeat-adjusted">既に柄調整済み（再計算しない）</option>
                         </select>
                       </label>
                       <label className="text-xs">柄合わせ方式
-                        <select aria-label={`${product.product_code} の柄合わせ方式`} className="mt-1 block w-full rounded border bg-background p-2" value={product.pattern_match} onChange={event => setOverrides(previous => ({ ...previous, [product.product_code]: { ...previous[product.product_code], quantityConfirmation: "", readingReviewConfirmation: "", patternMatch: event.target.value as MemoProductItem["pattern_match"] } }))}>
+                        <select aria-label={`${product.product_code} の柄合わせ方式`} className="mt-1 block w-full rounded border bg-background p-2" value={product.pattern_match} onChange={event => setOverrides(previous => ({ ...previous, [product.editorKey]: { ...previous[product.editorKey], quantityConfirmation: "", readingReviewConfirmation: "", patternMatch: event.target.value as MemoProductItem["pattern_match"] } }))}>
                           <option value="unconfirmed">未確認</option><option value="straight">ストレートリピート</option><option value="other">半落ち・その他（職人さんに確認）</option>
                         </select>
                       </label>
@@ -1553,8 +1604,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                     </div>
                     <div className="space-y-3">
                        {product.derivedEntries?.map((e: any, eidx: number) => {
-                         const rawQty = overrides[product.product_code]?.entryQtys?.[eidx];
-                         const rawLen = overrides[product.product_code]?.entryLengths?.[eidx];
+                         const rawQty = overrides[product.editorKey]?.entryQtys?.[eidx];
+                         const rawLen = overrides[product.editorKey]?.entryLengths?.[eidx];
                          const qValue = rawQty !== undefined ? rawQty : e.quantity_input ?? e.quantity;
                          const lValue = rawLen !== undefined ? rawLen : e.length_input ?? e.length_m;
 
@@ -1569,7 +1620,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                 <div className="flex min-w-0 flex-1 items-center gap-1 sm:gap-2">
                                   {<button
                                     type="button"
-                                    onClick={() => handleToggleEntryRepeat(product.product_code, eidx)}
+                                    onClick={() => handleToggleEntryRepeat(product.editorKey, eidx)}
                                     className="-ml-1 flex shrink-0 items-center justify-center p-1.5 sm:m-0 sm:p-0"
                                     title="この行にリピート計算を適用する"
                                     aria-pressed={e.isRepeatActive}
@@ -1585,9 +1636,9 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                     onBlur={(ev) => {
                                       if (!ev.currentTarget.contains(ev.relatedTarget) && !navigationBlur(ev.relatedTarget) && !blurIntentRef.current.row && !(ev.relatedTarget instanceof Element && ev.relatedTarget.closest("[data-preserve-editor-input]"))) {
                                         setOverrides((prev) => {
-                                          const po = prev[product.product_code];
+                                          const po = prev[product.editorKey];
                                           if (!po || !po.entryEditMode || !po.entryEditMode[eidx]) return prev;
-                                          return { ...prev, [product.product_code]: { ...po, entryEditMode: { ...po.entryEditMode, [eidx]: false } } };
+                                          return { ...prev, [product.editorKey]: { ...po, entryEditMode: { ...po.entryEditMode, [eidx]: false } } };
                                         });
                                       }
                                     }}
@@ -1601,7 +1652,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                           className="h-8 w-[4.25rem] border-indigo-300 px-1 text-center text-xs font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[5.5rem] sm:text-sm"
                                           aria-label={`${product.product_code} ${eidx + 1}行目の長さ (m)`}
                                           value={lValue}
-                                          onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryLengths", input.target.value)}
+                                          onChange={(input) => handleEntryFieldChange(product.editorKey, eidx, "entryLengths", input.target.value)}
                                         />
                                         <span className="shrink-0 text-[11px] sm:text-sm">m</span>
                                         <span className="mx-0.5 shrink-0 text-[11px] text-muted-foreground sm:text-sm">×</span>
@@ -1610,11 +1661,11 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                           className="h-8 w-[3.25rem] border-indigo-300 px-1 text-center text-xs font-bold tabular-nums shadow-inner focus-visible:ring-indigo-500 dark:border-indigo-700 sm:w-[4rem] sm:text-sm"
                                           aria-label={`${product.product_code} ${eidx + 1}行目の幅数`}
                                           value={qValue}
-                                          onChange={(input) => handleEntryFieldChange(product.product_code, eidx, "entryQtys", input.target.value)}
+                                          onChange={(input) => handleEntryFieldChange(product.editorKey, eidx, "entryQtys", input.target.value)}
                                         />
                                         <button
                                           type="button"
-                                          onClick={() => handleResetEntry(product.product_code, eidx)}
+                                          onClick={() => handleResetEntry(product.editorKey, eidx)}
                                           className="ml-0.5 shrink-0 rounded-md p-1.5 text-rose-500/80 transition-colors hover:bg-black/10 hover:text-rose-500 dark:hover:bg-white/10"
                                           title="この行の編集を元に戻す"
                                         >
@@ -1624,7 +1675,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                     ) : (
                                       <button
                                         type="button"
-                                        onClick={() => handleToggleEntryEdit(product.product_code, eidx)}
+                                        onClick={() => handleToggleEntryEdit(product.editorKey, eidx)}
                                         className="group/formula flex min-w-0 flex-1 items-center gap-0.5 rounded-md px-0.5 py-0.5 text-left transition-colors hover:bg-black/5 dark:hover:bg-white/5 sm:max-w-[12rem] sm:gap-1.5 sm:px-1 sm:py-1"
                                         title="タップして式を編集"
                                       >
@@ -1647,7 +1698,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                                   </span>
                                   <button
                                     type="button"
-                                    onClick={() => handleDeleteEntry(product.product_code, eidx)}
+                                    onClick={() => handleDeleteEntry(product.editorKey, eidx)}
                                     className="ml-1 shrink-0 rounded-md p-1.5 text-rose-500/80 transition-colors hover:bg-rose-500/10 hover:text-rose-600"
                                     title="この数式を削除"
                                     aria-label="この数式を削除"
@@ -1671,8 +1722,8 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                             placeholder="2.7"
                             className="h-9 bg-white text-sm font-bold tabular-nums dark:bg-black"
                             aria-label={`${product.product_code} に追加する長さ (m)`}
-                            value={newEntryInputs[product.product_code]?.length ?? ""}
-                            onChange={(e) => handleNewEntryChange(product.product_code, "length", e.target.value)}
+                            value={newEntryInputs[product.editorKey]?.length ?? ""}
+                            onChange={(e) => handleNewEntryChange(product.editorKey, "length", e.target.value)}
                           />
                         </div>
                         <span className="pb-2 text-sm font-bold text-muted-foreground">×</span>
@@ -1685,15 +1736,15 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
                             placeholder="1"
                             className="h-9 bg-white text-sm font-bold tabular-nums dark:bg-black"
                             aria-label={`${product.product_code} に追加する幅数`}
-                            value={newEntryInputs[product.product_code]?.quantity ?? ""}
-                            onChange={(e) => handleNewEntryChange(product.product_code, "quantity", e.target.value)}
+                            value={newEntryInputs[product.editorKey]?.quantity ?? ""}
+                            onChange={(e) => handleNewEntryChange(product.editorKey, "quantity", e.target.value)}
                           />
                         </div>
                         <Button
                           type="button"
                           variant="outline"
                           className="h-9 shrink-0 gap-1.5 rounded-lg border-indigo-300 bg-white px-3 text-xs font-bold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:bg-black dark:text-indigo-200 dark:hover:bg-indigo-950"
-                          onClick={() => handleAddEntry(product.product_code)}
+                          onClick={() => handleAddEntry(product.editorKey)}
                         >
                           <Plus className="h-4 w-4" />
                           幅数を追加
@@ -1724,7 +1775,7 @@ export function OrderList({ basicView = false, items, sourceItems, sourceJobId, 
         copyReady={copyReviewRows.length > 0 && copyReviewRows.every(row => row.ready)} onClose={() => closeCopyReview()}
         onApply={applyCopyReview} onCopy={copyOrderText}
         onEdit={id => { const row = liveCopyReview.current.rows.find(row => row.id === id); if (row) closeCopyReview(() => {
-          setCollapsedCodes(current => { const next = new Set(current); next.delete(row.code); return next; }); selectView("edit", row.code);
+          setCollapsedCodes(current => { const next = new Set(current); const index = liveCopyReview.current.rows.findIndex(item => item.id === row.id); next.delete(String(index)); return next; }); selectView("edit", materialValue(liveCopyReview.current.items[Number(row.id.split(":")[0])], Number(row.id.split(":")[0])));
         }); }}
         onPhoto={index => { setPhotoError(false); setPhotoIndex(index); if (copyPhotoRef.current) { copyPhotoRef.current.open = true; copyPhotoRef.current.scrollIntoView({ block: "start" }); } }}
         photo={copyReviewOpen ? <details ref={copyPhotoRef} open className="space-y-2 rounded-xl border p-3"><summary className="min-h-11 cursor-pointer font-semibold">メモ画像（この結果）</summary>{sourcePhoto(true)}</details> : null} />
