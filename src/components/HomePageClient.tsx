@@ -214,6 +214,18 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const archiveRestoreInFlight = useRef(false);
   const [archiveRestoreBusy, setArchiveRestoreBusy] = useState(false);
   const [workspaceArchives, setWorkspaceArchives] = useState<WorkspaceArchive[]>([]);
+  const [archiveRescueOpen, setArchiveRescueOpen] = useState(false);
+  const [archiveRescueKey, setArchiveRescueKey] = useState("");
+  const [archiveRescueError, setArchiveRescueError] = useState<string | null>(null);
+  const archiveRescueDialog = useRef<HTMLDialogElement>(null);
+  const archiveRescueReturnFocus = useRef<HTMLButtonElement | null>(null);
+  const archiveRescueSelectionRef = useRef("");
+  const archiveRescueTitleId = useId(), archiveRescueSelectId = useId();
+  useEffect(() => {
+    const dialog = archiveRescueDialog.current;
+    if (archiveRescueOpen && !dialog?.open) dialog?.showModal();
+    else if (!archiveRescueOpen && dialog?.open) dialog.close();
+  }, [archiveRescueOpen]);
   const [pendingJobResult, setPendingJobResult] = useState<{ jobId: string; siteName: string | null; result: ParsedMemoPayload; backgroundReady: boolean } | null>(null);
   const pendingJobResultRef = useRef<typeof pendingJobResult>(null);
   const pendingChoiceInFlight = useRef(false);
@@ -478,17 +490,22 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
 
   const resultActionBlocked = draftEditorBlocked || Boolean(pendingOrderDraftDuplicate) || pendingOrderDraftQueue.length > 0 || isAnalyzing || analysisBlocksIntake(jobAccepted) || recoveryFlags.active || resultActionBusy || saveState !== "saved" || !recoverySettled || recoveryFlags.failed || hasUnfinishedResultInput({ parsed });
   const restoreWorkspaceArchive = async (archive: WorkspaceArchive) => {
+    const fromRescue = Boolean(archiveRescueDialog.current?.open);
     if (!archive.draft || archiveRestoreInFlight.current) return;
     archiveRestoreInFlight.current = true; setArchiveRestoreBusy(true);
     try {
       await safelySwitchWorkspace(archive.draft, () => {
+        if (fromRescue && (!archiveRescueDialog.current?.open || archiveRescueSelectionRef.current !== archive.key)) throw new Error("復旧データの選択が変わりました。選び直してください。");
         if (!lineUserId) throw new Error("ログインを確認してください。");
         assertWorkspaceArchiveCurrent(localStorage, `sokupa:workspace:v1:${lineUserId}`, archive);
       });
       setResultChoiceDeferred(true);
       try { localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`); localStorage.removeItem("sokupa:lastJobId"); } catch { /* Server discovery remains retained. */ }
+      if (fromRescue) archiveRescueDialog.current?.close();
     } catch (error) {
-      setError(`今の下書きを保持しています。復元できませんでした。 ${getErrorDetail(error)}`);
+      const message = `今の下書きを保持しています。復元できませんでした。 ${getErrorDetail(error)}`;
+      setError(message);
+      if (archiveRescueDialog.current?.open) setArchiveRescueError(message);
       try { if (lineUserId) setWorkspaceArchives(listWorkspaceArchives(localStorage, `sokupa:workspace:v1:${lineUserId}`)); } catch { /* Existing displayed recovery records stay available. */ }
     }
     finally { archiveRestoreInFlight.current = false; setArchiveRestoreBusy(false); }
@@ -947,6 +964,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
 
   const recentArchive = lineUserId ? recentWorkspaceArchive(recentDraft, `sokupa:workspace:v1:${lineUserId}`) : null;
   const legacyWorkspaceArchives = workspaceArchives.filter(archive => archive.kind !== "recent");
+  const rescueArchive = legacyWorkspaceArchives.find(archive => archive.key === archiveRescueKey);
   const archiveSiteName = (archive: WorkspaceArchive) => archive.draft?.parsed ? archive.draft.resultSiteName ?? archive.draft.siteName : archive.draft?.siteName;
   const renderWorkspaceArchive = (archive: WorkspaceArchive, label: string) => <div key={archive.key} className="rounded border p-3 text-sm">
     <p>{archiveSiteName(archive) || "現場名なし"}（解析{archive.draft?.parsed?.items.length ?? 0}品番・発注下書き{archive.draft?.orderDraftItems.length ?? 0}件）</p>
@@ -985,7 +1003,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           {parsed && resultSiteName ? <p className="truncate text-xs text-muted-foreground">{resultSiteName}</p> : null}
         </div>
         <div className="flex shrink-0 items-center gap-[13px]">{!qaSynthetic ? <LineNotificationEntry /> : null}
-        <WorkspaceModeMenu help={<p>メモ画像の寸法を読み取り、必要量に予備分{DEFAULT_LOSS_RATE_PERCENT}%を加えて発注数量を計算します。予備分は変更できます。</p>} value={calculationMode} count={orderDraftItems.length} onChange={mode => {
+        <WorkspaceModeMenu onOpenRecovery={legacyWorkspaceArchives.length ? trigger => { archiveRescueReturnFocus.current = trigger; archiveRescueSelectionRef.current = ""; setArchiveRescueKey(""); setArchiveRescueError(null); setArchiveRescueOpen(true); } : undefined} help={<p>メモ画像の寸法を読み取り、必要量に予備分{DEFAULT_LOSS_RATE_PERCENT}%を加えて発注数量を計算します。予備分は変更できます。</p>} value={calculationMode} count={orderDraftItems.length} onChange={mode => {
           if (mode === "area") setAreaCalculatorMounted(true);
           setCalculationMode(mode);
           window.scrollTo({ top: 0, behavior: "instant" });
@@ -1186,16 +1204,11 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
 
       {recentArchive || legacyWorkspaceArchives.length ? <Card>
         <CardHeader className="space-y-3">
-          <CardTitle className="text-base">{recentArchive ? "直前の下書き" : "以前の退避データ"}</CardTitle>
-          <CardDescription>{recentArchive ? "今の編集を1件残して切り替えます。復元すると、表示中と直前の下書きが入れ替わります。" : "旧データはそのまま保持しています。次の切替から、直前の編集を1件だけ残します。"}</CardDescription>
+          <CardTitle className="text-base">直前の下書き</CardTitle>
+          <CardDescription>{recentArchive ? "今の編集を1件残して切り替えます。復元すると、表示中と直前の下書きが入れ替わります。" : "直前の下書きはまだありません。別の結果へ切り替えたときに、今の編集を1件残します。"}</CardDescription>
           {recentArchive ? <details>
             <summary data-workspace-navigation className="min-h-11 cursor-pointer content-center text-sm font-medium">直前の下書きを確認（1件）</summary>
             <div className="mt-3">{renderWorkspaceArchive(recentArchive, "直前の下書き")}</div>
-          </details> : null}
-          {legacyWorkspaceArchives.length ? <details>
-            <summary data-workspace-navigation className="min-h-11 cursor-pointer content-center text-sm font-medium">以前の退避・保留結果（{legacyWorkspaceArchives.length}件）</summary>
-            <p className="mt-2 text-xs text-muted-foreground">旧データは日時順を確認できないため、削除せず残しています。これからの切替退避は1件だけに入れ替わります。</p>
-            <div className="mt-3 space-y-3">{legacyWorkspaceArchives.map((archive, index) => renderWorkspaceArchive(archive, `以前の退避${index + 1}`))}</div>
           </details> : null}
         </CardHeader>
       </Card> : null}
@@ -1235,6 +1248,8 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           </CardHeader>
         </Card>
       ) : null}
+
+
 
       {error ? (
         <Card className="border-destructive/50 bg-destructive/5">
@@ -1334,6 +1349,20 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           onCancelDuplicate={cancelPendingOrderDraft}
         />
       </section>
+      <dialog ref={archiveRescueDialog} data-workspace-navigation aria-labelledby={archiveRescueTitleId} className="fixed inset-0 max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-xl border bg-background p-4 text-foreground shadow-xl backdrop:bg-black/40" onClose={() => { archiveRescueSelectionRef.current = ""; setArchiveRescueOpen(false); setArchiveRescueKey(""); setArchiveRescueError(null); archiveRescueReturnFocus.current?.focus(); }}>
+        <div className="flex items-center justify-between gap-3">
+          <h2 id={archiveRescueTitleId} className="font-semibold">端末データの復旧</h2>
+          <Button type="button" variant="outline" className="min-h-11" onClick={() => archiveRescueDialog.current?.close()}>閉じる</Button>
+        </div>
+        <p className="my-3 text-sm text-muted-foreground">直前1件とは別に保護している保存データです。必要なものを選んでください。日時順ではありません。</p>
+        <label htmlFor={archiveRescueSelectId} className="mb-1 block text-sm font-medium">復旧する保存データ</label>
+        <select id={archiveRescueSelectId} value={archiveRescueKey} className="mb-3 min-h-11 w-full min-w-0 rounded-md border bg-background p-2 text-sm" onChange={event => { archiveRescueSelectionRef.current = event.target.value; setArchiveRescueKey(event.target.value); setArchiveRescueError(null); }}>
+          <option value="">保存データを選択</option>
+          {legacyWorkspaceArchives.map((archive, index) => <option key={archive.key} value={archive.key}>{archive.kind === "deferred" ? "保留した解析結果" : archive.kind === "quarantine" ? "読取不能の保存データ" : "保存データ"}{index + 1}：{archiveSiteName(archive) || "現場名なし"}</option>)}
+        </select>
+        {rescueArchive ? <div aria-label="選択した復旧データ">{!rescueArchive.draft ? <p className="mb-2 text-sm">この保存データは読み取れません。書き出して保管できます。</p> : null}{renderWorkspaceArchive(rescueArchive, "選択した復旧データ")}</div> : null}
+        {archiveRescueError ? <p role="alert" className="mt-3 text-sm text-destructive">{archiveRescueError}</p> : null}
+      </dialog>
     </main>
   );
 }

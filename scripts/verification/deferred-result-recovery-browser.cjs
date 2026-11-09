@@ -69,8 +69,8 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
       for(let n=0;n<200&&state.readsA<=readsBeforeAcceptance;n++)await new Promise(resolve=>setTimeout(resolve,50));
       assert.ok(state.readsA>readsBeforeAcceptance);assert.equal(await page.getByText('Server A: LINE受付済み',{exact:true}).count(),0); // Current B must not show unrelated A's terminal card.
       assert.equal(await page.evaluate(k => localStorage.getItem(k), pointer), a); assert.equal((await f.read()).parsed.items[0].order_quantity, 46); checks++;
-      state.detailReady = false; await page.reload(); await workspace.mode(page, '実寸計測'); await page.getByText(/^以前の退避・保留結果/).click();
-      await page.getByRole('button', { name: /「Server A」を復元/ }).first().click();
+      state.detailReady = false; await page.reload(); await workspace.mode(page, '実寸計測'); await workspace.openArchiveRecovery(page,cachedA);
+      await page.getByRole('button', { name: /選択した復旧データ「Server A」を復元/ }).first().click();
       await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor();
       assert.equal((await f.read()).resultJobId, a); assert.ok(state.seenA > 0); assert.equal(await page.getByRole('tab',{name:'概要',exact:true}).isVisible(),true); checks++;
       assert.ok((await workspace.recoveryDrafts(page,key)).some(entry=>entry.draft?.resultJobId===b&&entry.draft.parsed.items[0].order_quantity===46)); checks++;

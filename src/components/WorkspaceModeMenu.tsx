@@ -10,7 +10,7 @@ const modes: { value: CalculationMode; label: string; detail: string }[] = [
   { value: "order-draft", label: "発注リスト", detail: "追加した発注下書き" },
 ];
 
-export function WorkspaceModeMenu({ value, count, onChange, help }: { value: CalculationMode; count: number; help?: ReactNode; onChange: (mode: CalculationMode) => void }) {
+export function WorkspaceModeMenu({ value, count, onChange, help, onOpenRecovery }: { value: CalculationMode; count: number; help?: ReactNode; onChange: (mode: CalculationMode) => void; onOpenRecovery?: (returnFocus: HTMLButtonElement | null) => void }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -38,6 +38,7 @@ export function WorkspaceModeMenu({ value, count, onChange, help }: { value: Cal
         <span className="block text-xs text-muted-foreground">{mode.detail}</span>
       </button>)}
       {help ? <details className="border-t px-3 py-2 text-sm"><summary data-workspace-navigation className="min-h-11 cursor-pointer content-center font-semibold">使い方</summary><div className="pb-2 text-xs text-muted-foreground">{help}</div></details> : null}
+      {onOpenRecovery ? <button type="button" data-mode-choice className="block min-h-11 w-full rounded-lg border-t px-3 py-2 text-left text-sm hover:bg-muted focus-visible:ring-2 focus-visible:ring-indigo-500" onClick={() => { setOpen(false); onOpenRecovery(trigger.current); }}>端末データの復旧</button> : null}
     </div> : null}
   </div>;
 }

@@ -28,3 +28,15 @@ const recoveryDrafts = async (page, key) => page.evaluate(key => {
  const active=JSON.parse(localStorage.getItem(key));if(active?.recentDraft)records.unshift({key:key+':recent:'+active.recentDraft.revision,raw:active.recentDraft.raw,draft:JSON.parse(active.recentDraft.raw)});return records;
 },key);
 module.exports.recoveryDrafts = recoveryDrafts;
+
+// Legacy/deferred/corrupt data are an explicit recovery operation, not a recent-card list.
+module.exports.openArchiveRecovery = async (page, key) => {
+  const dialog = page.getByRole('dialog', { name: '端末データの復旧', exact: true });
+  if (!await dialog.isVisible()) {
+    await page.getByRole('button', { name: '計測・発注メニュー', exact: true }).click();
+    await page.getByRole('button', { name: '端末データの復旧', exact: true }).click();
+    await dialog.waitFor();
+  }
+  if (key !== undefined) await dialog.getByLabel('復旧する保存データ', { exact: true }).selectOption(key);
+  return dialog;
+};
