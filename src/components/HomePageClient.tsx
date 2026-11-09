@@ -211,7 +211,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const restoredDraftRef = useRef<WorkspaceDraft | null>(null);
   const currentWorkspaceRef = useRef<WorkspaceDraft | null>(null);
   const persistedWorkspaceRef = useRef<string | null>(null);
-  const archiveRestoreInFlight = useRef(false);
+  const archiveRestoreInFlight = useRef<{ generation: number; owner: string | null } | null>(null);
   const [archiveRestoreBusy, setArchiveRestoreBusy] = useState(false);
   const [workspaceArchives, setWorkspaceArchives] = useState<WorkspaceArchive[]>([]);
   const [archiveRescueOpen, setArchiveRescueOpen] = useState(false);
@@ -220,7 +220,20 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const archiveRescueDialog = useRef<HTMLDialogElement>(null);
   const archiveRescueReturnFocus = useRef<HTMLButtonElement | null>(null);
   const archiveRescueSelectionRef = useRef("");
+  const archiveRescueGeneration = useRef(0);
   const archiveRescueTitleId = useId(), archiveRescueSelectId = useId();
+  const invalidateArchiveRestore = () => {
+    archiveRescueGeneration.current++;
+    archiveRestoreInFlight.current = null;
+    setArchiveRestoreBusy(false);
+  };
+  const closeArchiveRescue = () => {
+    invalidateArchiveRestore();
+    archiveRescueSelectionRef.current = "";
+    setArchiveRescueOpen(false); setArchiveRescueKey(""); setArchiveRescueError(null);
+    archiveRescueDialog.current?.close();
+    archiveRescueReturnFocus.current?.focus();
+  };
   useEffect(() => {
     const dialog = archiveRescueDialog.current;
     if (archiveRescueOpen && !dialog?.open) dialog?.showModal();
@@ -431,7 +444,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  const safelySwitchWorkspace = async (next: WorkspaceDraft, validateSelection?: () => void) => {
+  const safelySwitchWorkspace = async (next: WorkspaceDraft, validateSelection?: () => void, operationCurrent: () => boolean = () => true) => {
     if (!lineUserId || !currentWorkspaceRef.current) throw new Error("下書きの準備ができていません。");
     if (saveState !== "saved") throw new Error("今の編集の保存完了後に選び直してください。編集内容は保持しています。");
     const key = `sokupa:workspace:v1:${lineUserId}`, current = currentWorkspaceRef.current;
@@ -440,6 +453,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     const authResponse = await fetch("/api/auth/session", { cache: "no-store" });
     const auth = await authResponse.json();
     if (!authResponse.ok || !auth.authenticated || auth.line_user_id !== lineUserId) throw new Error("ログイン情報が変わりました。今の編集を保持して切替を止めました。");
+    validateSelection?.();
     const switched = await withWorkspaceLock(key, async () => {
       const validate = () => {
         if (!mountedResultRef.current || resultSwitchStateRef.current.owner !== lineUserId) throw new Error("ログイン情報が変わりました。今の編集は保持しています。");
@@ -450,7 +464,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       };
       try { return await commitWorkspaceSwitch(localStorage, lineUserId, expected, current, next, validate); }
       catch (error) {
-        if (localStorage.getItem(key) !== expected) setSaveState("error");
+        if (operationCurrent() && mountedResultRef.current && localStorage.getItem(key) !== expected) setSaveState("error");
         throw error;
       }
     });
@@ -492,23 +506,28 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const restoreWorkspaceArchive = async (archive: WorkspaceArchive) => {
     const fromRescue = Boolean(archiveRescueDialog.current?.open);
     if (!archive.draft || archiveRestoreInFlight.current) return;
-    archiveRestoreInFlight.current = true; setArchiveRestoreBusy(true);
+    const operation = { generation: archiveRescueGeneration.current, owner: lineUserId };
+    archiveRestoreInFlight.current = operation; setArchiveRestoreBusy(true);
+    const operationCurrent = () => mountedResultRef.current && archiveRestoreInFlight.current === operation && operation.owner === resultSwitchStateRef.current.owner && operation.generation === archiveRescueGeneration.current;
     try {
       await safelySwitchWorkspace(archive.draft, () => {
+        if (!operationCurrent()) throw new Error("復旧操作は取り消されました。");
         if (fromRescue && (!archiveRescueDialog.current?.open || archiveRescueSelectionRef.current !== archive.key)) throw new Error("復旧データの選択が変わりました。選び直してください。");
         if (!lineUserId) throw new Error("ログインを確認してください。");
         assertWorkspaceArchiveCurrent(localStorage, `sokupa:workspace:v1:${lineUserId}`, archive);
-      });
+      }, operationCurrent);
+      if (!operationCurrent()) return;
       setResultChoiceDeferred(true);
       try { localStorage.removeItem(`sokupa:lastJobId:${lineUserId}`); localStorage.removeItem("sokupa:lastJobId"); } catch { /* Server discovery remains retained. */ }
-      if (fromRescue) archiveRescueDialog.current?.close();
+      if (fromRescue) closeArchiveRescue();
     } catch (error) {
+      if (!operationCurrent()) return;
       const message = `今の下書きを保持しています。復元できませんでした。 ${getErrorDetail(error)}`;
       setError(message);
       if (archiveRescueDialog.current?.open) setArchiveRescueError(message);
       try { if (lineUserId) setWorkspaceArchives(listWorkspaceArchives(localStorage, `sokupa:workspace:v1:${lineUserId}`)); } catch { /* Existing displayed recovery records stay available. */ }
     }
-    finally { archiveRestoreInFlight.current = false; setArchiveRestoreBusy(false); }
+    finally { if (operationCurrent()) { archiveRestoreInFlight.current = null; setArchiveRestoreBusy(false); } }
   };
 
   const changeResultDisplay = async (kind: "manual" | "restore" | "age" | "declined" | "resume", expectedItems?: string) => {
@@ -1003,7 +1022,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           {parsed && resultSiteName ? <p className="truncate text-xs text-muted-foreground">{resultSiteName}</p> : null}
         </div>
         <div className="flex shrink-0 items-center gap-[13px]">{!qaSynthetic ? <LineNotificationEntry /> : null}
-        <WorkspaceModeMenu onOpenRecovery={legacyWorkspaceArchives.length ? trigger => { archiveRescueReturnFocus.current = trigger; archiveRescueSelectionRef.current = ""; setArchiveRescueKey(""); setArchiveRescueError(null); setArchiveRescueOpen(true); } : undefined} help={<p>メモ画像の寸法を読み取り、必要量に予備分{DEFAULT_LOSS_RATE_PERCENT}%を加えて発注数量を計算します。予備分は変更できます。</p>} value={calculationMode} count={orderDraftItems.length} onChange={mode => {
+        <WorkspaceModeMenu onOpenRecovery={legacyWorkspaceArchives.length ? trigger => { invalidateArchiveRestore(); archiveRescueReturnFocus.current = trigger; archiveRescueSelectionRef.current = ""; setArchiveRescueKey(""); setArchiveRescueError(null); setArchiveRescueOpen(true); } : undefined} help={<p>メモ画像の寸法を読み取り、必要量に予備分{DEFAULT_LOSS_RATE_PERCENT}%を加えて発注数量を計算します。予備分は変更できます。</p>} value={calculationMode} count={orderDraftItems.length} onChange={mode => {
           if (mode === "area") setAreaCalculatorMounted(true);
           setCalculationMode(mode);
           window.scrollTo({ top: 0, behavior: "instant" });
@@ -1349,14 +1368,14 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
           onCancelDuplicate={cancelPendingOrderDraft}
         />
       </section>
-      <dialog ref={archiveRescueDialog} data-workspace-navigation aria-labelledby={archiveRescueTitleId} className="fixed inset-0 max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-xl border bg-background p-4 text-foreground shadow-xl backdrop:bg-black/40" onClose={() => { archiveRescueSelectionRef.current = ""; setArchiveRescueOpen(false); setArchiveRescueKey(""); setArchiveRescueError(null); archiveRescueReturnFocus.current?.focus(); }}>
+      <dialog ref={archiveRescueDialog} data-workspace-navigation aria-labelledby={archiveRescueTitleId} className="fixed inset-0 max-h-[85dvh] w-[calc(100%-2rem)] max-w-lg overflow-y-auto rounded-xl border bg-background p-4 text-foreground shadow-xl backdrop:bg-black/40" onCancel={event => { event.preventDefault(); closeArchiveRescue(); }}>
         <div className="flex items-center justify-between gap-3">
           <h2 id={archiveRescueTitleId} className="font-semibold">端末データの復旧</h2>
-          <Button type="button" variant="outline" className="min-h-11" onClick={() => archiveRescueDialog.current?.close()}>閉じる</Button>
+          <Button type="button" variant="outline" className="min-h-11" onClick={closeArchiveRescue}>閉じる</Button>
         </div>
         <p className="my-3 text-sm text-muted-foreground">直前1件とは別に保護している保存データです。必要なものを選んでください。日時順ではありません。</p>
         <label htmlFor={archiveRescueSelectId} className="mb-1 block text-sm font-medium">復旧する保存データ</label>
-        <select id={archiveRescueSelectId} value={archiveRescueKey} className="mb-3 min-h-11 w-full min-w-0 rounded-md border bg-background p-2 text-sm" onChange={event => { archiveRescueSelectionRef.current = event.target.value; setArchiveRescueKey(event.target.value); setArchiveRescueError(null); }}>
+        <select id={archiveRescueSelectId} value={archiveRescueKey} className="mb-3 min-h-11 w-full min-w-0 rounded-md border bg-background p-2 text-sm" onChange={event => { invalidateArchiveRestore(); archiveRescueSelectionRef.current = event.target.value; setArchiveRescueKey(event.target.value); setArchiveRescueError(null); }}>
           <option value="">保存データを選択</option>
           {legacyWorkspaceArchives.map((archive, index) => <option key={archive.key} value={archive.key}>{archive.kind === "deferred" ? "保留した解析結果" : archive.kind === "quarantine" ? "読取不能の保存データ" : "保存データ"}{index + 1}：{archiveSiteName(archive) || "現場名なし"}</option>)}
         </select>
