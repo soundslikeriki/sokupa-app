@@ -65,21 +65,23 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
       await page.getByRole('button', { name: '今の編集を続ける', exact: true }).click();
       await page.getByText('今の編集を続けています。',{exact:true}).waitFor();
       assert.equal(JSON.parse(await page.evaluate(k => localStorage.getItem(k), cachedA)).resultJobId, a); assert.equal(state.seenA, 0); checks++;
-      state.remoteSeen = state.accepted = true;
-      await page.getByText('Server A: LINE受付済み', { exact: true }).waitFor();
+      const readsBeforeAcceptance=state.readsA;state.remoteSeen = state.accepted = true;
+      for(let n=0;n<200&&state.readsA<=readsBeforeAcceptance;n++)await new Promise(resolve=>setTimeout(resolve,50));
+      assert.ok(state.readsA>readsBeforeAcceptance);assert.equal(await page.getByText('Server A: LINE受付済み',{exact:true}).count(),0); // Current B must not show unrelated A's terminal card.
       assert.equal(await page.evaluate(k => localStorage.getItem(k), pointer), a); assert.equal((await f.read()).parsed.items[0].order_quantity, 46); checks++;
-      state.detailReady = false; await page.reload(); await workspace.mode(page, '実寸計測'); await page.getByText(/^退避した下書きを確認/).click();
+      state.detailReady = false; await page.reload(); await workspace.mode(page, '実寸計測'); await page.getByText(/^以前の退避・保留結果/).click();
       await page.getByRole('button', { name: /「Server A」を復元/ }).first().click();
       await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor();
       assert.equal((await f.read()).resultJobId, a); assert.ok(state.seenA > 0); assert.equal(await page.getByRole('tab',{name:'概要',exact:true}).isVisible(),true); checks++;
-      assert.ok(await page.evaluate(({ key, b }) => Object.keys(localStorage).filter(k => k.startsWith(key + ':recovery:')).some(k => { const d = JSON.parse(localStorage.getItem(k)); return d.resultJobId === b && d.parsed.items[0].order_quantity === 46; }), { key, b })); checks++;
+      assert.ok((await workspace.recoveryDrafts(page,key)).some(entry=>entry.draft?.resultJobId===b&&entry.draft.parsed.items[0].order_quantity===46)); checks++;
       await f.context.close();
     }
     // An explicit old pointer cannot be discarded solely because another device saw it first.
     {
       const f = await fixture({ remoteSeen: true }), { page, state } = f;
       await page.getByText('別の解析結果があります', { exact: true }).waitFor(); assert.equal(state.seenA, 0); checks++;
-      state.accepted = true; await page.getByText('Server A: LINE受付済み', { exact: true }).waitFor();
+      const readsBeforeAcceptance=state.readsA;state.accepted=true;await wait(()=>state.readsA>readsBeforeAcceptance);
+      assert.equal(await page.getByText('Server A: LINE受付済み',{exact:true}).count(),0); // Notification belongs to A, not current B.
       assert.equal(await page.evaluate(k => localStorage.getItem(k), pointer), a); checks++;
       await page.reload(); await page.getByText('別の解析結果があります', { exact: true }).waitFor();
       await workspace.mode(page, '発注リスト'); await page.getByRole('button', { name: '選択した以前のデータを復元する', exact: true }).click();
@@ -119,7 +121,7 @@ const wait = async (fn) => { const end = Date.now() + 20000; while (Date.now() <
       await page.getByText('別の解析結果があります', { exact: true }).waitFor(); assert.equal((await f.read()).resultJobId, c); assert.equal(state.seenA, 0); checks++;
       await page.getByRole('button', { name: '選択した以前のデータを復元する', exact: true }).click();
       await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor(); assert.equal((await f.read()).resultJobId, a); assert.ok(state.historyReads >= 3); checks++;
-      assert.ok(await page.evaluate(({ key, c }) => Object.keys(localStorage).filter(k => k.startsWith(key + ':recovery:')).some(k => JSON.parse(localStorage.getItem(k)).resultJobId === c), { key, c })); checks++;
+      assert.ok((await workspace.recoveryDrafts(page,key)).some(entry=>entry.draft?.resultJobId===c)); checks++;
       await f.context.close();
     }
     console.log(`PASS: ${checks} deferred-result recovery checks; remote seen/accepted, offline cache restore, explicit pointer, admission 503 recovery, quota failure and paged history; no external requests.`);

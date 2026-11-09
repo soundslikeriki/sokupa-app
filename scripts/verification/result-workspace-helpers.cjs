@@ -21,3 +21,10 @@ const freshResultFixtures = async context => context.addInitScript(() => {
  };
 });
 module.exports = { view, edit, mode, disclosure, repeatSettings, copy, freshResultFixtures };
+
+// New one-slot snapshots live atomically inside the active value; old recovery records remain separate.
+const recoveryDrafts = async (page, key) => page.evaluate(key => {
+ const records=Object.keys(localStorage).filter(k=>k.startsWith(key+':recovery:')).map(k=>{const raw=localStorage.getItem(k);let draft=null;try{draft=JSON.parse(raw);}catch{}return{key:k,raw,draft};});
+ const active=JSON.parse(localStorage.getItem(key));if(active?.recentDraft)records.unshift({key:key+':recent:'+active.recentDraft.revision,raw:active.recentDraft.raw,draft:JSON.parse(active.recentDraft.raw)});return records;
+},key);
+module.exports.recoveryDrafts = recoveryDrafts;

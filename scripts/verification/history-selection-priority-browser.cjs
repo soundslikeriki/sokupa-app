@@ -61,7 +61,7 @@ const wait = async fn => { const until = Date.now() + 15000; while (Date.now() <
         await page.getByRole('button', { name: '選択した以前のデータを復元する', exact: true }).click();
         await workspace.edit(page, 'A-CODE'); await page.getByLabel('A-CODE の発注数量を入力', { exact: true }).waitFor();
         const applied = JSON.parse(await page.evaluate(k => localStorage.getItem(k), key)); assert.equal(applied.resultJobId, a); assert.equal(applied.parsed.items[0].order_quantity, 12); checks++;
-        assert.ok(await page.evaluate(({ key, b }) => Object.keys(localStorage).filter(k => k.startsWith(key + ':recovery:')).some(k => { const draft = JSON.parse(localStorage.getItem(k)); return draft.resultJobId === b && draft.parsed.items[0].order_quantity === 46; }), { key, b })); checks++;
+        assert.ok((await workspace.recoveryDrafts(page,key)).some(entry=>entry.draft?.resultJobId===b&&entry.draft.parsed.items[0].order_quantity===46)); checks++;
       } finally { release(); await context.close(); }
     }
     console.log(`PASS: ${checks} history selection priority browser checks; delayed discovery/pointer, repeated explicit selection, stale failure and edited draft safety; no external requests.`);

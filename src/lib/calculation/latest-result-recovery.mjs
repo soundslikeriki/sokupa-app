@@ -74,13 +74,14 @@ function matches(a, b) {
  * Every writer MUST use this service and this lock. Missing lock support fails closed.
  * ownerId must come from a verified signed-in session, never a user-editable form.
  */
-export function createLatestResultRecovery({ ownerId, storage, locks, maxBytes = DEFAULT_MAX_BYTES, now = () => new Date().toISOString(), allowEmptySnapshots = false }) {
+export function createLatestResultRecovery({ ownerId, storage, locks, maxBytes = DEFAULT_MAX_BYTES, now = () => new Date().toISOString(), allowEmptySnapshots = false, schemaVersion = VERSION }) {
+  if (![1, 2].includes(schemaVersion)) throw new Invalid('schema-version-invalid');
   if (!text(ownerId)) throw new Invalid('owner-required');
   if (!safeInt(maxBytes) || maxBytes < 1024) throw new Invalid('size-limit-invalid');
   const key = `sokupa:latest-result:v${VERSION}:${encodeURIComponent(ownerId)}`;
   const lockName = `${key}:write`;
   const bytes = (raw) => new TextEncoder().encode(raw).byteLength;
-  const fresh = () => ({ schemaVersion: VERSION, ownerId, generation: 0, pending: null, latest: null });
+  const fresh = () => ({ schemaVersion, ownerId, generation: 0, pending: null, latest: null });
   const timestamp = () => {
     const value = now();
     if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) throw new Invalid('clock-invalid');
@@ -91,7 +92,7 @@ export function createLatestResultRecovery({ ownerId, storage, locks, maxBytes =
     if (typeof raw !== 'string' || bytes(raw) > maxBytes) throw new Invalid('stored-data-invalid');
     let state;
     try { state = JSON.parse(raw); } catch { throw new Invalid('stored-data-invalid'); }
-    if (!record(state) || state.schemaVersion !== VERSION) throw new Invalid('stored-version-unsupported');
+    if (!record(state) || (![1, 2].includes(state.schemaVersion) || state.schemaVersion > schemaVersion)) throw new Invalid('stored-version-unsupported');
     if (state.ownerId !== ownerId) throw new Invalid('stored-owner-mismatch');
     if (!safeInt(state.generation) || !Object.hasOwn(state, 'pending') || !Object.hasOwn(state, 'latest')) throw new Invalid('stored-data-invalid');
     if (state.pending !== null && (!record(state.pending) || !text(state.pending.operationId) || state.pending.generation !== state.generation || !text(state.pending.startedAt))) throw new Invalid('stored-data-invalid');
@@ -103,10 +104,12 @@ export function createLatestResultRecovery({ ownerId, storage, locks, maxBytes =
     return state;
   }
   function write(state) {
+    state.schemaVersion = schemaVersion;
     const raw = JSON.stringify(state);
     if (bytes(raw) > maxBytes) throw new Invalid('snapshot-too-large');
     // No remove-before-write, backup keys, result histories, or accumulated images.
     storage.setItem(key, raw);
+    if (storage.getItem(key) !== raw) throw new Invalid('storage-readback-failed');
   }
   function view(state) {
     return jsonCopy({ status: 'restored', latest: state.latest, pending: state.pending });

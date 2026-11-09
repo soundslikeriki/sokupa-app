@@ -21,7 +21,7 @@ const item=(m,q,order)=>({product_code:'VS2067',manufacturer:'Synthetic',entries
    if(url.pathname.startsWith('/api/'))throw Error('Unexpected API '+url.pathname);return route.continue();
   });
   const current=()=>page.evaluate(key=>JSON.parse(localStorage.getItem(key)),key);
-  const archived=()=>page.evaluate(key=>Object.keys(localStorage).filter(k=>k.startsWith(key+':recovery:')).map(k=>({key:k,raw:localStorage.getItem(k),draft:JSON.parse(localStorage.getItem(k))})),key);
+  const archived=()=>workspace.recoveryDrafts(page,key);
   await page.goto(base);await workspace.edit(page,'VS2067');
   if(scenario==='new-image-archive-failure'){
     await page.getByLabel('VS2067 の発注数量を入力',{exact:true}).waitFor();
@@ -40,15 +40,15 @@ const item=(m,q,order)=>({product_code:'VS2067',manufacturer:'Synthetic',entries
   await page.getByRole('button',{name:'今の編集を続ける',exact:true}).click();await page.getByTitle('タップして式を編集').click();await page.getByLabel('VS2067 1行目の幅数',{exact:true}).fill('3');
   await page.waitForFunction(key=>JSON.parse(localStorage.getItem(key)).parsed.items[0].order_quantity===69,key);assert.equal(seenBCalls,0);checks++;
   await page.reload();await page.getByText('別の解析結果があります',{exact:true}).waitFor();saved=await current();assert.equal(saved.parsed.items[0].order_quantity,69);assert.equal(saved.resultJobId,legacy?null:a);assert.equal(seenBCalls,0);checks++;
-  await page.evaluate(({key,scenario,b})=>{window.realWorkspaceSet=Storage.prototype.setItem;Storage.prototype.setItem=function(name,value){if(scenario==='primary-write-failure'?name===key&&JSON.parse(value).resultJobId===b:name.startsWith(key+':recovery:'))throw new DOMException('Synthetic quota','QuotaExceededError');return window.realWorkspaceSet.call(this,name,value);};},{key,scenario,b});
+  await page.evaluate(({key,scenario,b})=>{window.realWorkspaceSet=Storage.prototype.setItem;Storage.prototype.setItem=function(name,value){if(scenario==='primary-write-failure'?name===key&&JSON.parse(value).resultJobId===b:name.startsWith('sokupa:latest-result:'))throw new DOMException('Synthetic quota','QuotaExceededError');return window.realWorkspaceSet.call(this,name,value);};},{key,scenario,b});
   await page.getByRole('button',{name:'選択した以前のデータを復元する',exact:true}).click();await page.getByText('今の下書きを保持しています。退避・切替できませんでした。',{exact:false}).waitFor();
   saved=await current();assert.equal(saved.parsed.items[0].order_quantity,69);assert.equal(saved.siteName,'Edited site A');assert.equal(seenBCalls,0);checks++;
   await page.evaluate(()=>{Storage.prototype.setItem=window.realWorkspaceSet;});await page.getByRole('button',{name:'選択した以前のデータを復元する',exact:true}).click();
   await page.waitForFunction(({key,b})=>JSON.parse(localStorage.getItem(key)).resultJobId===b,{key,b});await page.waitForTimeout(200);
   saved=await current();assert.equal(saved.siteName,'Server site B');assert.equal(saved.parsed.items[0].order_quantity,legacy?23:12);assert.equal(saved.orderDraftItems[0].quantity,9);assert.ok(seenBCalls>=1);checks++;
   const copies=await archived();assert.ok(copies.some(x=>x.draft.siteName==='Edited site A'&&x.draft.parsed.items[0].order_quantity===69&&x.draft.originalParsed.items[0].order_quantity===23));checks++;
-  await page.getByText(/^退避した下書きを確認/).click();
-  assert.equal(await page.getByText('退避した下書き',{exact:true}).locator('..').getByRole('button').evaluateAll(nodes=>nodes.every(node=>{const r=node.getBoundingClientRect();return r.x>=0&&r.right<=innerWidth;})),true);checks++;
+  await page.getByText(/^直前の下書きを確認/).click();
+  assert.equal(await page.getByText('直前の下書き',{exact:true}).locator('..').getByRole('button').evaluateAll(nodes=>nodes.every(node=>{const r=node.getBoundingClientRect();return r.x>=0&&r.right<=innerWidth;})),true);checks++;
   const exported=page.waitForEvent('download');await page.getByRole('button',{name:/「Edited site A」を書き出す/}).first().click();const file=await exported;const downloaded=JSON.parse(fs.readFileSync(await file.path(),'utf8'));assert.equal(downloaded.parsed.items[0].order_quantity,69);assert.equal(downloaded.orderDraftItems[0].quantity,9);checks++;
   await page.getByRole('button',{name:/「Edited site A」を復元/}).first().click();await page.waitForFunction(key=>JSON.parse(localStorage.getItem(key)).siteName==='Edited site A',key);
   saved=await current();assert.equal(saved.parsed.items[0].order_quantity,69);assert.equal(saved.resultJobId,legacy?null:a);assert.ok((await archived()).some(x=>x.draft.resultJobId===b&&x.draft.siteName==='Server site B'));checks++;

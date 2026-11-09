@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { retainDeferredJobResult, readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, switchWorkspaceDraft, listWorkspaceArchives, type WorkspaceDraft } from "./workspace-draft";
+import { retainDeferredJobResult, readWorkspaceDraft, archiveWorkspaceDraft, workspaceContainsJobResult, workspaceWouldBeReplacedByResult, switchWorkspaceDraft, listWorkspaceArchives, assertWorkspaceArchiveCurrent, prepareWorkspaceSwitch, type WorkspaceDraft } from "./workspace-draft";
 
 test("workspace round-trip retains edits, original measurements, repeat settings and order draft", () => {
   const original = { product_code: "VS2067", manufacturer: "Test", total_m: 5.4, order_quantity: 7, entries: [{ original_formula: "2.7×2", length_m: 2.7, quantity: 2, subtotal_m: 5.4 }] };
@@ -78,50 +78,47 @@ test("different or unknown jobs need a choice even if their original OCR is iden
   assert.equal(workspaceWouldBeReplacedByResult({ ...a, parsed: null, originalParsed: null }, jobB, null), true);
 });
 
-test("switch and restore preserve both the exact original bytes and newer unsaved edits", () => {
-  const key = "workspace", a = snapshot(jobA, "A", 2), editedA = snapshot(jobA, "Edited A", 3), b = snapshot(jobB, "B", 1), raw = JSON.stringify(a, null, 2);
-  const values = new Map([[key, raw]]), storage = storageFor(values);
-  const switched = switchWorkspaceDraft(storage, key, raw, editedA, b, "first");
-  assert.equal(storage.getItem(key), JSON.stringify(b));
-  assert.equal(switched.archives.length, 2);
-  assert.equal(switched.archives[0].raw, raw);
-  assert.deepEqual(readWorkspaceDraft(switched.archives[1].raw), editedA);
-  switchWorkspaceDraft(storage, key, switched.raw, b, editedA, "restore");
-  assert.deepEqual(readWorkspaceDraft(storage.getItem(key)!), editedA);
-  assert.ok(listWorkspaceArchives(storage, key).some((entry) => entry.draft?.resultJobId === jobB));
-  values.set("someone-else:recovery:secret", raw); values.set(key + ":recovery:old-invalid", "invalid legacy raw");
-  assert.equal(listWorkspaceArchives(storage, key).some((entry) => entry.key.startsWith("someone-else")), false);
-  assert.equal(listWorkspaceArchives(storage, key).find((entry) => entry.raw === "invalid legacy raw")?.draft, null);
+test("atomic switch retains the latest edited60m once and swaps rather than appending", () => {
+  const key="workspace", a=snapshot(jobA,"A",1), editedA={...a,parsed:{items:[{...a.parsed!.items[0],order_quantity:60,manual_order_quantity:60}]}}, b=snapshot(jobB,"B",2);
+  const values=new Map([[key,JSON.stringify(a,null,2)]]), storage=storageFor(values);
+  let switched=switchWorkspaceDraft(storage,key,values.get(key)!,editedA,b,"same-ms");
+  assert.equal(switched.draft.version,2); assert.equal(switched.archives.length,1); assert.equal(switched.archives[0].draft?.parsed?.items[0].order_quantity,60);
+  assert.equal(switched.draft.recentDraft?.revision,1); assert.equal(values.size,1);
+  for(let n=0;n<50;n++) {
+    const previous=listWorkspaceArchives(storage,key)[0];assertWorkspaceArchiveCurrent(storage,key,previous);
+    const outgoing=JSON.parse(JSON.stringify(switched.draft));delete outgoing.recentDraft;outgoing.version=1;
+    switched=switchWorkspaceDraft(storage,key,switched.raw,switched.draft,previous.draft!,"same-ms");
+    assert.deepEqual(readWorkspaceDraft(switched.draft.recentDraft!.raw),outgoing);
+    assert.equal(values.size,1);assert.equal(listWorkspaceArchives(storage,key).length,1);assert.equal(switched.draft.recentDraft?.revision,n+2);
+    assert.equal(readWorkspaceDraft(switched.draft.recentDraft!.raw).recentDraft,undefined);
+  }
 });
 
-test("failed archive writes/readbacks and changed source never replace the current workspace", () => {
-  const key = "workspace", a = snapshot(jobA, "A", 2), b = snapshot(jobB, "B", 1), raw = JSON.stringify(a);
-  const values = new Map([[key, raw]]), storage = storageFor(values);
-  assert.throws(() => switchWorkspaceDraft({ ...storage, setItem: () => { throw new Error("quota"); } }, key, raw, a, b, "write-fail"));
-  assert.equal(values.get(key), raw);
-  assert.throws(() => switchWorkspaceDraft({ ...storage, getItem: (name) => name.includes(":recovery:") && values.has(name) ? "wrong readback" : storage.getItem(name) }, key, raw, a, b, "verify-fail"));
-  assert.equal(values.get(key), raw);
-  values.set(key, "changed by another tab");
-  assert.throws(() => switchWorkspaceDraft(storage, key, raw, a, b, "source-changed"), /別の画面/);
-  assert.equal(values.get(key), "changed by another tab");
+test("quota and ignored writes preserve both the old active and previous value", () => {
+  const key="workspace", a=snapshot(jobA,"A",2), b=snapshot(jobB,"B",1), initial=prepareWorkspaceSwitch(a,b), raw=JSON.stringify(initial);
+  const values=new Map([[key,raw]]),storage=storageFor(values);
+  for(const setItem of [()=>{throw Error("quota");},()=>{}]) {
+    assert.throws(()=>switchWorkspaceDraft({...storage,setItem},key,raw,initial,a));assert.equal(values.get(key),raw);assert.equal(values.size,1);
+  }
+  values.set(key,"changed by another tab");assert.throws(()=>switchWorkspaceDraft(storage,key,raw,initial,a),/別の画面/);assert.equal(values.get(key),"changed by another tab");
 });
 
-test("a failed primary write can be retried without duplicating verified archives", () => {
-  const key = "workspace", a = snapshot(jobA, "A", 2), b = snapshot(jobB, "B", 1), raw = JSON.stringify(a);
-  const values = new Map([[key, raw]]), storage = storageFor(values); let failPrimary = true;
-  const failing = { ...storage, setItem: (name: string, value: string) => { if (name === key && failPrimary) throw Error("quota"); storage.setItem(name, value); } };
-  assert.throws(() => switchWorkspaceDraft(failing, key, raw, a, b, "retry")); assert.equal(values.get(key), raw);
-  const count = values.size; failPrimary = false;
-  switchWorkspaceDraft(failing, key, raw, a, b, "retry"); assert.equal(values.size, count); assert.deepEqual(readWorkspaceDraft(values.get(key)!), b);
+test("readback failure after atomic commit keeps the outgoing edit recoverable on reload", () => {
+  const key="workspace",a=snapshot(jobA,"A",2),b=snapshot(jobB,"B",1),raw=JSON.stringify(a),values=new Map([[key,raw]]),storage=storageFor(values);let bad=false;
+  assert.throws(()=>switchWorkspaceDraft({...storage,setItem:(key,value)=>{storage.setItem(key,value);bad=true;},getItem:key=>{if(bad){bad=false;return "unverified";}return storage.getItem(key);}},key,raw,a,b),/保存を確認/);
+  const reloaded=readWorkspaceDraft(values.get(key)!);assert.equal(reloaded.resultJobId,jobB);assert.equal(readWorkspaceDraft(reloaded.recentDraft!.raw).resultJobId,jobA);assert.equal(values.size,1);
 });
 
-test("a source change during archiving is kept and never overwritten", () => {
-  const key = "workspace", a = snapshot(jobA, "A", 2), b = snapshot(jobB, "B", 1), raw = JSON.stringify(a);
-  const values = new Map([[key, raw]]), storage = storageFor(values);
-  assert.throws(() => switchWorkspaceDraft({ ...storage, setItem: (name, value) => { storage.setItem(name, value); if (name.includes(":recovery:")) values.set(key, "concurrent source"); } }, key, raw, a, b, "changed-midway"), /別の画面/);
-  assert.equal(values.get(key), "concurrent source"); assert.ok(Array.from(values.entries()).some(([name, value]) => name.includes(":recovery:") && value === raw));
+test("failed primary write retries without new keys; stale revision/owner/source cannot be reused", () => {
+  const key="workspace",a=snapshot(jobA,"A",2),b=snapshot(jobB,"B",1),raw=JSON.stringify(a),values=new Map([[key,raw]]),storage=storageFor(values);let fail=true;
+  const flaky={...storage,setItem:(key:string,value:string)=>{if(fail)throw Error("quota");storage.setItem(key,value);}};
+  assert.throws(()=>switchWorkspaceDraft(flaky,key,raw,a,b));fail=false;const first=switchWorkspaceDraft(flaky,key,raw,a,b);assert.equal(values.size,1);
+  const oldSelection=listWorkspaceArchives(storage,key)[0];assertWorkspaceArchiveCurrent(storage,key,oldSelection);
+  const second=switchWorkspaceDraft(storage,key,first.raw,first.draft,a);
+  assert.throws(()=>assertWorkspaceArchiveCurrent(storage,key,oldSelection),/変わりました/);
+  assert.throws(()=>assertWorkspaceArchiveCurrent(storage,"other-owner",oldSelection));
+  assert.throws(()=>switchWorkspaceDraft(storage,key,second.raw,{...second.draft,recentDraft:undefined},b),/変わりました/);
 });
-
 
 test("postponed result is verified and retained independently of the edited workspace", () => {
   const values = new Map([["draft", "exact edited workspace bytes"]]), storage = storageFor(values);

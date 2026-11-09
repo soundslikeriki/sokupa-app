@@ -1,10 +1,10 @@
 import { createLatestResultRecovery, type Snapshot } from "./calculation/latest-result-recovery.mjs";
-import { readWorkspaceDraft, type WorkspaceDraft } from "./workspace-draft";
+import { readWorkspaceDraft, prepareWorkspaceSwitch, switchWorkspaceDraft, type WorkspaceDraft } from "./workspace-draft";
 
 type StorageAccess = Pick<Storage, "getItem" | "setItem">;
 // These operations run inside the same outer Web Lock as the compatible workspace writer.
 const heldLock = { request: async (_name: string, _options: {mode: string}, operation: () => unknown) => operation() };
-function service(storage: StorageAccess, ownerId: string) { return createLatestResultRecovery({ ownerId, storage, locks: heldLock, maxBytes: 4_000_000, allowEmptySnapshots: true }); }
+function service(storage: StorageAccess, ownerId: string) { return createLatestResultRecovery({ ownerId, storage, locks: heldLock, maxBytes: 4_000_000, allowEmptySnapshots: true, schemaVersion: 2 }); }
 
 export async function withWorkspaceLock<T>(key: string, operation: () => Promise<T> | T): Promise<T> {
   if (!navigator.locks?.request) throw new Error("このブラウザでは安全な同時保存を利用できません。内容を書き出して保管してください。");
@@ -14,19 +14,19 @@ export async function withWorkspaceLock<T>(key: string, operation: () => Promise
 /** Fixed, bounded snapshot. No image bytes and no history keys are accumulated. */
 export async function saveLatestWorkspaceSnapshot(storage: StorageAccess, ownerId: string, draft: WorkspaceDraft): Promise<void> {
   readWorkspaceDraft(JSON.stringify(draft));
-  if (!draft.parsed && !draft.resultSession?.undo && !draft.resultSession?.inactive) return;
+  if (!draft.parsed && !draft.resultSession?.undo && !draft.resultSession?.inactive && !draft.recentDraft) return;
   const clean = JSON.parse(JSON.stringify(draft)) as WorkspaceDraft;
-  const snapshot: Snapshot = { parsed: clean.parsed ?? clean.resultSession?.undo?.parsed ?? { items: [] }, editorState: { originalParsed: clean.originalParsed ?? clean.resultSession?.undo?.originalParsed ?? clean.parsed, orderDraftItems: clean.orderDraftItems }, context: { siteName: clean.siteName, resultJobId: clean.resultJobId ?? null,
+  const snapshot: Snapshot = { parsed: clean.parsed ?? clean.resultSession?.undo?.parsed ?? { items: [] }, editorState: { originalParsed: clean.originalParsed ?? clean.resultSession?.undo?.originalParsed ?? clean.parsed, orderDraftItems: clean.orderDraftItems }, context: { workspaceVersion: clean.version, ...(clean.recentDraft ? { recentDraft: clean.recentDraft } : {}), siteName: clean.siteName, resultJobId: clean.resultJobId ?? null,
     ...(!clean.parsed ? { inactiveDisplay: true } : {}),
     ...(clean.resultSiteName !== undefined ? { resultSiteName: clean.resultSiteName } : {}), ...(clean.resultSession ? { resultSession: clean.resultSession } : {}) } };
   const store = service(storage, ownerId), restored = await store.restore();
   if (restored.status !== "restored") throw new Error("最新結果の保存先を確認できません。既存の保存内容は保持しています。");
-  const operationId = !draft.parsed ? `reset:${draft.resultSession!.generation}` : draft.resultJobId ?? "legacy-current-workspace";
+  const operationId = !draft.parsed ? draft.recentDraft ? `recent:${draft.recentDraft.revision}:reset:${draft.resultSession?.generation ?? 0}` : `reset:${draft.resultSession!.generation}` : draft.resultJobId ?? "legacy-current-workspace";
   let saved;
   if (restored.latest?.token.operationId === operationId) saved = await store.edit(restored.latest.token, restored.latest.revision, snapshot);
   else {
     // Do not replace a valid result with an empty new upload/editor.
-    if (snapshot.parsed.items.length === 0 && !clean.resultSession?.inactive) return;
+    if (snapshot.parsed.items.length === 0 && !clean.resultSession?.inactive && !clean.recentDraft) return;
     const begun = await store.begin(operationId);
     if (begun.status !== "started" || !begun.token) throw new Error("最新結果の保存を開始できませんでした。");
     saved = await store.complete(begun.token, snapshot);
@@ -40,7 +40,7 @@ export async function restoreLatestWorkspaceSnapshot(storage: StorageAccess, own
   if (restored.status !== "restored") throw new Error("最新結果の復元保存を読み取れませんでした。");
   if (!restored.latest) return null;
   const { parsed, editorState, context } = restored.latest.snapshot;
-  return readWorkspaceDraft(JSON.stringify({ version: 1, parsed: context.inactiveDisplay ? null : parsed, originalParsed: context.inactiveDisplay ? null : editorState.originalParsed, orderDraftItems: editorState.orderDraftItems, siteName: context.siteName, resultJobId: context.resultJobId, resultSiteName: context.resultSiteName, resultSession: context.resultSession }));
+  return readWorkspaceDraft(JSON.stringify({ version: context.workspaceVersion ?? 1, ...(context.recentDraft ? { recentDraft: context.recentDraft } : {}), parsed: context.inactiveDisplay ? null : parsed, originalParsed: context.inactiveDisplay ? null : editorState.originalParsed, orderDraftItems: editorState.orderDraftItems, siteName: context.siteName, resultJobId: context.resultJobId, resultSiteName: context.resultSiteName, resultSession: context.resultSession }));
 }
 
 /** Explicit repair only. Preserve the exact old bytes in one bounded quarantine slot. */
@@ -55,4 +55,29 @@ export async function rebuildLatestWorkspaceSnapshot(storage: StorageAccess & Pi
     storage.removeItem(key);
   }
   await saveLatestWorkspaceSnapshot(storage, ownerId, draft);
+}
+
+
+/** Owner lock is held by the caller. Mirror and primary both contain active + previous. */
+export async function commitWorkspaceSwitch(storage: StorageAccess & Pick<Storage, "removeItem">, owner: string,
+  expectedRaw: string | null, current: WorkspaceDraft, incoming: WorkspaceDraft, validate: () => void) {
+  const key = `sokupa:workspace:v1:${owner}`, latestKey = `sokupa:latest-result:v1:${encodeURIComponent(owner)}`;
+  if (expectedRaw === null || JSON.stringify(current) !== expectedRaw) throw new Error("今の編集を保存中です。保存完了後に選び直してください。編集内容は保持しています。");
+  const next = prepareWorkspaceSwitch(current, incoming);
+  validate();
+  if (storage.getItem(key) !== expectedRaw) throw new Error("別の画面で保存内容が変わりました。今の編集は保持しています。");
+  const previousLatest = storage.getItem(latestKey);
+  try {
+    await saveLatestWorkspaceSnapshot(storage, owner, next);
+    validate();
+    return switchWorkspaceDraft(storage, key, expectedRaw, current, next);
+  } catch (error) {
+    // If primary is unchanged, restore the exact prior mirror. Once it committed,
+    // the atomic primary/mirror each retain the outgoing edit as the previous state.
+    if (storage.getItem(key) === expectedRaw) {
+      if (previousLatest === null) storage.removeItem(latestKey); else storage.setItem(latestKey, previousLatest);
+      if (storage.getItem(latestKey) !== previousLatest) throw new Error("保存先の復旧を確認できません。画面の編集を残しています。書き出してから再読み込みしてください。");
+    }
+    throw error;
+  }
 }

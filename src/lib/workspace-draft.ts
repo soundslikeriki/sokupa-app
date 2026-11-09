@@ -6,8 +6,11 @@ export type ResultSession = { version: 1; generation: number; inactive: boolean;
   undo: { parsed: ParsedMemoPayload | null; originalParsed?: ParsedMemoPayload | null; resultJobId: string | null;
     resultSiteName: string; meaningfulAt: unknown; workspaceInputs?: { siteName: string; orderDraftItems: OrderDraftItem[] } } | null };
 
+export type RecentWorkspaceDraft = { version: 1; revision: number; raw: string };
+
 export type WorkspaceDraft = {
-  version: 1;
+  version: 1 | 2;
+  recentDraft?: RecentWorkspaceDraft;
   siteName: string;
   parsed: ParsedMemoPayload | null;
   originalParsed?: ParsedMemoPayload | null;
@@ -47,13 +50,26 @@ function validOrderDraftItems(value: unknown): boolean {
 export function readWorkspaceDraft(text: string): WorkspaceDraft {
   if (text.length > 4_000_000) throw new Error("保存した下書きが大きすぎます。端末内のデータは保持しています。");
   const value: unknown = JSON.parse(text);
-  if (!object(value) || value.version !== 1 || typeof value.siteName !== "string" || !memo(value.parsed) ||
+  if (!object(value) || (value.version !== 1 && value.version !== 2) || typeof value.siteName !== "string" || !memo(value.parsed) ||
       (value.resultJobId != null && (typeof value.resultJobId !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.resultJobId))) ||
       (value.resultSiteName !== undefined && typeof value.resultSiteName !== "string") || !validResultSession(value.resultSession) ||
       (value.originalParsed !== undefined && !memo(value.originalParsed)) || !validOrderDraftItems(value.orderDraftItems)) {
     throw new Error("保存した下書きを復元できません。端末内のデータは保持しています。");
   }
+  if (value.version === 1 && value.recentDraft !== undefined || value.version === 2 && !validRecentDraft(value.recentDraft)) {
+    throw new Error("直前の下書きを読み取れません。保存データは保持しています。");
+  }
   return value as WorkspaceDraft;
+}
+
+function validRecentDraft(value: unknown): boolean {
+  if (!object(value) || value.version !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 1 || typeof value.raw !== "string") return false;
+  try {
+    const previous = JSON.parse(value.raw);
+    // Exactly one previous state; reject recursive envelopes and unknown formats.
+    if (!object(previous) || previous.version !== 1 || previous.recentDraft !== undefined) return false;
+    readWorkspaceDraft(value.raw); return true;
+  } catch { return false; }
 }
 
 function validResultSession(value: unknown): boolean {
@@ -83,7 +99,7 @@ export function archiveWorkspaceDraft(storage: Pick<Storage, "getItem" | "setIte
   return archiveKey;
 }
 
-export type WorkspaceArchive = { key: string; raw: string; draft: WorkspaceDraft | null };
+export type WorkspaceArchive = { key: string; raw: string; draft: WorkspaceDraft | null; kind: "recent" | "legacy" | "deferred" | "quarantine"; revision?: number };
 
 /** Explicit replacement consent: one atomic key update, with no new archive/history key. */
 export function replaceWorkspaceDraft(storage: Pick<Storage,"getItem"|"setItem">, key: string, expectedRaw: string | null, next: WorkspaceDraft): { raw: string; archives: WorkspaceArchive[] } {
@@ -110,11 +126,11 @@ export function retainDeferredJobResult(
   if (existing !== null) {
     const saved = readWorkspaceDraft(existing);
     if (!workspaceContainsJobResult(saved, jobId)) throw new Error("保留結果の保存先が変わっています。書き出して保管してください。");
-    return { key: archiveKey, raw: existing, draft: saved };
+    return { key: archiveKey, raw: existing, draft: saved, kind: "deferred" };
   }
   storage.setItem(archiveKey, raw);
   if (storage.getItem(archiveKey) !== raw) throw new Error("保留結果の保存を確認できませんでした。");
-  return { key: archiveKey, raw, draft };
+  return { key: archiveKey, raw, draft, kind: "deferred" };
 }
 
 export function workspaceHasContent(draft: WorkspaceDraft | null): boolean {
@@ -126,47 +142,64 @@ export function workspaceWouldBeReplacedByResult(draft: WorkspaceDraft | null, j
   return Boolean(draft.parsed || draft.originalParsed || (draft.siteName.trim() && draft.siteName !== (siteName ?? "")));
 }
 
+/** The recent snapshot is part of the active atomic value, never a new history key. */
+export function recentWorkspaceArchive(recent: RecentWorkspaceDraft | undefined, key: string): WorkspaceArchive | null {
+  return recent ? { key: `${key}:recent:${recent.revision}`, raw: recent.raw, draft: readWorkspaceDraft(recent.raw), kind: "recent", revision: recent.revision } : null;
+}
+
 export function listWorkspaceArchives(storage: Pick<Storage, "getItem" | "key" | "length">, key: string): WorkspaceArchive[] {
   const archives: WorkspaceArchive[] = [];
+  // Reading never migrates/deletes legacy keys or guesses chronology.
+  const primary = storage.getItem(key);
+  if (primary !== null) try { const recent = recentWorkspaceArchive(readWorkspaceDraft(primary).recentDraft, key); if (recent) archives.push(recent); } catch { /* Existing recovery UI preserves the unreadable primary. */ }
+  const legacy: WorkspaceArchive[] = [];
   for (let i = 0; i < storage.length; i++) {
     const archiveKey = storage.key(i);
     if (!archiveKey?.startsWith(`${key}:recovery:`)) continue;
-    const raw = storage.getItem(archiveKey);
-    if (raw === null) continue;
+    const raw = storage.getItem(archiveKey); if (raw === null) continue;
     let draft = null;
     try { draft = readWorkspaceDraft(raw); } catch { /* Preserve invalid legacy archives for download. */ }
-    archives.push({ key: archiveKey, raw, draft });
+    legacy.push({ key: archiveKey, raw, draft, kind: draft === null ? "quarantine" : archiveKey.startsWith(`${key}:recovery:result:`) ? "deferred" : "legacy" });
   }
-  return archives.sort((a, b) => b.key.localeCompare(a.key));
+  // Deterministic inventory order only. Keys and edit clocks do not prove age.
+  return [...archives, ...legacy.sort((a, b) => a.key.localeCompare(b.key))];
 }
 
-/** Verified snapshots precede the one-key replacement. A failed archive never writes the main key. */
+export function assertWorkspaceArchiveCurrent(storage: Pick<Storage, "getItem">, key: string, archive: WorkspaceArchive): void {
+  if (archive.kind === "recent") {
+    const raw = storage.getItem(key), current = raw === null ? null : recentWorkspaceArchive(readWorkspaceDraft(raw).recentDraft, key);
+    if (!current || current.key !== archive.key || current.revision !== archive.revision || current.raw !== archive.raw) throw new Error("直前の下書きが別の画面で変わりました。選び直してください。");
+  } else if (!archive.key.startsWith(`${key}:recovery:`) || storage.getItem(archive.key) !== archive.raw) {
+    throw new Error("選んだ退避データが変わりました。保存内容を確認して選び直してください。");
+  }
+}
+
+/** Active + previous publish atomically; a crash can never destroy the only source first. */
+export function prepareWorkspaceSwitch(current: WorkspaceDraft, next: WorkspaceDraft): WorkspaceDraft {
+  readWorkspaceDraft(JSON.stringify(current)); readWorkspaceDraft(JSON.stringify(next));
+  const revision = (current.recentDraft?.revision ?? 0) + 1;
+  if (!Number.isSafeInteger(revision)) throw new Error("直前の下書きの世代を更新できません。現在の内容は保持しています。");
+  const previous: WorkspaceDraft = { ...current, version: 1 }; delete previous.recentDraft;
+  const prepared: WorkspaceDraft = { ...next, version: 2, recentDraft: { version: 1, revision, raw: JSON.stringify(previous) } };
+  return readWorkspaceDraft(JSON.stringify(prepared));
+}
+
+/** Caller holds the owner lock. No deletion, extra archive keys or wall-clock ranking. */
 export function switchWorkspaceDraft(
   storage: Pick<Storage, "getItem" | "setItem">,
   key: string,
   expectedRaw: string | null,
   current: WorkspaceDraft,
   next: WorkspaceDraft,
-  suffix: string,
-): { raw: string; archives: WorkspaceArchive[] } {
-  if (storage.getItem(key) !== expectedRaw) throw new Error("別の画面で保存内容が変わりました。今の下書きを書き出してから再読込してください。");
-  const currentRaw = JSON.stringify(current), nextRaw = JSON.stringify(next);
-  readWorkspaceDraft(currentRaw); readWorkspaceDraft(nextRaw);
-  const snapshots = Array.from(new Set([...(expectedRaw === null ? [] : [expectedRaw]), currentRaw]));
-  const archives: WorkspaceArchive[] = [];
-  for (let index = 0; index < snapshots.length; index++) {
-    const raw = snapshots[index];
-    const archiveKey = `${key}:recovery:${suffix}:${index}`;
-    const existing = storage.getItem(archiveKey);
-    if (existing !== null && existing !== raw) throw new Error("退避先が更新されています。切替をやり直してください。");
-    if (existing === null) storage.setItem(archiveKey, raw);
-    if (storage.getItem(archiveKey) !== raw) throw new Error("下書きの退避を確認できませんでした。");
-    let draft = null;
-    try { draft = readWorkspaceDraft(raw); } catch { /* The exact original bytes are still preserved. */ }
-    archives.push({ key: archiveKey, raw, draft });
+  legacyAttemptId?: string,
+): { raw: string; draft: WorkspaceDraft; archives: WorkspaceArchive[] } {
+  void legacyAttemptId; // Retain call compatibility; no timestamp/UUID archive is created.
+  if (expectedRaw !== null && JSON.stringify(readWorkspaceDraft(expectedRaw).recentDraft) !== JSON.stringify(current.recentDraft)) {
+    throw new Error("直前の下書きが変わりました。現在の編集は保持しています。選び直してください。");
   }
-  if (storage.getItem(key) !== expectedRaw) throw new Error("退避中に別の画面で保存内容が変わりました。上書きしていません。");
-  storage.setItem(key, nextRaw);
-  if (storage.getItem(key) !== nextRaw) throw new Error("切替後の保存を確認できませんでした。退避した下書きは保持しています。");
-  return { raw: nextRaw, archives };
+  const prepared = prepareWorkspaceSwitch(current, next), raw = JSON.stringify(prepared);
+  if (storage.getItem(key) !== expectedRaw) throw new Error("別の画面で保存内容が変わりました。今の編集は保持しています。再読み込みしてください。");
+  storage.setItem(key, raw);
+  if (storage.getItem(key) !== raw) throw new Error("切替後の保存を確認できません。画面の編集は保持しています。再読み込み前に書き出してください。");
+  return { raw, draft: prepared, archives: [recentWorkspaceArchive(prepared.recentDraft, key)!] };
 }
