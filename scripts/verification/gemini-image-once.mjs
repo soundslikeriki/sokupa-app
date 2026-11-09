@@ -22,7 +22,7 @@ fs.mkdirSync(out,{recursive:true,mode:0o700});
 const endpoint=`https://generativelanguage.googleapis.com/v1beta/models/${constants.VISION_MODEL}:generateContent`;
 const body={contents:[{role:'user',parts:[{text:constants.SYSTEM_PROMPT},{inlineData:{mimeType:'image/jpeg',data:image.toString('base64')}}]}],generationConfig:{temperature:0.1,responseMimeType:'application/json',maxOutputTokens:8192}};
 const digest=data=>crypto.createHash('sha256').update(data).digest('hex');
-const meta={model:constants.VISION_MODEL,endpoint,imageSha256:digest(image),promptSha256:digest(constants.SYSTEM_PROMPT),maxOutputTokens:8192,grounding:false,automaticRetries:0,productionDatabaseAccess:false,productionStorageAccess:false,historyWrites:0,lineSends:0};
+const meta={model:constants.VISION_MODEL,endpoint,imageSha256:digest(image),promptSha256:digest(constants.SYSTEM_PROMPT),maxOutputTokens:8192,grounding:false,automaticRetries:0,productionDatabaseAccess:false,productionStorageAccess:false,historyWrites:0,lineSends:0,conservativeFullModelTokenCostCeilingUsd:.720896};
 const write=(name,value)=>fs.writeFileSync(path.join(out,name),JSON.stringify(value,null,2)+'\n',{mode:0o600});
 if(mode==='--dry-run'){
   if(Object.keys(body).join(',')!=='contents,generationConfig'||body.contents.length!==1)throw Error('Unexpected request shape');
@@ -45,9 +45,12 @@ if(mode==='--dry-run'){
     write('provider-response-private.json',result);
     const text=(result.candidates?.[0]?.content?.parts??[]).filter(p=>typeof p.text==='string'&&!p.thought).map(p=>p.text).join('');
     fs.writeFileSync(path.join(out,'provider-text-private.json'),text,{mode:0o600});
+    let valid=false;try{const parsed=JSON.parse(text);valid=Array.isArray(parsed.items)&&parsed.items.length>0;}catch{}
     const usage=result.usageMetadata??{};
     const estimatedUsd=((usage.promptTokenCount??0)*.5+((usage.candidatesTokenCount??0)+(usage.thoughtsTokenCount??0))*3)/1000000;
-    const summary={...meta,state:'response-saved',providerCalls:calls,httpStatus:response.status,usage,estimatedUsd,finishReason:result.candidates?.[0]?.finishReason,responseSha256:digest(JSON.stringify(result)),completedAt:new Date().toISOString()};
+    const complete=valid&&result.candidates?.[0]?.finishReason==='STOP';
+    const summary={...meta,state:complete?'response-saved':'incomplete-response-saved',providerCalls:calls,httpStatus:response.status,usage,estimatedUsd,finishReason:result.candidates?.[0]?.finishReason,responseSha256:digest(JSON.stringify(result)),completedAt:new Date().toISOString()};
     write('provider-attempt.json',summary);console.log(JSON.stringify(summary));
+    if(!complete)process.exitCode=1;
   }catch(error){key='';const state=JSON.parse(fs.readFileSync(marker,'utf8'));if(state.state==='provider-request-starting')write('provider-attempt.json',{...state,state:'delivery-unknown',errorName:error.name,automaticRetry:false});throw Error('One provider attempt ended; inspect saved status before any further action');}
 }

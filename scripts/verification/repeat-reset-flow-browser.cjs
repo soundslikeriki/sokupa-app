@@ -5,7 +5,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),ui=require('./r
 const bases=[process.env.SOKUPA_TEST_URL,process.env.SOKUPA_BASIC_URL];
 const job='00000000-0000-4000-8000-000000000e01';
 const dimensions=[['TH34707',[[2.7,17],[.8,6]]],['SGM1081',[[2.7,8],[.8,2]]],['TH34114',[[2.7,62],[.6,4],[.7,7]]],['TH34099',[[1.2,8],[2.7,6],[1,12]]],['TH34105',[[2.2,10]]],['TH34486',[[2.7,243],[.7,5],[.8,36]]]];
-const payload={items:dimensions.map(([product_code,rows])=>{const total_m=Number(rows.reduce((sum,[l,n])=>sum+l*n,0).toFixed(2));return{product_code,manufacturer:'Synthetic',entries:rows.map(([length_m,quantity],i)=>({source_row_id:product_code+'-'+i,source_image_index:0,original_formula:`${length_m}×${quantity}`,length_m,quantity,subtotal_m:Number((length_m*quantity).toFixed(2))})),total_m,order_quantity:Math.ceil(total_m*1.15),loss_rate_percent:15,needs_review:true,review_reasons:['訂正箇所をメモ画像と照合してください']};})};
+const payload=process.env.SOKUPA_PROVIDER_RESULT?JSON.parse(fs.readFileSync(process.env.SOKUPA_PROVIDER_RESULT,'utf8')):{items:dimensions.map(([product_code,rows])=>{const total_m=Number(rows.reduce((sum,[l,n])=>sum+l*n,0).toFixed(2));return{product_code,manufacturer:'Synthetic',entries:rows.map(([length_m,quantity],i)=>({source_row_id:product_code+'-'+i,source_image_index:0,original_formula:`${length_m}×${quantity}`,length_m,quantity,subtotal_m:Number((length_m*quantity).toFixed(2))})),total_m,order_quantity:Math.ceil(total_m*1.15),loss_rate_percent:15,needs_review:true,review_reasons:['訂正箇所をメモ画像と照合してください']};})};
 const fallback=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=','base64');
 const image=process.env.SOKUPA_MEMO_TEST_IMAGE?fs.readFileSync(process.env.SOKUPA_MEMO_TEST_IMAGE):fallback;
 let checks=0;const check=(v,m)=>{assert.ok(v,m);console.log(`PASS ${++checks}: ${m}`);};
@@ -20,7 +20,7 @@ const wait=async f=>{for(let i=0;i<350;i++){if(await f())return;await new Promis
   await context.route('**/*',async route=>{const q=route.request(),u=new URL(q.url());if(u.origin!==base){blocked.push(u.origin);return route.abort();}if(!u.pathname.startsWith('/api/'))return route.continue();calls.push({path:u.pathname,method:q.method()});
    if(u.pathname==='/api/auth/session'){if(control.hold)await new Promise(resolve=>control.release=resolve);return route.fulfill({json:{authenticated:true,line_user_id:owner,admin:true}});}
    if(u.pathname==='/api/analysis-jobs'&&q.method()==='GET')return route.fulfill({json:{data:[]}});
-   if(u.pathname==='/api/memo-images'&&q.method()==='POST'){control.uploads++;return route.fulfill({json:{object_path:`${owner}/${job}.jpg`}});}
+   if(u.pathname==='/api/memo-images'&&q.method()==='POST'){control.uploads++;if(process.env.SOKUPA_CAPTURE_UPLOAD){const bytes=q.postDataBuffer(),capture=process.env.SOKUPA_CAPTURE_UPLOAD;if(fs.existsSync(capture))assert.deepEqual(fs.readFileSync(capture),bytes,'repeat previews produce the same captured local upload');else fs.writeFileSync(capture,bytes,{flag:'wx',mode:0o600});}return route.fulfill({json:{object_path:`${owner}/${job}.jpg`}});}
    if(u.pathname==='/api/analysis-jobs'&&q.method()==='POST'){control.created++;check(JSON.parse(q.postData()).site_name==='Synthetic image flow','upload-bound site name stays attached to this synthetic job');return route.fulfill({json:{success:true,job_id:job,background_ready:true,execution_mode:'scheduled-wake'}});}
    if(u.pathname===`/api/analysis-jobs/${job}`)return route.fulfill({json:{data:{id:job,status:control.done?'done':'running',site_name:'Synthetic image flow',result:control.done?payload:null,total_images:1,done_images:control.done?1:0,notification_status:'accepted',can_resume:false,background_ready:true,execution_mode:'scheduled-wake'}}});
    if(u.pathname.endsWith('/seen'))return route.fulfill({json:{success:true}});
@@ -60,5 +60,5 @@ const wait=async f=>{for(let i=0;i<350;i++){if(await f())return;await new Promis
   check(errors.length===0&&blocked.length===2&&calls.every(c=>!['/api/parse-memo','/api/send-line'].includes(c.path)),'no runtime errors, real AI/LINE calls or unhandled external traffic');
   await context.close();
  }
- console.log(JSON.stringify({checks,realImagePreview:!!process.env.SOKUPA_MEMO_TEST_IMAGE,resultSource:'human-transcribed synthetic fixture, not OCR',realAiCalls:0,realLineSends:0,productionWrites:0}));
+ console.log(JSON.stringify({checks,realImagePreview:!!process.env.SOKUPA_MEMO_TEST_IMAGE,resultSource:process.env.SOKUPA_PROVIDER_RESULT?'one saved provider OCR response reused; catalog metadata is unknown/fixture':'human-transcribed synthetic fixture, not OCR',realAiCalls:0,realLineSends:0,productionWrites:0}));
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});
