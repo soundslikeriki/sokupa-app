@@ -22,7 +22,7 @@ const make=(id,code,q,name,next=name)=>({version:1,siteName:next,resultSiteName:
   });
   const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());const read=()=>page.evaluate(k=>JSON.parse(localStorage.getItem(k)),key),bytes=()=>page.evaluate(k=>localStorage.getItem(k),key),saved=async()=>{let old='',stable=0;await wait(async()=>{const raw=await bytes();stable=raw===old?stable+1:0;old=raw;return stable>=3&&(await page.getByLabel('結果の保存状態').innerText()).includes('保存済み');});};
   const openRecent=async()=>ui.disclosure(page,'直前の下書きを確認'),restore=()=>page.getByRole('button',{name:/^直前の下書き「.*」を復元$/}),data=()=>page.evaluate(key=>Object.fromEntries(Object.keys(localStorage).filter(k=>k.startsWith(key+':recovery:')).map(k=>[k,localStorage.getItem(k)])),key);
-  await page.goto(base);await page.getByLabel('結果の保存状態').waitFor();if(!noLocks)await saved();return{page,context,control,owner,key,latestKey,read,bytes,saved,restore,openRecent,data,legacyRows,errors,unexpected,calls,seed};
+  await page.goto(base);await page.getByLabel('結果の保存状態').waitFor({state:'attached'});if(!noLocks)await saved();return{page,context,control,owner,key,latestKey,read,bytes,saved,restore,openRecent,data,legacyRows,errors,unexpected,calls,seed};
  };
 
 

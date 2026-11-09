@@ -49,7 +49,7 @@ const make=()=>{
   const inputSite=()=>page.getByRole('region',{name:'メモ計測',exact:true}).getByLabel('現場名（任意）',{exact:true});
   const reset=()=>page.getByRole('button',{name:'すべてリセット',exact:true});
   const restore=()=>page.getByRole('button',{name:/^(前回の結果だけ戻す|リセット前の状態を復元)$/});
-  await page.goto(base);await page.getByLabel('結果の保存状態').waitFor();await saved();
+  await page.goto(base);await page.getByLabel('結果の保存状態').waitFor({state:'attached'});await saved();
   return {context,page,owner,key,latestKey,control,dialogs,calls,errors,unexpected,read,bytes,saved,photo,inputSite,reset,restore,choice};
  };
 

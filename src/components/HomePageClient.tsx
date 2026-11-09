@@ -1013,7 +1013,51 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const visibleNotificationWatches = notificationWatchesForDisplay(notificationWatches,
     [parsed ? resultJobId : null, jobAccepted?.jobId, resultSession?.inactive ? resultSession.allowedJobId : null]);
 
-  const resultTools = <div className="space-y-3 rounded-xl border bg-background p-3 text-sm" aria-label="前回の結果とリセット">
+  const saveStatus = <p role="status" aria-label="結果の保存状態" className={`my-1 text-xs ${saveState === "error" ? "text-amber-800 dark:text-amber-300" : "text-muted-foreground"}`}>
+        {saveState === "saving" ? "最新結果と編集を保存中…" : saveState === "error" ? "保存を確認できません。内容を書き出して保管してください。" : parsed ? "最新結果・編集を端末に保存済み" : "入力内容を端末に保存済み。"}
+      </p>;
+
+  const resultTools = <div className="space-y-3" data-workspace-photo-tools role="region" aria-label="保存と復元">
+      <details data-workspace-photo="history" ref={historyPanelRef} className="text-sm">
+        <summary data-workspace-navigation className="min-h-11 cursor-pointer content-center text-sm font-semibold">保存済みの結果を開く</summary>
+      <Card>
+        <CardHeader className="space-y-3">
+          <CardTitle className="text-base">保存済みの解析結果</CardTitle>
+          <CardDescription>別の端末で確認済みの結果も開けます。今の下書きとの切替方法は、結果を確認してから選べます。</CardDescription>
+          {resultRetentionError ? <p className="text-sm" role="status">{resultRetentionError}</p> : null}
+          <Button type="button" variant="outline" className="min-h-11" disabled={!draftReady || historyLoading} onClick={() => void loadHistory()}>{historyLoading ? "履歴を取得中…" : "保存済みの解析結果を探す"}</Button>
+          {historyError ? <p className="text-sm" role="alert">{historyError}</p> : null}
+          {historyJobs && !historyJobs.some(job => typeof job.site_name === "string" && job.site_name.trim()) ? <p className="text-sm">現場名付きの解析結果はありません。</p> : null}
+          {historyJobs?.filter(job => typeof job.site_name === "string" && job.site_name.trim()).map((job) => (
+            <div key={job.id} className="rounded border p-3 text-sm">
+              <p>{job.site_name || "現場名なし"}（{new Date(job.created_at).toLocaleString("ja-JP")}）</p>
+              <Button type="button" variant="outline" className="min-h-11" disabled={isAnalyzing || analysisBlocksIntake(jobAccepted)} aria-label={`保存済み「${job.site_name || "現場名なし"}」の結果を確認`} onClick={() => {
+                analysisSelectionVersionRef.current++; setJobUi(null); setError(null); setCalculationMode("dimensions");
+                setResultSession(previous => allowResultJob(previous, job.id));
+                setJobAccepted({ jobId: job.id, backgroundReady: false, status: "done" });
+                setExplicitSelectionEpoch((current) => current + 1);
+              }}>結果を確認</Button>
+            </div>
+          ))}
+          {historyNext ? <Button type="button" variant="outline" className="min-h-11" disabled={historyLoading} onClick={() => void loadHistory(historyNext)}>さらに前の結果を探す</Button> : null}
+        </CardHeader>
+      </Card>
+
+      </details>
+
+      {recentArchive || legacyWorkspaceArchives.length ? <Card>
+        <CardHeader className="space-y-3">
+          <CardTitle className="text-base">直前の下書き</CardTitle>
+          <CardDescription>{recentArchive ? "今の編集を1件残して切り替えます。復元すると、表示中と直前の下書きが入れ替わります。" : resultSession?.undo ? "切替前の下書きはありません。リセット前の状態はメモ画像タブから復元できます。" : "直前の下書きはまだありません。別の結果へ切り替えたときに、今の編集を1件残します。"}</CardDescription>
+          {recentArchive ? <details>
+            <summary data-workspace-navigation className="min-h-11 cursor-pointer content-center text-sm font-medium">直前の下書きを確認（1件）</summary>
+            <div className="mt-3">{renderWorkspaceArchive(recentArchive, "直前の下書き")}</div>
+          </details> : null}
+        </CardHeader>
+      </Card> : null}
+
+    {saveState === "saved" ? saveStatus : null}
+    <div className="space-y-3 rounded-xl border bg-background p-3 text-sm" aria-label="前回の結果とリセット">
     {parsed ? <p className="text-xs">この結果の現場名：{resultSiteName || "未入力"}</p> : null}
     {resultSession?.undo ? <>
       <p>戻せる前回：{resultSession.undo.resultSiteName || "現場名なし"}・{(resultSession.undo.parsed?.items.length ?? 0)}品番</p>
@@ -1022,6 +1066,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     </> : <p className="text-xs text-muted-foreground">戻す用の保存はありません。リセット時に直前の1件を残します。</p>}
     {!parsed && (siteName || orderDraftItems.length || images.length) ? <Button type="button" variant="outline" className="min-h-11" data-workspace-navigation disabled={resultActionBlocked} onClick={() => void changeResultDisplay("manual").catch(error => setError(getErrorDetail(error)))}>すべてリセット</Button> : null}
     {resultSession?.inactive ? <p className="text-xs">{resultSession.reason === "age" ? "48時間以上経過したため、結果表示を片付けました。" : "結果表示はリセットされています。"}履歴やクラウドの写真は削除していません。</p> : null}
+    </div>
   </div>;
 
   return (
@@ -1211,43 +1256,6 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         </Card>
       ) : null}
 
-      <details hidden={resultWorkspaceView !== "quantity"} data-workspace-overview="history" ref={historyPanelRef} className="text-sm">
-        <summary className="min-h-8 cursor-pointer text-sm font-semibold">保存済みの結果を開く</summary>
-      <Card>
-        <CardHeader className="space-y-3">
-          <CardTitle className="text-base">保存済みの解析結果</CardTitle>
-          <CardDescription>別の端末で確認済みの結果も開けます。今の下書きとの切替方法は、結果を確認してから選べます。</CardDescription>
-          {resultRetentionError ? <p className="text-sm" role="status">{resultRetentionError}</p> : null}
-          <Button type="button" variant="outline" disabled={!draftReady || historyLoading} onClick={() => void loadHistory()}>{historyLoading ? "履歴を取得中…" : "保存済みの解析結果を探す"}</Button>
-          {historyError ? <p className="text-sm" role="alert">{historyError}</p> : null}
-          {historyJobs && !historyJobs.some(job => typeof job.site_name === "string" && job.site_name.trim()) ? <p className="text-sm">現場名付きの解析結果はありません。</p> : null}
-          {historyJobs?.filter(job => typeof job.site_name === "string" && job.site_name.trim()).map((job) => (
-            <div key={job.id} className="rounded border p-3 text-sm">
-              <p>{job.site_name || "現場名なし"}（{new Date(job.created_at).toLocaleString("ja-JP")}）</p>
-              <Button type="button" variant="outline" disabled={isAnalyzing || analysisBlocksIntake(jobAccepted)} aria-label={`保存済み「${job.site_name || "現場名なし"}」の結果を確認`} onClick={() => {
-                analysisSelectionVersionRef.current++; setJobUi(null); setError(null); setCalculationMode("dimensions");
-                setResultSession(previous => allowResultJob(previous, job.id));
-                setJobAccepted({ jobId: job.id, backgroundReady: false, status: "done" });
-                setExplicitSelectionEpoch((current) => current + 1);
-              }}>結果を確認</Button>
-            </div>
-          ))}
-          {historyNext ? <Button type="button" variant="outline" disabled={historyLoading} onClick={() => void loadHistory(historyNext)}>さらに前の結果を探す</Button> : null}
-        </CardHeader>
-      </Card>
-
-      </details>
-
-      {recentArchive || legacyWorkspaceArchives.length ? <Card>
-        <CardHeader className="space-y-3">
-          <CardTitle className="text-base">直前の下書き</CardTitle>
-          <CardDescription>{recentArchive ? "今の編集を1件残して切り替えます。復元すると、表示中と直前の下書きが入れ替わります。" : resultSession?.undo ? "切替前の下書きはありません。リセット前の状態はメモ画像タブから復元できます。" : "直前の下書きはまだありません。別の結果へ切り替えたときに、今の編集を1件残します。"}</CardDescription>
-          {recentArchive ? <details>
-            <summary data-workspace-navigation className="min-h-11 cursor-pointer content-center text-sm font-medium">直前の下書きを確認（1件）</summary>
-            <div className="mt-3">{renderWorkspaceArchive(recentArchive, "直前の下書き")}</div>
-          </details> : null}
-        </CardHeader>
-      </Card> : null}
 
       {draftRecovery ? (
         <Card className="border-amber-500/50">
@@ -1312,9 +1320,9 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
         </Card>
       ) : null}
 
-      <p role="status" aria-label="結果の保存状態" className={`my-1 text-xs ${saveState === "error" ? "text-amber-800 dark:text-amber-300" : "text-muted-foreground"}`}>
-        {saveState === "saving" ? "最新結果と編集を保存中…" : saveState === "error" ? "保存を確認できません。内容を書き出して保管してください。" : parsed ? "最新結果・編集を端末に保存済み" : "入力内容を端末に保存済み。"}
-      </p>
+      {resultWorkspaceView !== "photo" && (historyError || resultRetentionError) ? <p role="alert" className="text-sm text-amber-800 dark:text-amber-300">{resultRetentionError || historyError} メモ画像タブで確認できます。</p> : null}
+      {saveState !== "saved" ? saveStatus : null}
+
       {saveState === "error" ? <div className="mb-3 flex flex-wrap gap-2">
         <Button type="button" variant="outline" onClick={() => { if (currentWorkspaceRef.current) downloadWorkspace(JSON.stringify(currentWorkspaceRef.current)); }}>保存できない現在の内容を書き出す</Button>
         <Button type="button" variant="outline" disabled={!draftReady || !parsed} onClick={async () => {

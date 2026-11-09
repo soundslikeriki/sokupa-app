@@ -36,6 +36,8 @@ const wait = async fn => { const until = Date.now() + 15000; while (Date.now() <
           else { cReads++; if (scenario === 'delayed-pointer') await gate; }
           return route.fulfill({ json: { data: { id: isA ? a : c, status: 'done', site_name: isA ? 'Historical A' : 'Pointer C', result: isA ? memo('A-CODE', 10, 1, 12) : memo('C-CODE', 23, 1, 23), notification_status: 'accepted', client_result_seen_at: 'remote', total_images: 1, done_images: 1, can_resume: false, background_ready: true, execution_mode: 'scheduled-wake' } } });
         }
+        if (url.pathname === `/api/analysis-jobs/${b}`) return route.fulfill({ json: { data: { id: b, status: 'done', site_name: 'Editing B', result: saved.parsed, total_images: 1, done_images: 1, notification_status: 'accepted', client_result_seen_at: 'remote' } } });
+        if (url.pathname.endsWith('/images/0')) return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=', 'base64') });
         if (url.pathname.startsWith('/api/')) throw Error('Unexpected API ' + url.pathname);
         return route.continue();
       });
