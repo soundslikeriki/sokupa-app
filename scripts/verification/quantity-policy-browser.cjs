@@ -81,7 +81,7 @@ const seed=()=>Array.from({length:6},(_,i)=>({product_code:'SYN-'+String.fromCha
   }
   for(const kind of['duplicate','unsupported','unknown-premise']){
    const h=await fixture(base,width,kind);
-   check(kind==='duplicate'?(await h.status().innerText()).includes('✅'):(await h.status().innerText()).includes('判定不可'),kind+': only missing/unsupported numeric premises hide comparison; duplicate identity is a separate issue');
+   check(kind==='unsupported'?(await h.status().innerText()).includes('判定不可'):(await h.status().innerText()).includes('✅'),kind+': only unsupported arithmetic hides comparison; unconfirmed premises and duplicate identity stay separate');
    check(await h.add().isEnabled(),kind+': valid chosen quantity can be added despite advisory conditions');await h.open();check(await h.copy().isEnabled()&&await h.dialog().getByRole('checkbox').count()===0,kind+': positive quantity can copy without forced checks');await h.close();
    if(kind==='duplicate'){
     const before=(await h.read()).parsed.items.map(i=>i.order_quantity);await ui.edit(h.page,'SYN-A');

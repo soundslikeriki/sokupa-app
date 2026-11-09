@@ -4,8 +4,8 @@ import { useEffect, useLayoutEffect, useId, useRef, useState, type ReactNode } f
 import { Layers, Edit3, ImageIcon } from "lucide-react";
 
 /** Keep original-photo recovery reachable when the result itself is hidden. */
-export function EmptyResultWorkspace({ tools, onWorkspaceViewChange, overviewRequest = 0 }: { tools: ReactNode; overviewRequest?: number; onWorkspaceViewChange?: (view: "quantity" | "photo") => void }) {
-  const id = useId(), [view, setView] = useState<"quantity" | "photo">("quantity");
+export function EmptyResultWorkspace({ tools, onWorkspaceViewChange, overviewRequest = 0, initialView = "quantity" }: { tools: ReactNode; overviewRequest?: number; initialView?: "quantity" | "photo"; onWorkspaceViewChange?: (view: "quantity" | "photo") => void }) {
+  const id = useId(), [view, setView] = useState<"quantity" | "photo">(initialView);
   useLayoutEffect(() => { onWorkspaceViewChange?.(view); }, [view, onWorkspaceViewChange]);
   const [keyboard, setKeyboard] = useState(false);
   const select = (next: typeof view) => {

@@ -155,6 +155,8 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const [overviewRequest, setOverviewRequest] = useState(0);
   const overviewTopRef = useRef<HTMLElement>(null);
   const uploadInputId = useId();
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+  const imageSelectionVersionRef = useRef(0);
   const siteNameId = useId();
   const [siteName, setSiteName] = useState("");
   const [resultSiteName, setResultSiteName] = useState("");
@@ -502,7 +504,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
     return () => window.removeEventListener("storage", listener);
   }, [lineUserId]);
 
-  const resultActionBlocked = draftEditorBlocked || Boolean(pendingOrderDraftDuplicate) || pendingOrderDraftQueue.length > 0 || isAnalyzing || analysisBlocksIntake(jobAccepted) || recoveryFlags.active || resultActionBusy || saveState !== "saved" || !recoverySettled || recoveryFlags.failed || hasUnfinishedResultInput({ parsed });
+  const resultActionBlocked = images.some(image => image.status === "converting") || draftEditorBlocked || Boolean(pendingOrderDraftDuplicate) || pendingOrderDraftQueue.length > 0 || isAnalyzing || analysisBlocksIntake(jobAccepted) || recoveryFlags.active || resultActionBusy || saveState !== "saved" || !recoverySettled || recoveryFlags.failed || hasUnfinishedResultInput({ parsed });
   const restoreWorkspaceArchive = async (archive: WorkspaceArchive) => {
     const fromRescue = Boolean(archiveRescueDialog.current?.open);
     if (!archive.draft || archiveRestoreInFlight.current) return;
@@ -533,19 +535,24 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   const changeResultDisplay = async (kind: "manual" | "restore" | "age" | "declined" | "resume", expectedItems?: string) => {
     if (resultActionRef.current || !lineUserId || !currentWorkspaceRef.current) return;
     const current = currentWorkspaceRef.current, raw = JSON.stringify(current), expected = persistedWorkspaceRef.current;
+    const imageVersion = imageSelectionVersionRef.current;
+    if (images.some(image => image.status === "converting")) throw new Error("画像の読み込み完了後に操作してください。現在の内容は保持しています。");
     if (externalWorkspaceRef.current || isAnalyzing || intakeInFlightRef.current || analysisBlocksIntake(jobAccepted) || recoveryActiveRef.current || recoveryFailedRef.current || editorBlockedRef.current || draftEditorBlockedRef.current || pendingOrderDraftDuplicate || pendingOrderDraftQueue.length || hasUnfinishedResultInput(current) || saveState === "error") throw new Error("入力・解析・保存の完了を確認してから操作してください。現在の内容は保持しています。");
     if (kind === "restore") { const conflict = resultRestoreConflict(current); if (conflict) throw new Error(conflict); }
     if (expectedItems && JSON.stringify(current.parsed?.items) !== expectedItems) throw new Error("編集の保存を待ってから、もう一度操作してください。");
     resultActionRef.current = true; setResultActionBusy(true);
     try {
-      if (kind === "manual" && !window.confirm(`解析結果・現場名・発注リスト全体をリセットしますか？\n対象：${(current.resultSiteName ?? current.siteName) || "現場名なし"}・${current.parsed?.items.length ?? 0}品番\n手入力・実寸計測からの明細も含め、直前の状態を端末に1件残します${current.resultSession?.undo ? "（前の戻す用保存は今回の結果に置き換わります）" : ""}。\n新しく選択中の写真と、クラウドの履歴・画像は残ります。`)) return;
+      const selectionOnly = kind === "manual" && !current.parsed && !current.siteName && !current.orderDraftItems.length && images.length > 0;
+      if (kind === "manual" && !window.confirm(selectionOnly ? "選択中の画像を解除しますか？\nリセット前の戻す用保存・履歴・クラウドの画像はそのままです。" : `解析結果・現場名・発注リスト全体・選択中の画像をリセットしますか？\n対象：${(current.resultSiteName ?? current.siteName) || "現場名なし"}・${current.parsed?.items.length ?? 0}品番\n手入力・実寸計測からの明細も含め、直前の結果・現場名・発注リストを端末に1件残します${current.resultSession?.undo ? "（前の戻す用保存は今回の結果に置き換わります）" : ""}。\n選択中の画像は解除します。履歴・クラウドの画像は削除しません。`)) return;
       const response = await fetch("/api/auth/session", { cache: "no-store" }); const auth = await response.json();
       if (!mountedResultRef.current || !response.ok || !auth.authenticated || auth.line_user_id !== lineUserId) throw new Error("ログイン情報が変わりました。現在の内容を保持して操作を止めました。");
       const jobsResponse = await fetch("/api/analysis-jobs", { cache: "no-store" }); const jobs = await jobsResponse.json();
       if (!jobsResponse.ok || !Array.isArray(jobs.data) || jobs.data.some((job: {status:string}) => ["queued", "running"].includes(job.status))) throw new Error("解析中、または解析状態を確認できないため、現在の結果は保持しています。");
-      const next = kind === "restore" ? await restoreResultDraft(current, Date.now()) : kind === "resume" ? await resumeResultDraft(current, Date.now()) : resetResultDraft(current, Date.now(), kind);
+      // Clearing only unsent selected images must not replace a useful reset undo
+      // with an empty snapshot. Their preview data is intentionally not persisted.
+      const next = selectionOnly ? current : kind === "restore" ? await restoreResultDraft(current, Date.now()) : kind === "resume" ? await resumeResultDraft(current, Date.now()) : resetResultDraft(current, Date.now(), kind);
       const nextRaw = await withWorkspaceLock(`sokupa:workspace:v1:${lineUserId}`, async () => {
-        if (!mountedResultRef.current || JSON.stringify(currentWorkspaceRef.current) !== raw || externalWorkspaceRef.current || editorBlockedRef.current || draftEditorBlockedRef.current || intakeInFlightRef.current) throw new Error("確認中に内容が変わりました。画面は変更していません。");
+        if (!mountedResultRef.current || resultSwitchStateRef.current.owner !== lineUserId || JSON.stringify(currentWorkspaceRef.current) !== raw || imageSelectionVersionRef.current !== imageVersion || images.some(image => image.status === "converting") || externalWorkspaceRef.current || editorBlockedRef.current || draftEditorBlockedRef.current || intakeInFlightRef.current) throw new Error("確認中に内容が変わりました。画面は変更していません。");
         return commitResultTransition(localStorage, lineUserId, expected, next);
       });
       analysisSelectionVersionRef.current++;
@@ -555,6 +562,11 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       setParsed(next.parsed); setOriginalParsed(next.originalParsed ?? next.parsed); setResultJobId(next.resultJobId ?? null);
       setResultSiteName(next.resultSiteName ?? ""); setResultSession(next.resultSession); setRecentDraft(next.recentDraft); setCalculationMode("dimensions");
       setJobAccepted(null); setJobUi(null); setError(null); setSaveState("saved"); setResultBootPending(false);
+      if (kind === "manual") {
+        imageSelectionVersionRef.current++;
+        setImages([]);
+        if (uploadInputRef.current) uploadInputRef.current.value = "";
+      }
       setAnalysisRecoveryEpoch(value => value + 1);
     } catch (error) { setSaveState("error"); throw error; }
     finally { resultActionRef.current = false; setResultActionBusy(false); }
@@ -618,6 +630,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
 
   const imageCount = images.length;
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (resultActionRef.current) { e.target.value = ""; return; }
     const files = Array.from(e.target.files || []);
     e.target.value = "";
     if (files.length === 0) return;
@@ -643,6 +656,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       status: "converting" as const,
     }));
 
+    imageSelectionVersionRef.current++;
     setImages((prev) => [...prev, ...newImages]);
     setError(null);
 
@@ -694,6 +708,8 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
   }, [imageCount]);
 
   const removeFile = useCallback((id: string) => {
+    if (resultActionRef.current) return;
+    imageSelectionVersionRef.current++;
     setImages((prev) => prev.filter((img) => img.id !== id));
   }, []);
 
@@ -1004,7 +1020,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       <Button type="button" variant="outline" className="min-h-11" data-workspace-navigation disabled={Boolean(parsed) || resultActionBlocked} onClick={() => void changeResultDisplay("restore").catch(error => setError(getErrorDetail(error)))}>{resultSession.undo.workspaceInputs ? "リセット前の状態を復元" : "前回の結果だけ戻す"}</Button>
       <p className="text-xs text-muted-foreground">1件まで。戻すと枠は空になります。{resultSession.undo.workspaceInputs ? "現場名・発注リストも戻します。新しい入力がある場合は上書きしません。" : "次の写真・現場名と発注リストはそのままです。"}{parsed ? "現在の結果がある間は戻せません。" : ""}</p>
     </> : <p className="text-xs text-muted-foreground">戻す用の保存はありません。リセット時に直前の1件を残します。</p>}
-    {!parsed && (siteName || orderDraftItems.length) ? <Button type="button" variant="outline" className="min-h-11" data-workspace-navigation disabled={resultActionBlocked} onClick={() => void changeResultDisplay("manual").catch(error => setError(getErrorDetail(error)))}>すべてリセット</Button> : null}
+    {!parsed && (siteName || orderDraftItems.length || images.length) ? <Button type="button" variant="outline" className="min-h-11" data-workspace-navigation disabled={resultActionBlocked} onClick={() => void changeResultDisplay("manual").catch(error => setError(getErrorDetail(error)))}>すべてリセット</Button> : null}
     {resultSession?.inactive ? <p className="text-xs">{resultSession.reason === "age" ? "48時間以上経過したため、結果表示を片付けました。" : "結果表示はリセットされています。"}履歴やクラウドの写真は削除していません。</p> : null}
   </div>;
 
@@ -1085,6 +1101,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
             </p>
             <input
               id={uploadInputId}
+              ref={uploadInputRef}
               type="file"
               multiple
               accept="image/*"
@@ -1224,7 +1241,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       {recentArchive || legacyWorkspaceArchives.length ? <Card>
         <CardHeader className="space-y-3">
           <CardTitle className="text-base">直前の下書き</CardTitle>
-          <CardDescription>{recentArchive ? "今の編集を1件残して切り替えます。復元すると、表示中と直前の下書きが入れ替わります。" : "直前の下書きはまだありません。別の結果へ切り替えたときに、今の編集を1件残します。"}</CardDescription>
+          <CardDescription>{recentArchive ? "今の編集を1件残して切り替えます。復元すると、表示中と直前の下書きが入れ替わります。" : resultSession?.undo ? "切替前の下書きはありません。リセット前の状態はメモ画像タブから復元できます。" : "直前の下書きはまだありません。別の結果へ切り替えたときに、今の編集を1件残します。"}</CardDescription>
           {recentArchive ? <details>
             <summary data-workspace-navigation className="min-h-11 cursor-pointer content-center text-sm font-medium">直前の下書きを確認（1件）</summary>
             <div className="mt-3">{renderWorkspaceArchive(recentArchive, "直前の下書き")}</div>
@@ -1315,7 +1332,7 @@ export default function HomePageClient({ basicView = false }: { basicView?: bool
       {parsed && analysisBlocksIntake(jobAccepted) ? <p className="mb-3 text-sm">前回の結果を表示しています。新しい解析はサーバー側で処理中です。</p> : null}
       <section aria-label="メモの解析結果" hidden={calculationMode !== "dimensions"}>
       {resultBootPending ? <p role="status">前回の結果と保存時刻を確認しています…</p> : <>
-      {!parsed ? <EmptyResultWorkspace tools={resultTools} onWorkspaceViewChange={setResultWorkspaceView} overviewRequest={overviewRequest} /> : null}
+      {!parsed ? <EmptyResultWorkspace tools={resultTools} initialView={resultWorkspaceView === "photo" ? "photo" : "quantity"} onWorkspaceViewChange={setResultWorkspaceView} overviewRequest={overviewRequest} /> : null}
       <OrderList
         key={resultJobId ?? "legacy-workspace"}
         items={parsed?.items ?? []}

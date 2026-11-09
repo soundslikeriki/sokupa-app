@@ -134,12 +134,12 @@ function orderCheckColor(ready: boolean, basicView: boolean): string {
 }
 
 function numericalStatusForItem(item: { order_quantity: number; order_quantity_input?: string; incompleteMeasurements: boolean;
-  order_mode?: string; repeat_cm_input?: string; repeat_height_input?: string; pattern_match?: string;
-  comparison: { strict: { totals: { selectedM: string | null } }; premisesAvailable: boolean } }) {
-  return numericalOrderStatus({ ordered: item.order_quantity, required: item.comparison.strict.totals.selectedM,
+  repeat_cm_input?: string; repeat_height_input?: string;
+  comparison: { hasActiveRepeat: boolean; inputArithmetic: { status: string; totals: { selectedM: string | null } } } }) {
+  return numericalOrderStatus({ ordered: item.order_quantity, required: item.comparison.inputArithmetic.totals.selectedM,
     inputsComplete: !item.incompleteMeasurements && item.order_quantity_input === undefined && Number.isFinite(item.order_quantity) && item.order_quantity >= 0,
-    conditionsKnown: item.order_mode === "memo" || item.comparison.premisesAvailable && item.pattern_match !== "other"
-      && item.repeat_cm_input === undefined && item.repeat_height_input === undefined });
+    conditionsKnown: item.comparison.inputArithmetic.status === "calculated" && (!item.comparison.hasActiveRepeat ||
+      item.repeat_cm_input === undefined && item.repeat_height_input === undefined) });
 }
 
 function readingReviewImageIndexes(item: { readingReviews: MemoReadingReview[]; entries: MemoProductItem["entries"] }): number[] {
@@ -1130,6 +1130,7 @@ export function OrderList({ basicView = false, overviewRequest = 0, items: incom
                   </p>
                   <button type="button" className="min-h-11 text-xs underline" aria-label={`${code} を確認・編集`} data-workspace-navigation onClick={() => { setCollapsedCodes(current => { const next = new Set(current); next.delete(derivedItems[index]?.editorKey); return next; }); selectView("edit", item.editorKey); }}>確認・編集</button>
                 </div>
+                {item.comparison.inputArithmeticNotice ? <p className="w-full text-xs text-amber-800 dark:text-amber-300" aria-label={`${code} の計算条件の注意`}>{item.comparison.inputArithmeticNotice}</p> : null}
                 {!review.ready || readingAttention || duplicate ? <p className="flex w-full items-center justify-between gap-2 text-xs text-amber-800 dark:text-amber-300" aria-label={`${code} の発注時の注意`}>
                   <span>{review.blockedMessage || readingAttention || "同品番は別行で表示・追加時に統合を選択"}</span>
                   <button type="button" data-workspace-navigation className="min-h-11 shrink-0 underline" aria-label={`${code} の発注時の注意を見る`} onClick={openCopyReview}>注意を見る</button>

@@ -53,6 +53,39 @@ test("unknown premises never prove sufficiency, and measurement changes invalida
   assert.notEqual(compareProduct(item, [{ ...rows[0], length: 2.8 }, rows[1]], 60, "trim-included", "straight").fingerprint, valid.fingerprint);
   assert.equal(compareProduct({ ...item, order_quantity: 20 }, rows, 60, "trim-included", "straight").fingerprint, valid.fingerprint);
 });
+test("input arithmetic compares mixed repeat rows without certifying unconfirmed construction premises", () => {
+  const mixed = [{ id: "1", length: 2.7, quantity: 62, active: true }, { id: "2", length: .6, quantity: 4, active: false }, { id: "3", length: .7, quantity: 7, active: false }];
+  const comparison = compareProduct(item, mixed, 64.1, "unconfirmed", "unconfirmed");
+  assert.equal(comparison.inputArithmetic.totals.selectedM, "206.01");
+  assert.equal(comparison.strict.totals.selectedM, null);
+  assert.equal(comparison.premisesAvailable, false);
+  assert.match(comparison.inputArithmeticNotice!, /未確認/);
+  for (const [ordered, sufficient, shortage] of [[237, true, "0"], [206.01, true, "0"], [206, false, "0.01"]] as const) {
+    const assessment = assessProductOrder(ordered, comparison.inputArithmetic.totals.selectedM, true);
+    assert.equal(assessment.showCheckmark, sufficient); assert.equal(assessment.shortage, shortage);
+  }
+  assert.equal(compareProduct(item, mixed.map(row => ({ ...row, active: true })), 64.1, "unconfirmed", "unconfirmed").inputArithmetic.totals.selectedM, "210.248");
+  assert.equal(compareProduct(item, mixed.map(row => ({ ...row, active: false })), null, "repeat-adjusted", "other").inputArithmetic.totals.selectedM, "174.7");
+});
+test("input arithmetic refuses unsupported or already-adjusted active repeat and unfinished input", () => {
+  for (const [basis, match] of [["repeat-adjusted", "straight"], ["unconfirmed", "other"], ["unknown", "straight"]]) {
+    assert.equal(compareProduct(item, rows, 64.1, basis, match).inputArithmetic.totals.selectedM, null);
+  }
+  for (const value of [null, 0, -1, NaN, Infinity]) {
+    assert.equal(compareProduct(item, rows, value, "unconfirmed", "unconfirmed").inputArithmetic.totals.selectedM, null);
+  }
+  for (const raw of ["", "bad", "-1", "Infinity", "1.0000001"]) {
+    assert.equal(compareProduct(item, [{ ...rows[0], lengthInput: raw }, rows[1]], 64.1, "unconfirmed", "unconfirmed").inputArithmetic.totals.selectedM, null);
+  }
+});
+test("input arithmetic keeps exact repeat boundaries, individual heights and sub-centimetre shortage", () => {
+  const varied = [{ id: "short", length: .641, quantity: 1, active: true }, { id: "long", length: .641001, quantity: 1, active: true }];
+  const comparison = compareProduct(item, varied, 64.1, "unconfirmed", "unconfirmed");
+  assert.equal(comparison.inputArithmetic.totals.selectedM, "1.923");
+  assert.equal(assessProductOrder(1.922999, comparison.inputArithmetic.totals.selectedM, true).shortage, "0.000001");
+  assert.equal(assessProductOrder(1.923, comparison.inputArithmetic.totals.selectedM, true).showCheckmark, true);
+  assert.equal(compareProduct(item, [{ id: "off", length: 1, quantity: 2, active: false }], NaN, "unconfirmed", "unconfirmed").inputArithmetic.totals.selectedM, "2");
+});
 test("image provenance survives same-product multi-image merge without inventing an owner", () => {
   const result = mergeParsedPayloads([{ items: [item] }, { items: [item] }]);
   assert.deepEqual(result.items[0].entries.map(row => row.source_image_index), [0,0,1,1]);
